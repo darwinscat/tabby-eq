@@ -114,9 +114,20 @@ pitch/fundamental detection, high-refresh M/S analyzer, true cross-track masking
 Analyzer details (pre/post/both, peak-hold, tilt slope, collision hints); exact ergonomics;
 the precise WOW visual language (with mockups as we go).
 
-## Build order (next)
+## Phase 1 status (in progress)
 
-1. **24 bands** (schema bump) — verify build / tests / `auval`.
-2. **Selected-band edit strip** (the #8 ergonomic gap).
-3. First WOW visuals: curve glow + liquid spectrum + hover bubble.
-4. Then: missing filter types (notch / all-pass / tilt) + variable slopes; solo.
+**Done:** 24 bands · selected-band edit strip (#8: numeric + keyboard freq/Q/gain) · symmetric
+peaking cut · brand palette + warm/cool fill + curve glow · spectrum (liquid 1/12-oct smoothing +
+peak-hold + 4.5 dB/oct pink tilt + peak-detail; Neutron/FabFilter-ish) · Q-whiskers (Neutron-style,
+log-linear-calibrated, side-clamped) · "+"-on-curve add + node hover-halo · notch / all-pass / tilt ·
+variable HP/LP slopes 6–96 dB/oct (Butterworth cascade) · per-band solo (band-listen) · premium
+vignette + 0 dB glow · analyzer pre/post toggle · HP/LP whisker steps the discrete slope ·
+filter-type shape icons. (227 engine checks; all four Mac formats build + AU passes auval.)
+
+**Deferred — need a decision / live feedback:**
+- **Node on/off + ghost** — needs a band "used vs bypassed" flag (distinct from `on=false` = free
+  slot), part of the reserved band-provenance schema, so we don't ghost all 24 empty slots.
+- **Floating point-toolbar** (Neutron-style) — a mini panel by the node holding ALL point info +
+  control (type-icon + on/off + solo + close + dropdown + freq/gain/Q/note). The bottom strip then
+  goes away and the bottom is **reserved for the Helper**. Big UI move — do with live feedback.
+  *(Current bottom strip + the type-shape icon are interim, to be folded into this toolbar.)*
