@@ -29,13 +29,19 @@ inline BandDesign designBand (const BandParams& in, double fs) noexcept
     p.gainDb = std::clamp (finiteOr (p.gainDb, 0.0), -30.0, 30.0);
 
     BandDesign d;
-    d.twoStage = (! p.swept) && (p.slope >= 24) && (p.type == FilterType::HighPass || p.type == FilterType::LowPass);
+    const bool cutTwoStage = (! p.swept) && (p.slope >= 24) && (p.type == FilterType::HighPass || p.type == FilterType::LowPass);
+    d.twoStage = cutTwoStage || (p.type == FilterType::Tilt);
 
-    if (d.twoStage)
+    if (cutTwoStage)
     {
         constexpr double q1 = 0.54119610, q2 = 1.30656296;   // 4th-order Butterworth section Qs
         if (p.type == FilterType::HighPass) { d.c0 = matched::highpass (p.freq, fs, q1); d.c1 = matched::highpass (p.freq, fs, q2); }
         else                                { d.c0 = matched::lowpass  (p.freq, fs, q1); d.c1 = matched::lowpass  (p.freq, fs, q2); }
+    }
+    else if (p.type == FilterType::Tilt)
+    {
+        d.c0 = matched::lowShelfDb  (p.freq, fs, -p.gainDb);   // lows down
+        d.c1 = matched::highShelfDb (p.freq, fs,  p.gainDb);   // highs up  -> spectral tilt about f0
     }
     else
     {
@@ -47,6 +53,9 @@ inline BandDesign designBand (const BandParams& in, double fs) noexcept
             case FilterType::HighPass:  d.c0 = matched::highpass     (p.freq, fs, p.Q);         break;
             case FilterType::LowPass:   d.c0 = matched::lowpass      (p.freq, fs, p.Q);         break;
             case FilterType::BandPass:  d.c0 = matched::bandpass     (p.freq, fs, p.Q);         break;
+            case FilterType::Notch:     d.c0 = matched::notch        (p.freq, fs, p.Q);         break;
+            case FilterType::AllPass:   d.c0 = matched::allpass      (p.freq, fs, p.Q);         break;
+            case FilterType::Tilt:      break;   // handled above (two-stage shelves)
         }
     }
     return d;

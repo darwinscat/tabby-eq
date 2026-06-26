@@ -17,6 +17,9 @@ teq::FilterType filterTypeFromChoice (int idx) noexcept
         case 3:  return teq::FilterType::HighPass;
         case 4:  return teq::FilterType::LowPass;
         case 5:  return teq::FilterType::BandPass;
+        case 6:  return teq::FilterType::Notch;
+        case 7:  return teq::FilterType::AllPass;
+        case 8:  return teq::FilterType::Tilt;
         default: return teq::FilterType::Bell;
     }
 }
@@ -28,7 +31,7 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
 
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "on"),   1 }, n + "On", false));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "type"), 1 }, n + "Type",
-                                                        StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass" }, 0));
+                                                        StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" }, 0));
 
     NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);   // matches the canvas range
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "freq"), 1 }, n + "Freq",

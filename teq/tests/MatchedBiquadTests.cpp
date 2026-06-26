@@ -77,6 +77,28 @@ void runMatchedBiquadTests()
         expectTrue (maxAsym < 1e-4, "cut(w) == -boost(w) everywhere (true mirror image)");
     }
 
+    group ("notch / all-pass / tilt");
+    {
+        const auto n = matched::notch (1000.0, fs, 4.0);
+        expectTrue (n.magnitudeDb (w (1000.0)) < -40.0,    "notch: deep null at f0");
+        expectNear (n.magnitudeDb (0.0),       0.0, 0.05,  "notch: unity at DC");
+        expectNear (n.magnitudeDb (w (100.0)), 0.0, 1.0,   "notch: ~unity a decade below");
+        expectTrue (n.isStable(),                          "notch stable");
+
+        const auto ap = matched::allpass (2000.0, fs, 2.0);
+        for (double f : { 50.0, 500.0, 2000.0, 9000.0, 18000.0 })
+            expectNear (ap.magnitudeDb (w (f)), 0.0, 1e-4, "all-pass flat at " + std::to_string ((int) f));
+        expectTrue (ap.isStable(),                         "all-pass stable");
+
+        const double G = 12.0;                             // tilt = lowShelf(-G) * highShelf(+G)
+        const auto lo = matched::lowShelfDb  (1000.0, fs, -G);
+        const auto hi = matched::highShelfDb (1000.0, fs,  G);
+        auto tiltDb = [&] (double f) { return lo.magnitudeDb (w (f)) + hi.magnitudeDb (w (f)); };
+        expectNear (tiltDb (40.0),    -G,  1.0, "tilt: lows ~ -12 dB");
+        expectNear (tiltDb (16000.0),  G,  1.0, "tilt: highs ~ +12 dB");
+        expectNear (tiltDb (1000.0),   0.0, 1.5, "tilt: ~0 at the pivot");
+    }
+
     group ("lowpass: matched hits analog |H(w0)| = Q where RBJ cramps");
     {
         const double f0 = 0.40 * fs, Q = 4.0;

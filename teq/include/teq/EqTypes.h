@@ -24,7 +24,10 @@ enum class FilterType
     HighShelf,   // gainDb (Butterworth slope, Q ignored)
     HighPass,    // Q at 12 dB/oct; 24 dB/oct is Butterworth (Q ignored)
     LowPass,     // Q at 12 dB/oct; 24 dB/oct is Butterworth (Q ignored)
-    BandPass     // Q, unity gain at centre
+    BandPass,    // Q, unity gain at centre
+    Notch,       // band-stop: deep null at f0, unity at DC/Nyquist, width by Q
+    AllPass,     // flat magnitude, 360° phase rotation through f0 (Q = sharpness)
+    Tilt         // spectral tilt about f0: lows -gainDb, highs +gainDb
 };
 
 // One band's full specification. The plugin adapter maps APVTS params into this; the engine

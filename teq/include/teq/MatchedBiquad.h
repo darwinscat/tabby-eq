@@ -224,6 +224,33 @@ namespace matched
     }
 
     //==========================================================================
+    // Notch (band-stop): an infinite null at f0, unity at DC/Nyquist, width set by Q. Zeros sit on
+    // the unit circle at +-w0; poles come from the matched-pole placement (Q-consistent with the
+    // rest of the family), then the numerator is scaled to pass DC at unity.
+    inline BiquadCoeffs notch (double f0, double fs, double Q) noexcept
+    {
+        BiquadCoeffs c;
+        const double w0 = 2.0 * kPi * f0 / fs;
+        detail::matchedPoles (w0, Q, c.a1, c.a2);
+        const double cw = std::cos (w0);
+        const double k  = (1.0 + c.a1 + c.a2) / (2.0 - 2.0 * cw);
+        c.b0 = k; c.b1 = -2.0 * k * cw; c.b2 = k;
+        return c;
+    }
+
+    //==========================================================================
+    // All-pass: |H| = 1 at every frequency (flat magnitude); the phase rotates 360° through f0 with
+    // sharpness set by Q. Numerator is the reversed denominator, which forces unit magnitude.
+    inline BiquadCoeffs allpass (double f0, double fs, double Q) noexcept
+    {
+        BiquadCoeffs c;
+        const double w0 = 2.0 * kPi * f0 / fs;
+        detail::matchedPoles (w0, Q, c.a1, c.a2);
+        c.b0 = c.a2; c.b1 = c.a1; c.b2 = 1.0;
+        return c;
+    }
+
+    //==========================================================================
     // High shelf — matched 2-pole Butterworth. gainLin = the high-frequency plateau
     // (linear; |H| -> gainLin as f -> Nyquist+, 1.0 at DC). 2poleShelvingFits appendix A.1.
     inline BiquadCoeffs highShelf (double f0, double fs, double gainLin) noexcept

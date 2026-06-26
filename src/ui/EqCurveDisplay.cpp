@@ -8,7 +8,8 @@ namespace
 {
     bool hasGain (teq::FilterType t) noexcept
     {
-        return t == teq::FilterType::Bell || t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf;
+        return t == teq::FilterType::Bell     || t == teq::FilterType::LowShelf
+            || t == teq::FilterType::HighShelf || t == teq::FilterType::Tilt;
     }
 
     juce::Colour bandColour (teq::FilterType t) noexcept
@@ -16,10 +17,13 @@ namespace
         using FT = teq::FilterType;
         switch (t)
         {
-            case FT::LowShelf:  case FT::HighShelf: return juce::Colour (0xff7fc8ff);
-            case FT::HighPass:  case FT::LowPass:   return juce::Colour (0xffff9d5c);
-            case FT::BandPass:                      return juce::Colour (0xffb98cff);
-            case FT::Bell:      default:            return juce::Colour (0xff6ee7a8);
+            case FT::LowShelf:  case FT::HighShelf: return juce::Colour (0xff7fc8ff);   // blue
+            case FT::HighPass:  case FT::LowPass:   return juce::Colour (0xffff9d5c);   // orange
+            case FT::BandPass:                      return juce::Colour (0xffb98cff);   // violet
+            case FT::Notch:                         return juce::Colour (0xffff6b8a);   // red
+            case FT::AllPass:                       return juce::Colour (0xff9aa6b8);   // grey
+            case FT::Tilt:                          return juce::Colour (0xff5cd6c8);   // teal
+            case FT::Bell:      default:            return juce::Colour (0xff6ee7a8);   // green
         }
     }
 }
@@ -98,9 +102,13 @@ double EqCurveDisplay::compositeDb (double f) const noexcept
 
 juce::Point<float> EqCurveDisplay::nodePos (int b) const noexcept
 {
-    // bells/shelves sit at their OWN gain (so a drag tracks the cursor exactly); HP/LP/BP have no
-    // gain, so they ride the composite curve at their corner frequency.
-    const double db = hasGain (paramCache[b].type) ? paramCache[b].gainDb : compositeDb (paramCache[b].freq);
+    // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor); notch/all-pass are
+    // surgical / phase-only so they sit on the 0 dB line; HP/LP/BP ride the composite at the corner.
+    const auto t = paramCache[b].type;
+    double db;
+    if (hasGain (t))                                                       db = paramCache[b].gainDb;
+    else if (t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
+    else                                                                   db = compositeDb (paramCache[b].freq);
     return { freqToX (paramCache[b].freq), dbToY (db) };
 }
 
@@ -159,7 +167,9 @@ juce::String EqCurveDisplay::readoutText (int b) const
                                  : juce::String (juce::roundToInt (f)) + " Hz";
     if (hasGain (p.type))
         s << "   " << (p.gainDb >= 0.0 ? "+" : "") << juce::String (p.gainDb, 1) << " dB";
-    if (p.type != teq::FilterType::LowShelf && p.type != teq::FilterType::HighShelf)   // shelves ignore Q
+    const bool showsQ = ! (p.type == teq::FilterType::LowShelf || p.type == teq::FilterType::HighShelf
+                           || p.type == teq::FilterType::Tilt);                          // shelves & tilt ignore Q
+    if (showsQ)
         s << "   Q " << juce::String (p.Q, 2);
     return s;
 }
@@ -373,13 +383,13 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 
     if (e.mods.isPopupMenu())
     {
-        const char* names[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass" };
+        const char* names[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
         juce::Component::SafePointer<EqCurveDisplay> safe (this);
         juce::PopupMenu m;
 
         if (b >= 0)   // on a node: change type / remove
         {
-            for (int i = 0; i < 6; ++i)
+            for (int i = 0; i < 9; ++i)
                 m.addItem (i + 1, names[i], true, paramCache[b].type == tabby::filterTypeFromChoice (i));
             m.addSeparator();
             m.addItem (100, "Remove band");
@@ -397,7 +407,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             if (anyFree)
             {
                 juce::PopupMenu add;
-                for (int i = 0; i < 6; ++i) add.addItem (i + 1, names[i]);
+                for (int i = 0; i < 9; ++i) add.addItem (i + 1, names[i]);
                 m.addSubMenu ("Add band", add);
             }
             else

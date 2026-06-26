@@ -15,8 +15,8 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     onButton.setColour (juce::ToggleButton::tickColourId, tabby::palette::violet());
     addAndMakeVisible (onButton);
 
-    const char* types[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass" };
-    for (int i = 0; i < 6; ++i) typeBox.addItem (types[i], i + 1);
+    const char* types[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+    for (int i = 0; i < 9; ++i) typeBox.addItem (types[i], i + 1);
     typeBox.onChange = [this] { updateForType(); };
     addAndMakeVisible (typeBox);
 
@@ -81,13 +81,14 @@ void BandEditStrip::updateForType()
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
     const auto t       = tabby::filterTypeFromChoice (typeBox.getSelectedItemIndex());
-    const bool isCut   = (t == teq::FilterType::HighPass  || t == teq::FilterType::LowPass);
-    const bool isShelf = (t == teq::FilterType::LowShelf   || t == teq::FilterType::HighShelf);
-    const bool hasGain = (t == teq::FilterType::Bell || isShelf);
+    const bool isCut   = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass);
+    const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
+    const bool isTilt  = (t == teq::FilterType::Tilt);
+    const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
 
-    slopeBox.setVisible (isCut);     // slope only applies to HP/LP
-    gain.setEnabled (hasGain);       // HP/LP/BP have no gain
-    q.setEnabled (! isShelf);        // shelves are Butterworth — Q ignored
+    slopeBox.setVisible (isCut);            // slope only applies to HP/LP
+    gain.setEnabled (hasGain);              // HP/LP/BP/notch/all-pass have no gain
+    q.setEnabled (! isShelf && ! isTilt);   // shelves & tilt are Butterworth — Q ignored
 }
 
 void BandEditStrip::paint (juce::Graphics& g)
