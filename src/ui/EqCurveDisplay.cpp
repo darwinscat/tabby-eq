@@ -33,6 +33,19 @@ namespace
         return std::pow (10.0, std::log10 (kQwQHi) - t * (std::log10 (kQwQHi) - std::log10 (kQwQLo)));
     }
 
+    bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
+    bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
+
+    // HP/LP whisker maps to the DISCRETE slope list (steeper = narrower handle) instead of Q.
+    constexpr int kSlopeDb[7] = { 6, 12, 24, 36, 48, 72, 96 };
+    int    slopeIndexFromDb (int db) noexcept { for (int i = 0; i < 7; ++i) if (kSlopeDb[i] == db) return i; return 1; }
+    double slopeBwForIndex  (int i)  noexcept { return kQwBwHi + (kQwBwLo - kQwBwHi) * (i / 6.0); }   // i0 wide -> i6 narrow
+    int    slopeIndexForBw  (double bw) noexcept
+    {
+        const double t = juce::jlimit (0.0, 1.0, (kQwBwHi - bw) / (kQwBwHi - kQwBwLo));
+        return juce::jlimit (0, 6, (int) std::round (t * 6.0));
+    }
+
     juce::Colour bandColour (teq::FilterType t) noexcept
     {
         using FT = teq::FilterType;
@@ -135,8 +148,10 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
 {
     const auto pos = nodePos (b);
     const double f0 = paramCache[(size_t) b].freq;
-    const double bw = whiskerBwForQ (paramCache[(size_t) b].Q);     // half-bandwidth (octaves) from Q
-    const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;        // -> px offset (log-x, symmetric)
+    const auto   t  = paramCache[(size_t) b].type;
+    const double bw = isCut (t) ? slopeBwForIndex (slopeIndexFromDb (paramCache[(size_t) b].slope))
+                                : whiskerBwForQ (paramCache[(size_t) b].Q);   // half-bandwidth (octaves)
+    const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
 
@@ -174,7 +189,8 @@ void EqCurveDisplay::endDragGesture()
     {
         if (draggingQ)
         {
-            if (auto* qp = proc.apvts.getParameter (tabby::bandId (draggingBand, "q"))) qp->endChangeGesture();
+            if (auto* prm = proc.apvts.getParameter (tabby::bandId (draggingBand, whiskerSlope ? "slope" : "q")))
+                prm->endChangeGesture();
         }
         else
         {
@@ -187,6 +203,7 @@ void EqCurveDisplay::endDragGesture()
     draggingGain = false;
     draggingQ    = false;
     qDragSide    = 0;
+    whiskerSlope = false;
 }
 
 void EqCurveDisplay::selectBand (int newSel)
@@ -409,8 +426,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.setColour (juce::Colours::white.withAlpha (0.85f));
         g.drawEllipse (pos.x - kNodeR - 3, pos.y - kNodeR - 3, (kNodeR + 3) * 2, (kNodeR + 3) * 2, 1.5f);
 
-        // Q-whiskers (Neutron-style): drag an end handle to set bandwidth / Q
-        if (qRelevant (paramCache[(size_t) rb].type))
+        // Whiskers (Neutron-style): drag an end handle to set bandwidth/Q (HP/LP -> discrete slope)
+        if (whiskerRelevant (paramCache[(size_t) rb].type))
         {
             const auto wk  = whiskerEnds (rb);
             const auto col = bandColour (paramCache[(size_t) rb].type);
@@ -519,7 +536,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     }
 
     // A drag on the selected band's Q-whisker handle sets Q (Neutron-style), keeping the selection.
-    if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && qRelevant (paramCache[(size_t) selBand].type))
+    if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && whiskerRelevant (paramCache[(size_t) selBand].type))
     {
         const auto wk = whiskerEnds (selBand);
         const bool onRight = e.position.getDistanceFrom (wk.second) < kNodeR + 4.0f;
@@ -527,7 +544,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (onLeft || onRight)
         {
             draggingBand = selBand; draggingQ = true; qDragSide = onRight ? 1 : -1;
-            if (auto* qp = proc.apvts.getParameter (tabby::bandId (selBand, "q"))) qp->beginChangeGesture();
+            whiskerSlope = isCut (paramCache[(size_t) selBand].type);
+            if (auto* prm = proc.apvts.getParameter (tabby::bandId (selBand, whiskerSlope ? "slope" : "q")))
+                prm->beginChangeGesture();
             return;
         }
     }
@@ -555,7 +574,10 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
         // half-bandwidth to Q with the calibrated curve (hits 40 / 0.1 at the ends).
         const double bw = (qDragSide > 0) ? std::log2 (juce::jmax (f0, fx) / f0)
                                           : std::log2 (f0 / juce::jmin (f0, fx));
-        setParam (tabby::bandId (draggingBand, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
+        if (whiskerSlope)   // HP/LP -> snap to the discrete slope list
+            setParam (tabby::bandId (draggingBand, "slope"), (double) slopeIndexForBw (bw));
+        else                // others -> continuous Q (calibrated, hits 40 / 0.1 at the ends)
+            setParam (tabby::bandId (draggingBand, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
         return;
     }
     setParam (tabby::bandId (draggingBand, "freq"), xToFreq (e.position.x));

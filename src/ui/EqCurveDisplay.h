@@ -80,6 +80,7 @@ private:
     bool draggingGain = false;
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
+    bool whiskerSlope = false;   // the dragged whisker sets slope (HP/LP) rather than Q
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
