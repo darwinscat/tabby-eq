@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
+
+#pragma once
+
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <teq/EqEngine.h>
+
+#include "Parameters.h"
+
+#include <array>
+
+//==============================================================================
+// TabbyEQ — the AudioProcessor. A thin adapter: it owns a teq::EqEngine, packs each band's
+// APVTS atomics into teq::BandParams and feeds the engine at the top of processBlock (so
+// setBand/process run on the same thread, satisfying the engine's contract). Slice 2 ships the
+// GenericAudioProcessorEditor (free knobs); the semantic editor is slice 3.
+//
+// 🔴 Real-time rule: processBlock and callees never allocate, lock, do IO, or throw.
+class TabbyEqAudioProcessor final : public juce::AudioProcessor
+{
+public:
+    TabbyEqAudioProcessor();
+    ~TabbyEqAudioProcessor() override = default;
+
+    void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
+    void releaseResources() override {}
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor (*this); }
+    bool hasEditor() const override { return true; }
+
+    const juce::String getName() const override { return JucePlugin_Name; }
+    bool acceptsMidi() const override  { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 0.0; }
+
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
+
+    // Versioned state from day one (so later versions don't break DAW sessions).
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    juce::AudioProcessorValueTreeState apvts;
+
+private:
+    teq::EqEngine engine;
+
+    struct BandPtrs
+    {
+        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{};
+    };
+    std::array<BandPtrs, tabby::kNumBands> bands;
+    std::atomic<float>* outputGain = nullptr;
+
+    static constexpr int kStateVersion = 1;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqAudioProcessor)
+};

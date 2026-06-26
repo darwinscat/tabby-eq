@@ -37,7 +37,7 @@ flips to a musical cut at the found frequency.
 | 3 | Filter coefficients | **Matched biquads (Vicanek 2016)** from day one (honest curves near Nyquist). **TPT SVF** for the swept/search band + HPF/LPF. |
 | 4 | Sources v1 | Male voice, Female voice, E-gtr **clean**, E-gtr **dist**, Acoustic, Bass. **Drums → v1.1** (per-piece: kick/snare/OH). |
 | 5 | Axes | **Source (timbre) × optional Role (rhythm↔lead)**. Role re-weights/re-orders traits + flips default actions, reusing the same freq map. **No genre/style axis in v1.** |
-| 6 | Vocab format | **YAML data**, frozen as `vocab-v1` before release (becomes an external contract — same lesson as the press-vocabulary tool). |
+| 6 | Vocab format | **Hand-authored C++ table** (`src/Vocab.h`) = the source of truth. Zero build deps, compiler-validated, reads like the data. (Dropped the YAML→codegen/Python idea as overkill for ~6 sources.) `docs/VOCABULARY.md` stays the human reference; export to JSON/YAML later only if a web tool needs it. |
 | 7 | Band model | **Trait = its own labelled band.** Pool of ~12 biquads under the hood; the selected source's `core` traits appear as dedicated labelled bands, `opt` traits light up spare bands. DAW sees a normal multiband EQ; automation stays clean. |
 | 8 | Freq/Q access | **Advanced-unlock.** Default UI = the named **amount** knob + the real freq/Q/gain shown read-only as *info*. An `advanced` toggle reveals editable freq/Q for power users. |
 

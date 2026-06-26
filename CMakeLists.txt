@@ -22,6 +22,63 @@ endif()
 set(TEQ_BUILD_TESTS ON)
 add_subdirectory(teq)
 
-# --- SLICE 2: the TabbyEQ plugin target (VST3 + AU + Standalone + CLAP) — fetches JUCE 8.0.14
-#     (FetchContent, pinned, same tag as orbitcab) + clap-juce-extensions, plus the YAML->C++
-#     vocab codegen. Deferred so the core builds and tests without fetching JUCE.
+# ----------------------------------------------------------------------------
+# The TabbyEQ plugin — a thin JUCE adapter over teq_core. JUCE + clap-juce-extensions are
+# fetched (FetchContent, pinned, same tags as orbitcab). Builds VST3 + AU + Standalone + CLAP.
+# ----------------------------------------------------------------------------
+include(FetchContent)
+
+set(TABBYEQ_JUCE_TAG "8.0.14" CACHE STRING "JUCE git tag")
+FetchContent_Declare(juce
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG        ${TABBYEQ_JUCE_TAG}
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(juce)
+
+# CLAP via the MIT clap-juce-extensions wrapper (native CLAP slated for JUCE 9). Pinned commit
+# like orbitcab (upstream stopped tagging in 2022; main is their de-facto release channel).
+set(TABBYEQ_CLAP_EXT_TAG "51a9359315298de632cf44e9d7524940868441e6" CACHE STRING "clap-juce-extensions commit")
+FetchContent_Declare(clap-juce-extensions
+    GIT_REPOSITORY https://github.com/free-audio/clap-juce-extensions.git
+    GIT_TAG        ${TABBYEQ_CLAP_EXT_TAG})
+FetchContent_MakeAvailable(clap-juce-extensions)
+
+# 4-char codes (LOCKED post-release): MANUFACTURER Dcat (Darwin's Cat), PLUGIN_CODE TbEq.
+juce_add_plugin(TabbyEQ
+    PRODUCT_NAME                "TabbyEQ"
+    COMPANY_NAME                "Darwin's Cat"
+    BUNDLE_ID                   "com.darwinscat.tabbyeq"
+    PLUGIN_MANUFACTURER_CODE    Dcat
+    PLUGIN_CODE                 TbEq
+    FORMATS                     VST3 AU Standalone
+    VST3_CATEGORIES             "Fx" "EQ"
+    AU_MAIN_TYPE                "kAudioUnitType_Effect"
+    IS_SYNTH                    FALSE
+    NEEDS_MIDI_INPUT            FALSE
+    NEEDS_MIDI_OUTPUT           FALSE
+    IS_MIDI_EFFECT              FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    COPY_PLUGIN_AFTER_BUILD     TRUE)
+
+clap_juce_extensions_plugin(TARGET TabbyEQ
+    CLAP_ID       "com.darwinscat.tabbyeq"
+    CLAP_FEATURES audio-effect equalizer)
+
+target_sources(TabbyEQ PRIVATE
+    src/PluginProcessor.cpp
+    src/Parameters.cpp)
+
+target_include_directories(TabbyEQ PRIVATE src)   # "Parameters.h", "Vocab.h"
+
+target_compile_definitions(TabbyEQ PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+target_link_libraries(TabbyEQ PRIVATE
+    teq_core                            # the framework-agnostic EQ engine
+    juce::juce_audio_utils              # AudioProcessor + GenericAudioProcessorEditor
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
