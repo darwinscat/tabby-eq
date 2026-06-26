@@ -121,6 +121,19 @@ namespace matched
     // BiquadFits eq. (26),(27),(42)-(45),(29).
     inline BiquadCoeffs peaking (double f0, double fs, double Q, double gainLin) noexcept
     {
+        // Symmetric (reciprocal) cut: design the mirror BOOST and invert 1/H, so -G and +G dB at the
+        // same Q are exact vertical mirror images (the modern parametric norm). A matched bell has
+        // gain-independent poles, so a directly-designed cut would be far narrower than its boost;
+        // inverting fixes that. The boost numerator is minimum-phase (zeros inside the unit circle),
+        // so the inverted cut is stable, and its magnitude is the exact reciprocal of a Nyquist-
+        // matched response (still honest near Nyquist).
+        if (gainLin < 1.0 && gainLin > 0.0)
+        {
+            const BiquadCoeffs b = peaking (f0, fs, Q, 1.0 / gainLin);
+            const double inv = 1.0 / b.b0;
+            return { inv, b.a1 * inv, b.a2 * inv, b.b1 * inv, b.b2 * inv };
+        }
+
         BiquadCoeffs c;
         const double w0 = 2.0 * kPi * f0 / fs;
         detail::matchedPoles (w0, Q, c.a1, c.a2);

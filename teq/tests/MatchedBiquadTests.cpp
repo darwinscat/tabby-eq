@@ -60,6 +60,23 @@ void runMatchedBiquadTests()
         expectTrue (hi.isStable(), "air bell stable");
     }
 
+    group ("peaking: a cut is the exact mirror of the boost (symmetric, Pro-Q style)");
+    {
+        const double f0 = 100.0, Q = 2.0, gDb = 20.0;
+        const auto boost = matched::peakingDb (f0, fs, Q,  gDb);
+        const auto cut   = matched::peakingDb (f0, fs, Q, -gDb);
+        expectNear (cut.magnitudeDb (w (f0)), -gDb, 0.02, "cut hits -20 dB at centre");
+        expectTrue (cut.isStable(), "cut stable");
+        double maxAsym = 0.0;
+        for (double frac = 0.001; frac <= 0.49; frac += 0.002)
+        {
+            const double ww = 2.0 * kPi * frac;
+            maxAsym = std::max (maxAsym, std::fabs (cut.magnitudeDb (ww) + boost.magnitudeDb (ww)));
+        }
+        std::printf ("      max |cutDb + boostDb| over band: %.6f dB\n", maxAsym);
+        expectTrue (maxAsym < 1e-4, "cut(w) == -boost(w) everywhere (true mirror image)");
+    }
+
     group ("lowpass: matched hits analog |H(w0)| = Q where RBJ cramps");
     {
         const double f0 = 0.40 * fs, Q = 4.0;
