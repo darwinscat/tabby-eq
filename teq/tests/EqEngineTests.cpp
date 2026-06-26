@@ -47,6 +47,48 @@ namespace
         return 20.0 * std::log10 (std::sqrt (orr / std::max (1e-30, ir)));
     }
 
+    // Per-channel steady-state gain (dB) for an N-channel in-place callback. Every channel gets the
+    // SAME sine but a DISTINCT amplitude, so any cross-channel state bleed shows up as a wrong gain.
+    template <class Apply>
+    std::vector<double> multiSineGainDb (Apply&& apply, int C, double f, double fs, int warm = 600)
+    {
+        const int block = 256;
+        const double dp = 2.0 * kPi * f / fs;
+        std::vector<std::vector<float>> bufs ((size_t) C, std::vector<float> ((size_t) block));
+        std::vector<float*> ptr ((size_t) C);
+        for (int c = 0; c < C; ++c) ptr[(size_t) c] = bufs[(size_t) c].data();
+
+        double phase = 0.0;
+        auto fill = [&]
+        {
+            for (int n = 0; n < block; ++n)
+            {
+                const double s = std::sin (phase);
+                phase += dp; if (phase > 2.0 * kPi) phase -= 2.0 * kPi;
+                for (int c = 0; c < C; ++c) bufs[(size_t) c][(size_t) n] = (float) ((0.1 + 0.04 * c) * s);
+            }
+        };
+
+        for (int b = 0; b < warm; ++b) { fill(); apply (ptr.data(), C, block); }
+
+        fill();
+        const std::vector<std::vector<float>> in = bufs;     // snapshot the inputs before in-place process
+        apply (ptr.data(), C, block);
+
+        std::vector<double> g ((size_t) C);
+        for (int c = 0; c < C; ++c)
+        {
+            double ir = 0.0, orr = 0.0;
+            for (int n = 0; n < block; ++n)
+            {
+                ir  += (double) in[(size_t) c][(size_t) n]   * in[(size_t) c][(size_t) n];
+                orr += (double) bufs[(size_t) c][(size_t) n] * bufs[(size_t) c][(size_t) n];
+            }
+            g[(size_t) c] = 20.0 * std::log10 (std::sqrt (orr / std::max (1e-30, ir)));
+        }
+        return g;
+    }
+
     bool anyNaN (const float* d, int n) { for (int i = 0; i < n; ++i) if (! std::isfinite (d[i])) return true; return false; }
 }
 
@@ -276,5 +318,87 @@ void runEqEngineTests()
         for (int i = 0; i < n; ++i) energy += std::fabs (L[(size_t) i]) + std::fabs (R[(size_t) i]);
         expectTrue (energy == 0.0, "silence stays silent");
         expectTrue (! anyNaN (L.data(), n) && ! anyNaN (R.data(), n), "no NaN");
+    }
+
+    group ("EqEngine: 6-channel (5.1) static bell — every channel +6 dB, no cross-talk");
+    {
+        const int C = 6;
+        EqEngine eng; eng.prepare (fs, 256, C);
+        BandParams p; p.on = true; p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 2.0; p.gainDb = 6.0;
+        eng.setBand (0, p);
+        const auto g = multiSineGainDb ([&] (float* const* ch, int nc, int n) { eng.process (ch, nc, n); }, C, 1000.0, fs);
+        for (int c = 0; c < C; ++c)
+            expectNear (g[(size_t) c], 6.0, 0.4, "ch " + std::to_string (c) + " static bell +6 dB");
+    }
+
+    group ("EqEngine: 8-channel (7.1) swept SVF bell — per-channel SVF state, every channel +6 dB");
+    {
+        const int C = 8;                                   // exercises Svf ic1[c]/ic2[c] for c = 0..7
+        EqEngine eng; eng.prepare (fs, 256, C);
+        BandParams p; p.on = true; p.type = FilterType::Bell; p.freq = 2000.0; p.Q = 3.0; p.gainDb = 6.0; p.swept = true;
+        eng.setBand (0, p);
+        const auto g = multiSineGainDb ([&] (float* const* ch, int nc, int n) { eng.process (ch, nc, n); }, C, 2000.0, fs);
+        for (int c = 0; c < C; ++c)
+            expectNear (g[(size_t) c], 6.0, 0.5, "ch " + std::to_string (c) + " swept bell +6 dB");
+    }
+
+    group ("EqEngine: 16-channel (max cap) silence stays silent, no NaN");
+    {
+        const int C = teq::kMaxChannels;                   // 16: top of the supported range
+        EqEngine eng; eng.prepare (fs, 256, C);
+        BandParams p; p.on = true; p.type = FilterType::HighShelf; p.freq = 6000.0; p.gainDb = 9.0;
+        eng.setBand (0, p);
+        const int n = 256;
+        std::vector<std::vector<float>> bufs ((size_t) C, std::vector<float> ((size_t) n, 0.0f));
+        std::vector<float*> ptr ((size_t) C);
+        for (int c = 0; c < C; ++c) ptr[(size_t) c] = bufs[(size_t) c].data();
+        for (int b = 0; b < 10; ++b) eng.process (ptr.data(), C, n);
+        double energy = 0.0; bool nan = false;
+        for (int c = 0; c < C; ++c) for (int i = 0; i < n; ++i)
+        { energy += std::fabs (bufs[(size_t) c][(size_t) i]); nan = nan || ! std::isfinite (bufs[(size_t) c][(size_t) i]); }
+        expectTrue (energy == 0.0, "16ch silence stays silent");
+        expectTrue (! nan,         "16ch no NaN");
+    }
+
+    group ("EqEngine: 16-channel independence — every channel bit-identical to its own mono engine");
+    {
+        const int C = teq::kMaxChannels;     // 16, each fed a DISTINCT (uncorrelated) frequency
+        const int n = 256;
+        auto signalAt = [&] (int c, int i) { return (float) (0.2 * std::sin (2.0 * kPi * (110.0 + 37.0 * c) * i / fs)); };
+
+        // Run C independent single-channel engines, then the one 16-channel engine on the same inputs.
+        // Per-channel state must be fully separate -> bit-for-bit equal. Any cross-talk / wrong index
+        // / channel-count-dependent math (incl. on the top channel 15) makes maxErr != 0.
+        auto checkIndependence = [&] (bool swept, const std::string& label)
+        {
+            BandParams p; p.on = true; p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 3.0; p.gainDb = 6.0; p.swept = swept;
+
+            std::vector<std::vector<float>> ref ((size_t) C, std::vector<float> ((size_t) n));
+            for (int c = 0; c < C; ++c)
+            {
+                EqEngine mono; mono.prepare (fs, n, 1); mono.setBand (0, p);
+                for (int i = 0; i < n; ++i) ref[(size_t) c][(size_t) i] = signalAt (c, i);
+                float* m[1] = { ref[(size_t) c].data() };
+                mono.process (m, 1, n);
+            }
+
+            EqEngine eng; eng.prepare (fs, n, C); eng.setBand (0, p);
+            std::vector<std::vector<float>> buf ((size_t) C, std::vector<float> ((size_t) n));
+            std::vector<float*> ptr ((size_t) C);
+            for (int c = 0; c < C; ++c)
+            {
+                for (int i = 0; i < n; ++i) buf[(size_t) c][(size_t) i] = signalAt (c, i);
+                ptr[(size_t) c] = buf[(size_t) c].data();
+            }
+            eng.process (ptr.data(), C, n);
+
+            double maxErr = 0.0;
+            for (int c = 0; c < C; ++c) for (int i = 0; i < n; ++i)
+                maxErr = std::max (maxErr, (double) std::fabs (buf[(size_t) c][(size_t) i] - ref[(size_t) c][(size_t) i]));
+            expectTrue (maxErr == 0.0, label + ": all 16 channels bit-identical to an independent engine");
+        };
+
+        checkIndependence (false, "static biquad");
+        checkIndependence (true,  "swept SVF");
     }
 }

@@ -21,7 +21,7 @@ namespace teq
 class Svf
 {
 public:
-    static constexpr int kMaxChannels = 2;
+    static constexpr int kMaxChannels = teq::kMaxChannels;   // single source of truth: teq/EqTypes.h
 
     void prepare (double sampleRate, int numChannels) noexcept
     {

@@ -51,7 +51,8 @@ double curveDb = eq.magnitudeDb (1000.0);                // for the GUI
   shelves); `slope` 12 dB/oct (uses Q) or 24 dB/oct (HP/LP; Butterworth, Q ignored); `swept` → SVF.
   Non-finite values are sanitised. The first `setParams()` per band **snaps** (no ramp from defaults
   on load); later changes smooth. Identical params are a no-op (cheap to call every block).
-- **Preconditions.** Call `prepare()` before `process()`. Stereo max (`kMaxChannels = 2`).
+- **Preconditions.** Call `prepare()` before `process()`. Up to `teq::kMaxChannels` (16) channels —
+  mono through 9.1.6 Atmos / 3rd-order ambisonics; the host clamps the live count to this.
 - **GUI curve.** For a **race-free** curve use `EqEngine::magnitudeDbFor(params, n, freqHz, fs)` —
   it computes purely from a `BandParams` array the GUI owns (the member `magnitudeDb()` is a
   best-effort live readout that may briefly race a param change). Reports the matched (analog-honest)

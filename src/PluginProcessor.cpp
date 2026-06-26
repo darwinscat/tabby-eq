@@ -26,20 +26,23 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
 
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
-    engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, juce::jmin (getTotalNumOutputChannels(), 2));
+    engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels());   // engine clamps to teq::kMaxChannels
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
 }
 
-// Mono and stereo both supported: mono->mono, mono->stereo (up-mixed), stereo->stereo.
+// Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
+// 7.1.4 Atmos, ambisonics, … up to teq::kMaxChannels), plus the one conventional convenience up-mix
+// mono->stereo. We deliberately don't fan a mono source out onto surround/ambisonic buses — copying
+// mono into B-format components or an LFE is a panner/encoder's job, not an EQ's. No down-mix either.
 bool TabbyEqAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    const auto in   = layouts.getMainInputChannelSet();
-    const auto out  = layouts.getMainOutputChannelSet();
-    const auto mono = juce::AudioChannelSet::mono(), stereo = juce::AudioChannelSet::stereo();
-    if (out != mono && out != stereo) return false;
-    if (in  != mono && in  != stereo) return false;
-    return in.size() <= out.size();
+    const auto in  = layouts.getMainInputChannelSet();
+    const auto out = layouts.getMainOutputChannelSet();
+    if (out.isDisabled() || in.isDisabled()) return false;
+    if (out.size() < 1 || out.size() > teq::EqEngine::kMaxChannels) return false;
+    if (in == out) return true;                                                                  // matched: mono..16ch
+    return in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::stereo();         // mono->stereo only
 }
 
 void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -49,10 +52,10 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
     const int n      = buffer.getNumSamples();
-    const int nc     = juce::jmin (numOut, 2);   // channels we EQ (mono or stereo)
+    const int nc     = juce::jmin (numOut, teq::EqEngine::kMaxChannels);   // channels we EQ
     if (nc <= 0) return;
 
-    // Up-mix a mono input into the channels we process (mono->stereo => identical L/R).
+    // Up-mix a mono input into stereo (the only non-matched layout we accept) => identical L/R.
     for (int c = juce::jmax (1, numIn); c < nc; ++c) buffer.copyFrom (c, 0, buffer, 0, 0, n);
 
     // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread

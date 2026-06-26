@@ -9,6 +9,14 @@
 namespace teq
 {
 
+// The maximum channel count the engine processes in one pass — the single source of truth for every
+// per-channel state array (Svf, EqBand and EqEngine all derive their caps from this). 16 covers every
+// commercial layout: mono, stereo, quad, 5.1, 7.1, 7.1.4 / 9.1.6 Atmos (≤ 16 channels) and 1st–3rd
+// order ambisonics. The state is fixed-size and zero-allocation (so process() stays RT-safe), which
+// means the only cost of the headroom is memory (~1.5 KB of biquad state per band at 16). Need more
+// channels? Bump this one line — nothing else changes.
+constexpr int kMaxChannels = 16;
+
 enum class FilterType
 {
     Bell,        // peaking, gainDb + Q
