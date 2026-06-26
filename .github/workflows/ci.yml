@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# TabbyEQ CI — configure, build, and run the headless DSP unit tests (the cramping gate).
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # JUCE's Linux build wants these even for a console app linking juce_core.
+      - name: Install JUCE Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
+            libfreetype6-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libglu1-mesa-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build tests
+        run: cmake --build build --target TabbyEQ_Tests -j
+
+      - name: Run tests
+        run: |
+          bin="$(find build -type f -name TabbyEQTests -perm -u+x | head -1)"
+          echo "running $bin"
+          "$bin"
