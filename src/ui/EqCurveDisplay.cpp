@@ -192,46 +192,43 @@ void EqCurveDisplay::pushSpectrum()
     }
 }
 
-// Fractional-octave-smoothed spectrum on the display's log grid: O(1) per column via prefix sums.
-// Low freqs (sparse bins) read ~1 bin; highs (dense) average dozens -> a smooth "liquid" curve.
+// Spectrum on the display's log grid: linear-interpolate the sparse bass (smooth, no stair-steps),
+// take the bin MAX in the dense highs (keeps the spiky harmonic detail pro analyzers show). High
+// column resolution (~1/px) so high-freq peaks aren't skipped. +4.5 dB/oct pink-tilt on top.
 void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const
 {
     constexpr int nb = teq::kSpectrumFftSize / 2 + 1;
-    std::array<float, nb + 1> pSpec {}, pPeak {};
-    for (int i = 0; i < nb; ++i)
-    {
-        pSpec[(size_t) (i + 1)] = pSpec[(size_t) i] + specDb[(size_t) i];
-        pPeak[(size_t) (i + 1)] = pPeak[(size_t) i] + specPeak[(size_t) i];
-    }
-
-    constexpr double r = 1.059463;                                  // 2^(1/12): +-1/12-octave (keeps high detail)
     const double binPerHz = (double) teq::kSpectrumFftSize / fsCache;
-    // Blend octave-AVERAGE (smooths dense highs) with linear INTERPOLATION between bins (kills the
-    // bass stair-steps, where one FFT bin spans a whole octave on the log axis).
-    auto sample = [&] (const auto& pre, const auto& raw, double f) -> float
+    const int N = juce::jlimit (256, 900, (int) w);
+
+    auto column = [&] (const auto& raw, double f, int loBin, int hiBin) -> float
     {
-        const double binF = f * binPerHz;
-        const int lo = juce::jlimit (0, nb - 1, (int) std::floor (f / r * binPerHz));
-        const int hi = juce::jlimit (lo, nb - 1, (int) std::ceil (f * r * binPerHz));
-        const float va = (pre[(size_t) (hi + 1)] - pre[(size_t) lo]) / (float) (hi - lo + 1);
-        const int   b0 = juce::jlimit (0, nb - 2, (int) std::floor (binF));
-        const float t  = (float) juce::jlimit (0.0, 1.0, binF - (double) b0);
-        const float vi = raw[(size_t) b0] + t * (raw[(size_t) (b0 + 1)] - raw[(size_t) b0]);
-        const float blend = juce::jlimit (0.0f, 1.0f, (float) (hi - lo) / 3.0f);
-        return vi + blend * (va - vi);
+        if (hiBin <= loBin)                                         // < 1 bin this column -> interpolate
+        {
+            const double bf = juce::jlimit (0.0, (double) (nb - 2), f * binPerHz);
+            const int b0 = (int) bf; const float t = (float) (bf - (double) b0);
+            return raw[(size_t) b0] + t * (raw[(size_t) (b0 + 1)] - raw[(size_t) b0]);
+        }
+        float m = -200.0f;                                          // >= 1 bin -> peak (max) = detail
+        for (int b = juce::jmax (0, loBin + 1); b <= juce::jmin (nb - 1, hiBin); ++b)
+            m = juce::jmax (m, raw[(size_t) b]);
+        return m;
     };
 
-    constexpr int N = 280;
     float lastY = h;
+    int prevBin = 0;
     for (int i = 0; i <= N; ++i)
     {
         const float  x = (float) i / (float) N * w;
         const double f = xToFreq (x);
-        const float yS = specDbToY (sample (pSpec, specDb,   f));
-        const float yP = specDbToY (sample (pPeak, specPeak, f));
+        const int    curBin = juce::jlimit (0, nb - 1, (int) std::floor (f * binPerHz));
+        const float  tilt = (float) (kTiltDbPerOct * std::log2 (f / kTiltPivotHz));   // pink-noise comp
+        const float  yS = specDbToY (column (specDb,   f, prevBin, curBin) + tilt);
+        const float  yP = specDbToY (column (specPeak, f, prevBin, curBin) + tilt);
         if (i == 0) { fillOut.startNewSubPath (0.0f, h); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
         else          peakOut.lineTo (x, yP);
         fillOut.lineTo (x, yS);
+        prevBin = curBin;
         lastY = yS;
     }
     fillOut.lineTo (w, lastY); fillOut.lineTo (w, h); fillOut.closeSubPath();

@@ -81,6 +81,8 @@ private:
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = 6.0f;
     static constexpr float  kPeakFallDb = 0.8f;          // peak-hold fall (~24 dB/s at 30 Hz)
+    static constexpr double kTiltDbPerOct = 4.5;         // analyzer tilt — pink-noise comp, like Pro-Q / Neutron
+    static constexpr double kTiltPivotHz  = 1000.0;      // tilt pivot (highs lift, lows drop around 1 kHz)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EqCurveDisplay)
 };
