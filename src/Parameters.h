@@ -14,7 +14,7 @@
 namespace tabby
 {
 
-inline constexpr int kNumBands = teq::EqEngine::kMaxBands;   // 12
+inline constexpr int kNumBands = teq::EqEngine::kMaxBands;   // 24
 
 // Parameter id for band `b`, e.g. bandId(0,"freq") -> "band0_freq".
 juce::String bandId (int b, juce::StringRef suffix);

@@ -30,7 +30,7 @@ namespace teq
 class EqEngine
 {
 public:
-    static constexpr int kMaxBands    = 12;
+    static constexpr int kMaxBands    = 24;
     static constexpr int kMaxChannels = EqBand::kMaxChannels;
 
     void prepare (double sampleRate, int /*maxBlock*/, int numChannels) noexcept
