@@ -22,6 +22,11 @@ endif()
 set(TEQ_BUILD_TESTS ON)
 add_subdirectory(teq)
 
+# The plugin pulls JUCE — gate it so CI (and anyone who only wants the core) builds the
+# JUCE-free teq engine + tests without fetching JUCE. `-DTABBYEQ_BUILD_PLUGIN=OFF` for that.
+option(TABBYEQ_BUILD_PLUGIN "Build the JUCE plugin (VST3/AU/Standalone/CLAP)" ON)
+if(TABBYEQ_BUILD_PLUGIN)
+
 # ----------------------------------------------------------------------------
 # The TabbyEQ plugin — a thin JUCE adapter over teq_core. JUCE + clap-juce-extensions are
 # fetched (FetchContent, pinned, same tags as orbitcab). Builds VST3 + AU + Standalone + CLAP.
@@ -82,3 +87,5 @@ target_link_libraries(TabbyEQ PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+endif()  # TABBYEQ_BUILD_PLUGIN

@@ -14,8 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Configure (core + tests only — no JUCE fetch)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTABBYEQ_BUILD_PLUGIN=OFF
 
       - name: Build
         run: cmake --build build --target teq_tests -j
