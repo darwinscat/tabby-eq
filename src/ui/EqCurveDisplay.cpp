@@ -12,6 +12,27 @@ namespace
             || t == teq::FilterType::HighShelf || t == teq::FilterType::Tilt;
     }
 
+    bool qRelevant (teq::FilterType t) noexcept   // Q sets bandwidth -> show the Q whiskers
+    {
+        return t == teq::FilterType::Bell     || t == teq::FilterType::HighPass || t == teq::FilterType::LowPass
+            || t == teq::FilterType::BandPass || t == teq::FilterType::Notch     || t == teq::FilterType::AllPass;
+    }
+
+    // Q-whisker calibration — half-bandwidth (octaves) <-> Q, log-linear. Tuned by feel so the
+    // handles span a usable range: 0.2 oct out = max Q 40, 0.833 oct out = min Q 0.1.
+    constexpr double kQwBwLo = 0.2, kQwBwHi = 0.833, kQwQHi = 40.0, kQwQLo = 0.1;
+    double whiskerBwForQ (double Q) noexcept
+    {
+        const double t = (std::log10 (kQwQHi) - std::log10 (juce::jlimit (kQwQLo, kQwQHi, Q)))
+                       / (std::log10 (kQwQHi) - std::log10 (kQwQLo));
+        return kQwBwLo + t * (kQwBwHi - kQwBwLo);
+    }
+    double whiskerQForBw (double bw) noexcept
+    {
+        const double t = juce::jlimit (0.0, 1.0, (bw - kQwBwLo) / (kQwBwHi - kQwBwLo));
+        return std::pow (10.0, std::log10 (kQwQHi) - t * (std::log10 (kQwQHi) - std::log10 (kQwQLo)));
+    }
+
     juce::Colour bandColour (teq::FilterType t) noexcept
     {
         using FT = teq::FilterType;
@@ -112,6 +133,15 @@ juce::Point<float> EqCurveDisplay::nodePos (int b) const noexcept
     return { freqToX (paramCache[b].freq), dbToY (db) };
 }
 
+std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (int b) const noexcept
+{
+    const auto pos = nodePos (b);
+    const double f0 = paramCache[(size_t) b].freq;
+    const double bw = whiskerBwForQ (paramCache[(size_t) b].Q);     // half-bandwidth (octaves) from Q
+    const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;        // -> px offset (log-x, symmetric)
+    return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
+}
+
 int EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
 {
     int best = -1; float bestD = (kNodeR + 5.0f) * (kNodeR + 5.0f);
@@ -144,12 +174,21 @@ void EqCurveDisplay::endDragGesture()
 {
     if (draggingBand >= 0)
     {
-        if (auto* fp = proc.apvts.getParameter (tabby::bandId (draggingBand, "freq"))) fp->endChangeGesture();
-        if (draggingGain)
-            if (auto* gp = proc.apvts.getParameter (tabby::bandId (draggingBand, "gain"))) gp->endChangeGesture();
+        if (draggingQ)
+        {
+            if (auto* qp = proc.apvts.getParameter (tabby::bandId (draggingBand, "q"))) qp->endChangeGesture();
+        }
+        else
+        {
+            if (auto* fp = proc.apvts.getParameter (tabby::bandId (draggingBand, "freq"))) fp->endChangeGesture();
+            if (draggingGain)
+                if (auto* gp = proc.apvts.getParameter (tabby::bandId (draggingBand, "gain"))) gp->endChangeGesture();
+        }
     }
     draggingBand = -1;
     draggingGain = false;
+    draggingQ    = false;
+    qDragSide    = 0;
 }
 
 void EqCurveDisplay::selectBand (int newSel)
@@ -346,6 +385,20 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.setColour (juce::Colours::white.withAlpha (0.85f));
         g.drawEllipse (pos.x - kNodeR - 3, pos.y - kNodeR - 3, (kNodeR + 3) * 2, (kNodeR + 3) * 2, 1.5f);
 
+        // Q-whiskers (Neutron-style): drag an end handle to set bandwidth / Q
+        if (qRelevant (paramCache[(size_t) rb].type))
+        {
+            const auto wk  = whiskerEnds (rb);
+            const auto col = bandColour (paramCache[(size_t) rb].type);
+            g.setColour (col.withAlpha (0.85f));
+            g.drawLine (wk.first.x, pos.y, wk.second.x, pos.y, 1.5f);
+            for (const auto& hp : { wk.first, wk.second })
+            {
+                g.setColour (tabby::palette::bg()); g.fillEllipse (hp.x - 4.0f, hp.y - 4.0f, 8.0f, 8.0f);
+                g.setColour (col);                  g.drawEllipse (hp.x - 4.0f, hp.y - 4.0f, 8.0f, 8.0f, 1.5f);
+            }
+        }
+
         const juce::String txt = readoutText (rb);
         const float tw = (float) txt.length() * 6.6f + 12.0f, th = 18.0f;
         const float bx = juce::jlimit (2.0f, w - tw - 2.0f, pos.x - tw * 0.5f);
@@ -421,6 +474,20 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
+    // A drag on the selected band's Q-whisker handle sets Q (Neutron-style), keeping the selection.
+    if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && qRelevant (paramCache[(size_t) selBand].type))
+    {
+        const auto wk = whiskerEnds (selBand);
+        const bool onRight = e.position.getDistanceFrom (wk.second) < kNodeR + 4.0f;
+        const bool onLeft  = e.position.getDistanceFrom (wk.first)  < kNodeR + 4.0f;
+        if (onLeft || onRight)
+        {
+            draggingBand = selBand; draggingQ = true; qDragSide = onRight ? 1 : -1;
+            if (auto* qp = proc.apvts.getParameter (tabby::bandId (selBand, "q"))) qp->beginChangeGesture();
+            return;
+        }
+    }
+
     // select the clicked node (or clear on empty) so the edit strip follows, then start dragging
     selectBand (b);
     draggingBand = b;
@@ -436,6 +503,17 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 {
     if (draggingBand < 0) return;
+    if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
+    {
+        const double f0 = paramCache[(size_t) draggingBand].freq;
+        const double fx = xToFreq (e.position.x);
+        // Clamp the grabbed handle to its own side of the node (no jumping across), then map the
+        // half-bandwidth to Q with the calibrated curve (hits 40 / 0.1 at the ends).
+        const double bw = (qDragSide > 0) ? std::log2 (juce::jmax (f0, fx) / f0)
+                                          : std::log2 (f0 / juce::jmin (f0, fx));
+        setParam (tabby::bandId (draggingBand, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
+        return;
+    }
     setParam (tabby::bandId (draggingBand, "freq"), xToFreq (e.position.x));
     if (draggingGain)   // latched at mouseDown so the gain begin/end gesture stays balanced
         setParam (tabby::bandId (draggingBand, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));

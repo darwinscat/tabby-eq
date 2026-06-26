@@ -47,6 +47,7 @@ private:
     void   refreshDesigns();                       // pull the 12 bands into the cache + design them
     double compositeDb (double f) const noexcept;  // total response (dB) from the cache
     juce::Point<float> nodePos (int band) const noexcept;
+    std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b) const noexcept;   // Q-handle positions
     int    nodeAt (juce::Point<float> p) const noexcept;   // band index under p, or -1
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
@@ -73,6 +74,8 @@ private:
 
     int  draggingBand = -1;
     bool draggingGain = false;
+    bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
+    int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
 
