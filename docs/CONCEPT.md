@@ -6,11 +6,12 @@
 
 ## One-liner
 
-An **educational semantic parametric EQ**. You don't dial freq/Q directly — you pick a
-**SOURCE** (voice / guitar / bass) and a named **TRAIT** (mud, nose, presence, air, fizz…).
-TabbyEQ maps the trait to a real filter (type / freq / Q / gain) and **shows you the actual
-values** as you turn the one "amount" knob — so you learn the frequency cheat-sheet by using
-it, instead of memorising tables.
+A **production semantic EQ** — a full, honest parametric EQ you drive by **intent**. You don't
+have to remember which band or how wide: pick a **SOURCE** (voice / guitar / bass) and name the
+**TRAIT** (mud, nose, presence, air, fizz…) and TabbyEQ lands the right filter (type / freq / Q
+/ gain), with the **real values visible and editable**, right there. The semantic layer is a
+**helper on top of a standard quality EQ**, never a wall in front of it. (You absorb the
+frequency cheat-sheet as a side effect — a bonus, not the goal.)
 
 The killer feature is the **search → treat** workflow for resonances you can't write down as a
 constant (e.g. a vocalist's nasal "nose"): click the trait → the spectrum zooms to its range →
@@ -20,8 +21,8 @@ flips to a musical cut at the found frequency.
 ## Naming / brand
 
 - **Product name: TabbyEQ.** Canon EQ name from `darwinscat.com/doc/guitar-rig-naming.md`
-  (Table 2, verdict). "Tabby" = полосатый кот = frequency *bands* (stripes); bonus for a
-  teaching tool — stripes you can *see*.
+  (Table 2, verdict). "Tabby" = полосатый кот = frequency *bands* (stripes); bonus for any band
+  EQ — stripes you can *see*.
 - **Alt held in pocket: Pinna** (the outer-ear that shapes incoming sound — fits the
   "learn to *hear*" angle and the cat-anatomy axis). Decide after domain/TM check.
 - **Line:** Felitronics (🔒 prod umbrella). **Repo:** `tabby-eq` (lowercase-kebab, like
@@ -33,13 +34,13 @@ flips to a musical cut at the found frequency.
 | # | Decision | Choice |
 |---|---|---|
 | 1 | Architecture | Normal **N-band EQ engine** (real freq/Q/gain/type = the automatable state) + **semantic macro UI** on top. Band count TBD (6–8). |
-| 2 | Search listening mode | **Both** boost-sweep AND solo-bandpass; **solo = default** for beginners; gain-compensated monitor for safety. |
+| 2 | Search listening mode | **Both** boost-sweep AND solo-bandpass (**solo = default**); gain-compensated monitor (minus the search boost) so a +12 sweep never blasts your ears. |
 | 3 | Filter coefficients | **Matched biquads (Vicanek 2016)** from day one (honest curves near Nyquist). **TPT SVF** for the swept/search band + HPF/LPF. |
 | 4 | Sources v1 | Male voice, Female voice, E-gtr **clean**, E-gtr **dist**, Acoustic, Bass. **Drums → v1.1** (per-piece: kick/snare/OH). |
 | 5 | Axes | **Source (timbre) × optional Role (rhythm↔lead)**. Role re-weights/re-orders traits + flips default actions, reusing the same freq map. **No genre/style axis in v1.** |
 | 6 | Vocab format | **Hand-authored C++ table** (`src/Vocab.h`) = the source of truth. Zero build deps, compiler-validated, reads like the data. (Dropped the YAML→codegen/Python idea as overkill for ~6 sources.) `docs/VOCABULARY.md` stays the human reference; export to JSON/YAML later only if a web tool needs it. |
 | 7 | Band model | **Trait = its own labelled band.** Pool of ~12 biquads under the hood; the selected source's `core` traits appear as dedicated labelled bands, `opt` traits light up spare bands. DAW sees a normal multiband EQ; automation stays clean. |
-| 8 | Freq/Q access | **Advanced-unlock.** Default UI = the named **amount** knob + the real freq/Q/gain shown read-only as *info*. An `advanced` toggle reveals editable freq/Q for power users. |
+| 8 | Freq/Q access | **Always visible and editable** (no advanced gate). Real freq/Q/gain/type are first-class controls — drag the node, type a value. The base is a standard quality EQ; the semantic **amount** knob is an accelerator on top that pre-places and labels bands, never a replacement for the controls. |
 
 ## DSP / Nyquist plan
 
@@ -50,7 +51,7 @@ flips to a musical cut at the found frequency.
 - **Clamp** `fc ≤ ~0.49·fs`; a high-shelf whose corner exceeds Nyquist degrades gracefully.
 - **Swept band on `StateVariableTPTFilter`** (survives fast fc modulation during the hunt);
   smooth gain/freq to kill zipper noise.
-- **Teaching toggle:** draw the realized `H(z)` vs the analog target so cramping is *visible*.
+- **Transparency toggle:** draw the realized `H(z)` vs the analog target so any near-Nyquist deviation is *visible* — QA / trust, not a lesson.
 - Both panel models (DeepSeek, Codex) independently flagged air-band cramping at 44.1/48k →
   confirms the matched-shelf choice.
 
@@ -68,7 +69,7 @@ flips to a musical cut at the found frequency.
 ## Data model
 
 Factor into a **global trait dictionary** (the *concept* + general behaviour) + **per-source
-overrides** (freq center, useful range, relevance, default Q/action). Teaches "mud is always
+overrides** (freq center, useful range, relevance, default Q/action). Encodes "mud is always
 mud — it just lives at a different freq per instrument." See `vocab/tabby-vocab.draft.yaml`
 for the schema and the two pilot sources encoded.
 
