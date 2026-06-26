@@ -27,6 +27,8 @@ public:
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;
     void mouseUp          (const juce::MouseEvent&) override;
+    void mouseMove        (const juce::MouseEvent&) override;
+    void mouseExit        (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove   (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
@@ -48,6 +50,7 @@ private:
     double compositeDb (double f) const noexcept;  // total response (dB) from the cache
     juce::Point<float> nodePos (int band) const noexcept;
     std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b) const noexcept;   // Q-handle positions
+    juce::Point<float> addButtonAt() const noexcept;   // the "+" on the curve under the cursor, or {-1,-1}
     int    nodeAt (juce::Point<float> p) const noexcept;   // band index under p, or -1
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
@@ -78,11 +81,13 @@ private:
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
+    juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
     static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = 6.0f;
+    static constexpr float  kAddThreshold = 36.0f;       // px from the curve to surface the "+" add button
     static constexpr float  kPeakFallDb = 0.8f;          // peak-hold fall (~24 dB/s at 30 Hz)
     static constexpr double kTiltDbPerOct = 4.5;         // analyzer tilt — pink-noise comp, like Pro-Q / Neutron
     static constexpr double kTiltPivotHz  = 1000.0;      // tilt pivot (highs lift, lows drop around 1 kHz)

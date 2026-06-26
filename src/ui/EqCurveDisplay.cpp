@@ -363,6 +363,18 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.setColour (tabby::palette::line());                       g.strokePath (line, juce::PathStrokeType (1.6f));
     }
 
+    // --- hover halo on the node under the cursor --------------------------
+    if (hoverPos.x >= 0.0f && draggingBand < 0)
+    {
+        const int hb = nodeAt (hoverPos);
+        if (hb >= 0)
+        {
+            const auto hp = nodePos (hb);
+            g.setColour (bandColour (paramCache[(size_t) hb].type).withAlpha (0.22f));
+            g.fillEllipse (hp.x - kNodeR - 7, hp.y - kNodeR - 7, (kNodeR + 7) * 2, (kNodeR + 7) * 2);
+        }
+    }
+
     // --- nodes ------------------------------------------------------------
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
@@ -407,6 +419,18 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.setColour (tabby::palette::violetLo().withAlpha (0.55f)); g.drawRoundedRectangle (bx, by, tw, th, 4.0f, 1.0f);
         g.setColour (tabby::palette::text()); g.setFont (12.0f);
         g.drawText (txt, juce::Rectangle<float> (bx, by, tw, th), juce::Justification::centred);
+    }
+
+    // --- "+" add-band button where the cursor crosses the curve ----------
+    const auto addBtn = addButtonAt();
+    if (addBtn.x >= 0.0f)
+    {
+        const float r = kNodeR + 2.0f;
+        g.setColour (tabby::palette::panel().withAlpha (0.92f));    g.fillEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2);
+        g.setColour (tabby::palette::violetLo().withAlpha (0.85f)); g.drawEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2, 1.5f);
+        g.setColour (tabby::palette::text());
+        g.drawLine (addBtn.x - 4.0f, addBtn.y, addBtn.x + 4.0f, addBtn.y, 1.6f);
+        g.drawLine (addBtn.x, addBtn.y - 4.0f, addBtn.x, addBtn.y + 4.0f, 1.6f);
     }
 }
 
@@ -474,6 +498,14 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
+    // "+" on the curve under the cursor -> add a flat Bell at that frequency
+    const auto addBtn = addButtonAt();
+    if (addBtn.x >= 0.0f && e.position.getDistanceFrom (addBtn) < kNodeR + 6.0f)
+    {
+        addBandOfType (0, { addBtn.x, dbToY (0.0) });
+        return;
+    }
+
     // A drag on the selected band's Q-whisker handle sets Q (Neutron-style), keeping the selection.
     if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && qRelevant (paramCache[(size_t) selBand].type))
     {
@@ -520,6 +552,21 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 }
 
 void EqCurveDisplay::mouseUp (const juce::MouseEvent&) { endDragGesture(); }
+
+void EqCurveDisplay::mouseMove (const juce::MouseEvent& e) { hoverPos = e.position; repaint(); }
+void EqCurveDisplay::mouseExit (const juce::MouseEvent&)   { hoverPos = { -1.0f, -1.0f }; repaint(); }
+
+juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
+{
+    if (hoverPos.x < 0.0f || draggingBand >= 0)     return { -1.0f, -1.0f };
+    if (nodeAt (hoverPos) >= 0)                      return { -1.0f, -1.0f };   // on a node -> no "+"
+    bool anyFree = false;
+    for (int i = 0; i < tabby::kNumBands; ++i) if (! paramCache[(size_t) i].on) { anyFree = true; break; }
+    if (! anyFree)                                   return { -1.0f, -1.0f };   // all bands used
+    const float cy = dbToY (compositeDb (xToFreq (hoverPos.x)));
+    if (std::abs (hoverPos.y - cy) > kAddThreshold)  return { -1.0f, -1.0f };   // not near the curve
+    return { hoverPos.x, cy };
+}
 
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
