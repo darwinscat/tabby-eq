@@ -55,6 +55,7 @@ private:
     void   pushSpectrum();
     void   selectBand (int newSel);                  // update selection + fire onBandSelected
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
+    void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
     TabbyEqAudioProcessor& proc;
 
@@ -63,6 +64,7 @@ private:
     std::array<float, teq::kSpectrumFftSize>     window {};
     std::array<float, teq::kSpectrumFftSize * 2> fftBuf {};
     std::array<float, teq::kSpectrumFftSize / 2 + 1> specDb {};
+    std::array<float, teq::kSpectrumFftSize / 2 + 1> specPeak {};   // slow-decay peak-hold
 
     // per-paint cache of the band designs (shared by curve / nodes / hit-test)
     teq::BandParams paramCache[tabby::kNumBands];
@@ -78,6 +80,7 @@ private:
     static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = 6.0f;
+    static constexpr float  kPeakFallDb = 0.8f;          // peak-hold fall (~24 dB/s at 30 Hz)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EqCurveDisplay)
 };

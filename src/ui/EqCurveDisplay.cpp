@@ -30,6 +30,7 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
         window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (window.size() - 1));
 
     specDb.fill (-120.0f);
+    specPeak.fill (-120.0f);
     proc.setAnalyzerActive (true);
     startTimerHz (30);
 }
@@ -173,6 +174,7 @@ void EqCurveDisplay::pushSpectrum()
         if (starveTicks < 16) ++starveTicks;          // bounded — never overflows over long silence
         if (starveTicks > 15)
             for (auto& v : specDb) v += 0.05f * (-120.0f - v);
+        for (auto& v : specPeak) v = juce::jmax (-120.0f, v - kPeakFallDb);
         return;
     }
     starveTicks = 0;
@@ -185,8 +187,54 @@ void EqCurveDisplay::pushSpectrum()
     for (int i = 0; i < (int) specDb.size(); ++i)
     {
         const double db = juce::Decibels::gainToDecibels ((double) fftBuf[(size_t) i] / norm, -120.0);
-        specDb[(size_t) i] += 0.25f * ((float) db - specDb[(size_t) i]);   // smooth toward target
+        specDb[(size_t) i]  += 0.25f * ((float) db - specDb[(size_t) i]);   // smooth toward target
+        specPeak[(size_t) i] = juce::jmax (specPeak[(size_t) i] - kPeakFallDb, specDb[(size_t) i]);
     }
+}
+
+// Fractional-octave-smoothed spectrum on the display's log grid: O(1) per column via prefix sums.
+// Low freqs (sparse bins) read ~1 bin; highs (dense) average dozens -> a smooth "liquid" curve.
+void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const
+{
+    constexpr int nb = teq::kSpectrumFftSize / 2 + 1;
+    std::array<float, nb + 1> pSpec {}, pPeak {};
+    for (int i = 0; i < nb; ++i)
+    {
+        pSpec[(size_t) (i + 1)] = pSpec[(size_t) i] + specDb[(size_t) i];
+        pPeak[(size_t) (i + 1)] = pPeak[(size_t) i] + specPeak[(size_t) i];
+    }
+
+    constexpr double r = 1.059463;                                  // 2^(1/12): +-1/12-octave (keeps high detail)
+    const double binPerHz = (double) teq::kSpectrumFftSize / fsCache;
+    // Blend octave-AVERAGE (smooths dense highs) with linear INTERPOLATION between bins (kills the
+    // bass stair-steps, where one FFT bin spans a whole octave on the log axis).
+    auto sample = [&] (const auto& pre, const auto& raw, double f) -> float
+    {
+        const double binF = f * binPerHz;
+        const int lo = juce::jlimit (0, nb - 1, (int) std::floor (f / r * binPerHz));
+        const int hi = juce::jlimit (lo, nb - 1, (int) std::ceil (f * r * binPerHz));
+        const float va = (pre[(size_t) (hi + 1)] - pre[(size_t) lo]) / (float) (hi - lo + 1);
+        const int   b0 = juce::jlimit (0, nb - 2, (int) std::floor (binF));
+        const float t  = (float) juce::jlimit (0.0, 1.0, binF - (double) b0);
+        const float vi = raw[(size_t) b0] + t * (raw[(size_t) (b0 + 1)] - raw[(size_t) b0]);
+        const float blend = juce::jlimit (0.0f, 1.0f, (float) (hi - lo) / 3.0f);
+        return vi + blend * (va - vi);
+    };
+
+    constexpr int N = 280;
+    float lastY = h;
+    for (int i = 0; i <= N; ++i)
+    {
+        const float  x = (float) i / (float) N * w;
+        const double f = xToFreq (x);
+        const float yS = specDbToY (sample (pSpec, specDb,   f));
+        const float yP = specDbToY (sample (pPeak, specPeak, f));
+        if (i == 0) { fillOut.startNewSubPath (0.0f, h); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
+        else          peakOut.lineTo (x, yP);
+        fillOut.lineTo (x, yS);
+        lastY = yS;
+    }
+    fillOut.lineTo (w, lastY); fillOut.lineTo (w, h); fillOut.closeSubPath();
 }
 
 void EqCurveDisplay::timerCallback()
@@ -223,25 +271,13 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- spectrum (filled) ------------------------------------------------
     {
-        juce::Path s;
-        bool started = false;
-        float lastY = h;
-        for (int i = 1; i < (int) specDb.size(); ++i)
-        {
-            const double f = (double) i * fsCache / (double) teq::kSpectrumFftSize;
-            if (f < kFreqMin || f > kFreqMax) continue;
-            const float x = freqToX (f), y = specDbToY (specDb[(size_t) i]);
-            // anchor the fill to the LEFT EDGE (the first bin sits a hair above 20 Hz: bin = fs/N)
-            if (! started) { s.startNewSubPath (0.0f, h); s.lineTo (0.0f, y); s.lineTo (x, y); started = true; }
-            else            s.lineTo (x, y);
-            lastY = y;
-        }
-        if (started)
-        {
-            s.lineTo (w, lastY); s.lineTo (w, h); s.closeSubPath();   // extend to the right edge too
-            g.setColour (tabby::palette::spectrum().withAlpha (0.13f));
-            g.fillPath (s);
-        }
+        juce::Path specFill, specPeakPath;
+        buildSpectrumPaths (specFill, specPeakPath, w, h);
+        g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
+                                                 tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
+        g.fillPath (specFill);
+        g.setColour (tabby::palette::spectrum().withAlpha (0.55f));
+        g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
     }
 
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
