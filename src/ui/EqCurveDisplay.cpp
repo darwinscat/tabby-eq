@@ -142,6 +142,26 @@ void EqCurveDisplay::endDragGesture()
     draggingGain = false;
 }
 
+void EqCurveDisplay::selectBand (int newSel)
+{
+    if (newSel == selBand) return;
+    selBand = newSel;
+    if (onBandSelected) onBandSelected (selBand);
+}
+
+juce::String EqCurveDisplay::readoutText (int b) const
+{
+    const auto& p = paramCache[(size_t) b];
+    const double f = p.freq;
+    juce::String s = f >= 1000.0 ? juce::String (f / 1000.0, 2) + " kHz"
+                                 : juce::String (juce::roundToInt (f)) + " Hz";
+    if (hasGain (p.type))
+        s << "   " << (p.gainDb >= 0.0 ? "+" : "") << juce::String (p.gainDb, 1) << " dB";
+    if (p.type != teq::FilterType::LowShelf && p.type != teq::FilterType::HighShelf)   // shelves ignore Q
+        s << "   Q " << juce::String (p.Q, 2);
+    return s;
+}
+
 //==============================================================================
 void EqCurveDisplay::pushSpectrum()
 {
@@ -242,6 +262,24 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             g.setFont (10.0f);
             g.drawText (juce::String (b + 1), juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2), juce::Justification::centred);
         }
+
+    // --- selection highlight + live value bubble --------------------------
+    const int rb = draggingBand >= 0 ? draggingBand : selBand;
+    if (rb >= 0 && rb < tabby::kNumBands && paramCache[(size_t) rb].on)
+    {
+        const auto pos = nodePos (rb);
+        g.setColour (juce::Colours::white.withAlpha (0.85f));
+        g.drawEllipse (pos.x - kNodeR - 3, pos.y - kNodeR - 3, (kNodeR + 3) * 2, (kNodeR + 3) * 2, 1.5f);
+
+        const juce::String txt = readoutText (rb);
+        const float tw = (float) txt.length() * 6.6f + 12.0f, th = 18.0f;
+        const float bx = juce::jlimit (2.0f, w - tw - 2.0f, pos.x - tw * 0.5f);
+        const float by = juce::jlimit (2.0f, h - th - 2.0f, pos.y - kNodeR - 8.0f - th);
+        g.setColour (juce::Colour (0xee0e1014)); g.fillRoundedRectangle (bx, by, tw, th, 4.0f);
+        g.setColour (juce::Colour (0x40ffffff)); g.drawRoundedRectangle (bx, by, tw, th, 4.0f, 1.0f);
+        g.setColour (juce::Colours::white); g.setFont (12.0f);
+        g.drawText (txt, juce::Rectangle<float> (bx, by, tw, th), juce::Justification::centred);
+    }
 }
 
 //==============================================================================
@@ -258,6 +296,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass || ft == teq::FilterType::LowPass) ? 0.707 : 1.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);
+            selectBand (b);
             return;
         }
 }
@@ -297,7 +336,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
                 m.addSubMenu ("Add band", add);
             }
             else
-                m.addItem (999, "All 12 bands in use", false, false);
+                m.addItem (999, "All 24 bands in use", false, false);
 
             const auto at = e.position;
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, at] (int r) {
@@ -307,7 +346,8 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    // start dragging — bracket the edit in a host automation gesture
+    // select the clicked node (or clear on empty) so the edit strip follows, then start dragging
+    selectBand (b);
     draggingBand = b;
     if (b >= 0)
     {

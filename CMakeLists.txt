@@ -75,7 +75,8 @@ target_sources(TabbyEQ PRIVATE
     src/PluginProcessor.cpp
     src/Parameters.cpp
     src/PluginEditor.cpp
-    src/ui/EqCurveDisplay.cpp)
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp)
 
 target_include_directories(TabbyEQ PRIVATE src)   # "Parameters.h", "Vocab.h"
 

@@ -30,6 +30,10 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove   (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
+    // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
+    std::function<void(int)> onBandSelected;
+    int  selectedBand() const noexcept { return selBand; }
+
 private:
     void timerCallback() override;
 
@@ -49,6 +53,8 @@ private:
     void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
     void   addBandOfType (int typeIndex, juce::Point<float> at);   // enable the first free band
     void   pushSpectrum();
+    void   selectBand (int newSel);                  // update selection + fire onBandSelected
+    juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
 
     TabbyEqAudioProcessor& proc;
 
@@ -65,6 +71,7 @@ private:
 
     int  draggingBand = -1;
     bool draggingGain = false;
+    int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;

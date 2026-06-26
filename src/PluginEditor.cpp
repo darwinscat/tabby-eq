@@ -4,7 +4,7 @@
 #include "PluginEditor.h"
 
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
-    : juce::AudioProcessorEditor (p), proc (p), display (p)
+    : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
 {
     title.setText ("TabbyEQ", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (18.0f).withStyle ("Bold")));
@@ -12,6 +12,9 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (title);
 
     addAndMakeVisible (display);
+
+    addAndMakeVisible (strip);
+    display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the strip
 
     output.setTextValueSuffix (" dB");
     addAndMakeVisible (output);
@@ -39,6 +42,8 @@ void TabbyEqEditor::resized()
     auto bottom = r.removeFromBottom (40);
     outputLabel.setBounds (bottom.removeFromLeft (64).reduced (4, 6));
     output.setBounds (bottom.reduced (8, 6));
+
+    strip.setBounds (r.removeFromBottom (52).reduced (8, 4));
 
     display.setBounds (r.reduced (8, 4));
 }

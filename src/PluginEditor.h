@@ -7,6 +7,7 @@
 
 #include "PluginProcessor.h"
 #include "ui/EqCurveDisplay.h"
+#include "ui/BandEditStrip.h"
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
@@ -24,6 +25,7 @@ private:
     TabbyEqAudioProcessor& proc;
 
     EqCurveDisplay display;
+    BandEditStrip  strip;
     juce::Label    title;
     juce::Slider   output { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label    outputLabel;
