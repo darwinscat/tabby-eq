@@ -94,7 +94,8 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
     bp.freq   = (double) p.freq->load();
     bp.Q      = (double) p.q->load();
     bp.gainDb = (double) p.gain->load();
-    bp.slope  = ((int) p.slope->load()) == 1 ? 24 : 12;
+    static constexpr int kSlopeDb[] = { 6, 12, 24, 36, 48, 72, 96 };
+    bp.slope  = kSlopeDb[juce::jlimit (0, 6, (int) p.slope->load())];
     bp.swept  = p.swept->load() > 0.5f;
     return bp;
 }

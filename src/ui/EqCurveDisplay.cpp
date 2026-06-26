@@ -13,9 +13,9 @@ namespace
     }
 
     bool qRelevant (teq::FilterType t) noexcept   // Q sets bandwidth -> show the Q whiskers
-    {
-        return t == teq::FilterType::Bell     || t == teq::FilterType::HighPass || t == teq::FilterType::LowPass
-            || t == teq::FilterType::BandPass || t == teq::FilterType::Notch     || t == teq::FilterType::AllPass;
+    {                                             // HP/LP use discrete slopes (their own whisker), not Q
+        return t == teq::FilterType::Bell  || t == teq::FilterType::BandPass
+            || t == teq::FilterType::Notch || t == teq::FilterType::AllPass;
     }
 
     // Q-whisker calibration — half-bandwidth (octaves) <-> Q, log-linear. Tuned by feel so the
@@ -114,10 +114,8 @@ double EqCurveDisplay::compositeDb (double f) const noexcept
     std::complex<double> h { 1.0, 0.0 };
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
-        {
-            h *= teq::evalCoeffs (designCache[b].c0, w);
-            if (designCache[b].twoStage) h *= teq::evalCoeffs (designCache[b].c1, w);
-        }
+            for (int s = 0; s < designCache[b].n; ++s)
+                h *= teq::evalCoeffs (designCache[b].sec[s], w);
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
 }
 

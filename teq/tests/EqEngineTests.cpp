@@ -261,6 +261,19 @@ void runEqEngineTests()
         expectNear (respSlope, audioSlope, 2.5,            "response agrees with audio (no 24-vs-12 mismatch)");
     }
 
+    group ("variable HP slopes: analytic rolloff ~ N dB/oct");
+    {
+        for (int slope : { 6, 12, 24, 36, 48, 72, 96 })
+        {
+            BandParams p; p.on = true; p.type = FilterType::HighPass; p.freq = 1000.0; p.slope = slope;
+            const double r1 = 20.0 * std::log10 (std::abs (bandResponse (p, fs, 2.0 * kPi * 250.0 / fs)));
+            const double r2 = 20.0 * std::log10 (std::abs (bandResponse (p, fs, 2.0 * kPi * 500.0 / fs)));
+            const double oct = r2 - r1;   // one octave (250->500) in the stopband
+            std::printf ("      HP %2d dB/oct: octave rolloff = %.1f dB\n", slope, oct);
+            expectTrue (oct > slope * 0.85 && oct < slope * 1.18, "HP slope ~ " + std::to_string (slope) + " dB/oct");
+        }
+    }
+
     group ("turning a band off resets state (no stale tail on re-enable)");
     {
         EqBand band; band.prepare (fs, 1);

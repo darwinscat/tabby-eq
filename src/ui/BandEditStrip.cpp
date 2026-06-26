@@ -20,8 +20,8 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     typeBox.onChange = [this] { updateForType(); };
     addAndMakeVisible (typeBox);
 
-    slopeBox.addItem ("12 dB/oct", 1);
-    slopeBox.addItem ("24 dB/oct", 2);
+    const char* slopes[] = { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
+    for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
     addAndMakeVisible (slopeBox);
 
     auto setupField = [this] (juce::Slider& s, juce::Label& cap, const juce::String& capText,
@@ -86,9 +86,9 @@ void BandEditStrip::updateForType()
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
 
-    slopeBox.setVisible (isCut);            // slope only applies to HP/LP
-    gain.setEnabled (hasGain);              // HP/LP/BP/notch/all-pass have no gain
-    q.setEnabled (! isShelf && ! isTilt);   // shelves & tilt are Butterworth — Q ignored
+    slopeBox.setVisible (isCut);                       // slope only applies to HP/LP
+    gain.setEnabled (hasGain);                         // HP/LP/BP/notch/all-pass have no gain
+    q.setEnabled (! isShelf && ! isTilt && ! isCut);   // shelves/tilt/HP/LP are Butterworth — Q unused
 }
 
 void BandEditStrip::paint (juce::Graphics& g)

@@ -251,6 +251,24 @@ namespace matched
     }
 
     //==========================================================================
+    // First-order low/high pass (6 dB/oct), bilinear. The matched 2nd-order machinery isn't needed
+    // at this gentle slope (Nyquist cramping is negligible) — used as the odd section of a cascade.
+    inline BiquadCoeffs lowpass1 (double f0, double fs) noexcept
+    {
+        BiquadCoeffs c;
+        const double K = std::tan (kPi * f0 / fs), nrm = 1.0 / (1.0 + K);
+        c.b0 = K * nrm; c.b1 = K * nrm; c.b2 = 0.0; c.a1 = (K - 1.0) * nrm; c.a2 = 0.0;
+        return c;
+    }
+    inline BiquadCoeffs highpass1 (double f0, double fs) noexcept
+    {
+        BiquadCoeffs c;
+        const double K = std::tan (kPi * f0 / fs), nrm = 1.0 / (1.0 + K);
+        c.b0 = nrm; c.b1 = -nrm; c.b2 = 0.0; c.a1 = (K - 1.0) * nrm; c.a2 = 0.0;
+        return c;
+    }
+
+    //==========================================================================
     // High shelf — matched 2-pole Butterworth. gainLin = the high-frequency plateau
     // (linear; |H| -> gainLin as f -> Nyquist+, 1.0 at DC). 2poleShelvingFits appendix A.1.
     inline BiquadCoeffs highShelf (double f0, double fs, double gainLin) noexcept

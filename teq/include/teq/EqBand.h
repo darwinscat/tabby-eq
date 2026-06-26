@@ -18,7 +18,12 @@ namespace teq
 //==============================================================================
 // Stateless band design + response — used by EqBand for audio AND by the GUI for a race-free
 // curve (the GUI computes from a BandParams snapshot it owns, never reading engine internals).
-struct BandDesign { BiquadCoeffs c0, c1; bool twoStage = false; };
+struct BandDesign
+{
+    static constexpr int kMaxSections = 8;   // up to 96 dB/oct (16-pole HP/LP = 8 biquads)
+    BiquadCoeffs sec[kMaxSections];
+    int n = 1;
+};
 
 inline BandDesign designBand (const BandParams& in, double fs) noexcept
 {
@@ -29,34 +34,47 @@ inline BandDesign designBand (const BandParams& in, double fs) noexcept
     p.gainDb = std::clamp (finiteOr (p.gainDb, 0.0), -30.0, 30.0);
 
     BandDesign d;
-    const bool cutTwoStage = (! p.swept) && (p.slope >= 24) && (p.type == FilterType::HighPass || p.type == FilterType::LowPass);
-    d.twoStage = cutTwoStage || (p.type == FilterType::Tilt);
+    const bool isCut = (p.type == FilterType::HighPass || p.type == FilterType::LowPass);
 
-    if (cutTwoStage)
+    if (isCut && ! p.swept)
     {
-        constexpr double q1 = 0.54119610, q2 = 1.30656296;   // 4th-order Butterworth section Qs
-        if (p.type == FilterType::HighPass) { d.c0 = matched::highpass (p.freq, fs, q1); d.c1 = matched::highpass (p.freq, fs, q2); }
-        else                                { d.c0 = matched::lowpass  (p.freq, fs, q1); d.c1 = matched::lowpass  (p.freq, fs, q2); }
+        // Butterworth cascade: order = slope/6 poles {1,2,4,6,8,12,16}; sections = order/2 (+ a
+        // first-order section if the order is odd, i.e. 6 dB/oct). Per-section Qs are the standard
+        // Butterworth pole Qs, each realised by a Nyquist-matched biquad.
+        const int  order = std::clamp (p.slope / 6, 1, 16);
+        const bool isHP  = (p.type == FilterType::HighPass);
+        int idx = 0;
+        if (order % 2 == 1)
+            d.sec[idx++] = isHP ? matched::highpass1 (p.freq, fs) : matched::lowpass1 (p.freq, fs);
+        const int nSec = order / 2;
+        for (int k = 1; k <= nSec && idx < BandDesign::kMaxSections; ++k)
+        {
+            const double Qk = 1.0 / (2.0 * std::cos ((2.0 * k - 1.0) * kPi / (2.0 * order)));
+            d.sec[idx++] = isHP ? matched::highpass (p.freq, fs, Qk) : matched::lowpass (p.freq, fs, Qk);
+        }
+        d.n = idx;
     }
     else if (p.type == FilterType::Tilt)
     {
-        d.c0 = matched::lowShelfDb  (p.freq, fs, -p.gainDb);   // lows down
-        d.c1 = matched::highShelfDb (p.freq, fs,  p.gainDb);   // highs up  -> spectral tilt about f0
+        d.sec[0] = matched::lowShelfDb  (p.freq, fs, -p.gainDb);   // lows down
+        d.sec[1] = matched::highShelfDb (p.freq, fs,  p.gainDb);   // highs up -> spectral tilt about f0
+        d.n = 2;
     }
     else
     {
         switch (p.type)
         {
-            case FilterType::Bell:      d.c0 = matched::peakingDb  (p.freq, fs, p.Q, p.gainDb); break;
-            case FilterType::LowShelf:  d.c0 = matched::lowShelfDb  (p.freq, fs, p.gainDb);     break;
-            case FilterType::HighShelf: d.c0 = matched::highShelfDb (p.freq, fs, p.gainDb);     break;
-            case FilterType::HighPass:  d.c0 = matched::highpass     (p.freq, fs, p.Q);         break;
-            case FilterType::LowPass:   d.c0 = matched::lowpass      (p.freq, fs, p.Q);         break;
-            case FilterType::BandPass:  d.c0 = matched::bandpass     (p.freq, fs, p.Q);         break;
-            case FilterType::Notch:     d.c0 = matched::notch        (p.freq, fs, p.Q);         break;
-            case FilterType::AllPass:   d.c0 = matched::allpass      (p.freq, fs, p.Q);         break;
-            case FilterType::Tilt:      break;   // handled above (two-stage shelves)
+            case FilterType::Bell:      d.sec[0] = matched::peakingDb  (p.freq, fs, p.Q, p.gainDb); break;
+            case FilterType::LowShelf:  d.sec[0] = matched::lowShelfDb  (p.freq, fs, p.gainDb);     break;
+            case FilterType::HighShelf: d.sec[0] = matched::highShelfDb (p.freq, fs, p.gainDb);     break;
+            case FilterType::HighPass:  d.sec[0] = matched::highpass     (p.freq, fs, p.Q);         break;  // swept fallback (single)
+            case FilterType::LowPass:   d.sec[0] = matched::lowpass      (p.freq, fs, p.Q);         break;  // swept fallback (single)
+            case FilterType::BandPass:  d.sec[0] = matched::bandpass     (p.freq, fs, p.Q);         break;
+            case FilterType::Notch:     d.sec[0] = matched::notch        (p.freq, fs, p.Q);         break;
+            case FilterType::AllPass:   d.sec[0] = matched::allpass      (p.freq, fs, p.Q);         break;
+            case FilterType::Tilt:      break;   // handled above (two shelves)
         }
+        d.n = 1;
     }
     return d;
 }
@@ -72,8 +90,8 @@ inline std::complex<double> bandResponse (const BandParams& p, double fs, double
 {
     if (! p.on) return { 1.0, 0.0 };
     const BandDesign d = designBand (p, fs);
-    std::complex<double> h = evalCoeffs (d.c0, w);
-    if (d.twoStage) h *= evalCoeffs (d.c1, w);
+    std::complex<double> h { 1.0, 0.0 };
+    for (int s = 0; s < d.n; ++s) h *= evalCoeffs (d.sec[s], w);
     return h;
 }
 
@@ -89,6 +107,7 @@ class EqBand
 {
 public:
     static constexpr int kMaxChannels = Svf::kMaxChannels;
+    static constexpr int kMaxSections = BandDesign::kMaxSections;
 
     void prepare (double sampleRate, int numChannels, double smoothMs = 30.0) noexcept
     {
@@ -108,7 +127,8 @@ public:
 
     void reset() noexcept
     {
-        for (int c = 0; c < kMaxChannels; ++c) { bq0[c].reset(); bq1[c].reset(); }
+        for (int c = 0; c < kMaxChannels; ++c)
+            for (int s = 0; s < kMaxSections; ++s) bq[s][c].reset();
         svf.reset();
     }
 
@@ -169,17 +189,16 @@ public:
                 float* d = channels[c];
                 for (int n = 0; n < numSamples; ++n) d[n] = svf.processSample (c, d[n]);
             }
-        else if (twoStage)
-            for (int c = 0; c < nc; ++c)
-            {
-                float* d = channels[c];
-                for (int n = 0; n < numSamples; ++n) d[n] = bq1[c].processSample (bq0[c].processSample (d[n]));
-            }
         else
             for (int c = 0; c < nc; ++c)
             {
                 float* d = channels[c];
-                for (int n = 0; n < numSamples; ++n) d[n] = bq0[c].processSample (d[n]);
+                for (int n = 0; n < numSamples; ++n)
+                {
+                    float x = d[n];
+                    for (int s = 0; s < designN; ++s) x = bq[s][c].processSample (x);
+                    d[n] = x;
+                }
             }
 
         flushState();   // per-block denormal guard
@@ -190,8 +209,8 @@ public:
     std::complex<double> response (double w) const noexcept
     {
         if (! p.on) return { 1.0, 0.0 };
-        std::complex<double> h = evalCoeffs (coeffs0, w);
-        if (twoStage) h *= evalCoeffs (coeffs1, w);
+        std::complex<double> h { 1.0, 0.0 };
+        for (int s = 0; s < designN; ++s) h *= evalCoeffs (coeffs[s], w);
         return h;
     }
 
@@ -203,39 +222,40 @@ private:
 
         const BandDesign d = designBand (sp, fs);
 
-        // A topology switch (swept<->static, or 24<->12 dB/oct) changes WHICH filter runs — clear
-        // all state so a re-activated bq1/svf never resumes a stale tail (a click). Rare event;
+        // A topology switch (section count changed, or swept<->static) changes WHICH filters run —
+        // clear all state so a re-activated section never resumes a stale tail (a click). Rare event;
         // costs nothing on steady state. Matters for TabbyEQ: search->treat toggles `swept`.
-        if (d.twoStage != twoStage || p.swept != lastSwept) reset();
+        if (d.n != designN || p.swept != lastSwept) reset();
 
-        twoStage  = d.twoStage;
+        designN   = d.n;
         lastSwept = p.swept;
-        coeffs0   = d.c0;
-        coeffs1   = d.c1;
+        for (int s = 0; s < d.n; ++s) coeffs[s] = d.sec[s];
 
-        for (int c = 0; c < ch; ++c) { bq0[c].setCoeffs (coeffs0); if (twoStage) bq1[c].setCoeffs (coeffs1); }
+        for (int c = 0; c < ch; ++c)
+            for (int s = 0; s < d.n; ++s) bq[s][c].setCoeffs (coeffs[s]);
         if (p.swept) svf.setParams (p.type, sp.freq, sp.Q, sp.gainDb);   // swept = single SVF stage (12 dB/oct)
     }
 
     void flushState() noexcept
     {
         if (p.swept) svf.flushDenormals();
-        else for (int c = 0; c < ch; ++c) { bq0[c].flushDenormals(); if (twoStage) bq1[c].flushDenormals(); }
+        else for (int c = 0; c < ch; ++c)
+            for (int s = 0; s < designN; ++s) bq[s][c].flushDenormals();
     }
 
     BandParams p;
     double fs = 44100.0;
     int    ch = 2;
-    bool   twoStage = false;
+    int    designN = 1;
     bool   recomputePending = true;
     bool   initialized = false;
     bool   wasActive = false;
     bool   lastSwept = false;
 
     Smoother freqS, qS, gainS;
-    Biquad   bq0[kMaxChannels], bq1[kMaxChannels];
+    Biquad   bq[kMaxSections][kMaxChannels];
     Svf      svf;
-    BiquadCoeffs coeffs0, coeffs1;
+    BiquadCoeffs coeffs[kMaxSections];
 };
 
 } // namespace teq

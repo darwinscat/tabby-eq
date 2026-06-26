@@ -44,7 +44,7 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
                                                         NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));   // matches the canvas ±24
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "slope"), 1 }, n + "Slope",
-                                                        StringArray { "12 dB/oct", "24 dB/oct" }, 0));
+                                                        StringArray { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1));
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "swept"), 1 }, n + "Swept", false));
 }
 
