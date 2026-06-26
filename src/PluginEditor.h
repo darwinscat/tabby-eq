@@ -29,6 +29,7 @@ private:
     juce::Label    title;
     juce::Slider   output { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label    outputLabel;
+    juce::TextButton prePost;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)

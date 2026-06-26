@@ -35,6 +35,7 @@ public:
     // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
     std::function<void(int)> onBandSelected;
     int  selectedBand() const noexcept { return selBand; }
+    void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
 
 private:
     void timerCallback() override;
@@ -82,6 +83,7 @@ private:
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
+    bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
     static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)

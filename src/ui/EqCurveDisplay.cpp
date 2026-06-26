@@ -214,7 +214,7 @@ juce::String EqCurveDisplay::readoutText (int b) const
 //==============================================================================
 void EqCurveDisplay::pushSpectrum()
 {
-    if (! proc.pullSpectrum (false, fftBuf.data()))
+    if (! proc.pullSpectrum (analyzerPre, fftBuf.data()))
     {
         // No new frame this tick is NORMAL (a 2048-pt window arrives at ~23 fps vs the 30 Hz timer).
         // Hold the last spectrum; only fade once genuinely starved (audio stopped ~0.5 s).
@@ -293,7 +293,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     const auto w = (float) getWidth(), h = (float) getHeight();
     refreshDesigns();
 
-    g.fillAll (tabby::palette::bg());
+    // premium radial vignette: centre lifted a touch, corners deepened
+    {
+        const auto bb = getLocalBounds().toFloat();
+        juce::ColourGradient vg (tabby::palette::bg().brighter (0.10f), bb.getCentreX(), bb.getCentreY() - h * 0.06f,
+                                 tabby::palette::bg().darker (0.30f),   bb.getX(),       bb.getBottom(), true);
+        g.setGradientFill (vg);
+        g.fillRect (bb);
+    }
 
     // --- grid -------------------------------------------------------------
     g.setFont (11.0f);
@@ -309,7 +316,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     for (double db : { -18.0, -12.0, -6.0, 0.0, 6.0, 12.0, 18.0 })
     {
         const float y = dbToY (db);
-        g.setColour (db == 0.0 ? tabby::palette::gridZero() : tabby::palette::grid());
+        if (db == 0.0)
+        {
+            g.setColour (tabby::palette::violetLo().withAlpha (0.05f));   // soft glow on the 0 dB line
+            g.fillRect (0.0f, y - 2.5f, w, 5.0f);
+            g.setColour (tabby::palette::gridZero());
+        }
+        else
+            g.setColour (tabby::palette::grid());
         g.drawHorizontalLine ((int) y, 0.0f, w);
     }
 
