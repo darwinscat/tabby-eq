@@ -4,6 +4,39 @@
 #include "ui/BandEditStrip.h"
 #include "ui/Palette.h"
 
+namespace
+{
+    // A tiny line-drawing of each filter's response shape (like the Neutron type menu).
+    void drawFilterShape (juce::Graphics& g, juce::Rectangle<float> a, teq::FilterType t, juce::Colour col)
+    {
+        using FT = teq::FilterType;
+        const float x0 = a.getX(), x1 = a.getRight(), w = a.getWidth(), cx = a.getCentreX();
+        const float top = a.getY() + 1.5f, bot = a.getBottom() - 1.5f, mid = a.getCentreY();
+        juce::Path p;
+        switch (t)
+        {
+            case FT::Bell:      p.startNewSubPath (x0, mid); p.quadraticTo (cx - w * 0.18f, mid, cx, top);
+                                p.quadraticTo (cx + w * 0.18f, mid, x1, mid); break;
+            case FT::BandPass:  p.startNewSubPath (x0, bot); p.quadraticTo (cx - w * 0.10f, bot, cx, top);
+                                p.quadraticTo (cx + w * 0.10f, bot, x1, bot); break;
+            case FT::Notch:     p.startNewSubPath (x0, mid); p.quadraticTo (cx - w * 0.10f, mid, cx, bot);
+                                p.quadraticTo (cx + w * 0.10f, mid, x1, mid); break;
+            case FT::LowShelf:  p.startNewSubPath (x0, top); p.lineTo (cx - w * 0.12f, top);
+                                p.quadraticTo (cx, top, cx + w * 0.05f, mid); p.lineTo (x1, mid); break;
+            case FT::HighShelf: p.startNewSubPath (x0, mid); p.lineTo (cx - w * 0.05f, mid);
+                                p.quadraticTo (cx, top, cx + w * 0.12f, top); p.lineTo (x1, top); break;
+            case FT::HighPass:  p.startNewSubPath (x0, bot); p.quadraticTo (cx - w * 0.05f, mid, cx, mid);
+                                p.lineTo (x1, mid); break;
+            case FT::LowPass:   p.startNewSubPath (x0, mid); p.lineTo (cx, mid);
+                                p.quadraticTo (cx + w * 0.05f, mid, x1, bot); break;
+            case FT::Tilt:      p.startNewSubPath (x0, bot); p.lineTo (x1, top); break;
+            case FT::AllPass:   p.startNewSubPath (x0, mid); p.lineTo (x1, mid); break;
+        }
+        g.setColour (col);
+        g.strokePath (p, juce::PathStrokeType (1.6f));
+    }
+}
+
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
 {
     title.setText ("—", juce::dontSendNotification);
@@ -97,12 +130,17 @@ void BandEditStrip::updateForType()
     slopeBox.setVisible (isCut);                       // slope only applies to HP/LP
     gain.setEnabled (hasGain);                         // HP/LP/BP/notch/all-pass have no gain
     q.setEnabled (! isShelf && ! isTilt && ! isCut);   // shelves/tilt/HP/LP are Butterworth — Q unused
+    repaint();                                         // refresh the filter-shape icon
 }
 
 void BandEditStrip::paint (juce::Graphics& g)
 {
     g.setColour (tabby::palette::panel());
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    if (curBand >= 0)
+        drawFilterShape (g, iconBounds.toFloat(),
+                         tabby::filterTypeFromChoice (typeBox.getSelectedItemIndex()),
+                         tabby::palette::violetLo());
 }
 
 void BandEditStrip::resized()
@@ -114,6 +152,8 @@ void BandEditStrip::resized()
     r.removeFromLeft (4);
     soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
     r.removeFromLeft (8);
+    iconBounds = r.removeFromLeft (24).withSizeKeepingCentre (24, 16);
+    r.removeFromLeft (4);
     typeBox.setBounds (r.removeFromLeft (104).withSizeKeepingCentre (104, 24));
     r.removeFromLeft (10);
 
