@@ -30,7 +30,7 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "type"), 1 }, n + "Type",
                                                         StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass" }, 0));
 
-    NormalisableRange<float> freqRange (10.0f, 24000.0f); freqRange.setSkewForCentre (1000.0f);
+    NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);   // matches the canvas range
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "freq"), 1 }, n + "Freq",
                                                         freqRange, 1000.0f, AudioParameterFloatAttributes().withLabel ("Hz")));
 
@@ -38,7 +38,7 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f));
 
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "gain"), 1 }, n + "Gain",
-                                                        NormalisableRange<float> (-30.0f, 30.0f, 0.01f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
+                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));   // matches the canvas ±24
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "slope"), 1 }, n + "Slope",
                                                         StringArray { "12 dB/oct", "24 dB/oct" }, 0));

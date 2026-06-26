@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     : AudioProcessor (BusesProperties()
@@ -26,14 +27,19 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, juce::jmin (getTotalNumOutputChannels(), 2));
+    outputGainSmoothed.reset (sampleRate, 0.02);
+    outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
 }
 
+// Mono and stereo both supported: mono->mono, mono->stereo (up-mixed), stereo->stereo.
 bool TabbyEqAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    const auto out = layouts.getMainOutputChannelSet();
-    if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())
-        return false;
-    return layouts.getMainInputChannelSet() == out;   // in == out
+    const auto in   = layouts.getMainInputChannelSet();
+    const auto out  = layouts.getMainOutputChannelSet();
+    const auto mono = juce::AudioChannelSet::mono(), stereo = juce::AudioChannelSet::stereo();
+    if (out != mono && out != stereo) return false;
+    if (in  != mono && in  != stereo) return false;
+    return in.size() <= out.size();
 }
 
 void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -43,28 +49,21 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
     const int n      = buffer.getNumSamples();
+    const int nc     = juce::jmin (numOut, 2);   // channels we EQ (mono or stereo)
+    if (nc <= 0) return;
 
-    for (int i = numIn; i < numOut; ++i) buffer.clear (i, 0, n);
+    // Up-mix a mono input into the channels we process (mono->stereo => identical L/R).
+    for (int c = juce::jmax (1, numIn); c < nc; ++c) buffer.copyFrom (c, 0, buffer, 0, 0, n);
 
     // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
     // — the engine's contract. Smoothing + recompute-skip live inside the engine.
     for (int b = 0; b < tabby::kNumBands; ++b)
-    {
-        const auto& p = bands[(size_t) b];
-        teq::BandParams bp;
-        bp.on     = p.on->load()    > 0.5f;
-        bp.type   = tabby::filterTypeFromChoice ((int) p.type->load());
-        bp.freq   = (double) p.freq->load();
-        bp.Q      = (double) p.q->load();
-        bp.gainDb = (double) p.gain->load();
-        bp.slope  = ((int) p.slope->load()) == 1 ? 24 : 12;
-        bp.swept  = p.swept->load() > 0.5f;
-        engine.setBand (b, bp);
-    }
+        engine.setBand (b, readBand (b));
 
-    engine.process (buffer.getArrayOfWritePointers(), juce::jmin (numIn, numOut, 2), n);
+    engine.process (buffer.getArrayOfWritePointers(), nc, n);
 
-    buffer.applyGain (juce::Decibels::decibelsToGain (outputGain->load()));
+    outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+    outputGainSmoothed.applyGain (buffer, n);   // de-zippered output trim
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -81,6 +80,25 @@ void TabbyEqAudioProcessor::setStateInformation (const void* data, int sizeInByt
         if (xml->hasTagName (apvts.state.getType()))
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
     // `stateVersion` is available here for future migrations; v1 needs none.
+}
+
+teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
+{
+    const auto& p = bands[(size_t) b];
+    teq::BandParams bp;
+    bp.on     = p.on->load()    > 0.5f;
+    bp.type   = tabby::filterTypeFromChoice ((int) p.type->load());
+    bp.freq   = (double) p.freq->load();
+    bp.Q      = (double) p.q->load();
+    bp.gainDb = (double) p.gain->load();
+    bp.slope  = ((int) p.slope->load()) == 1 ? 24 : 12;
+    bp.swept  = p.swept->load() > 0.5f;
+    return bp;
+}
+
+juce::AudioProcessorEditor* TabbyEqAudioProcessor::createEditor()
+{
+    return new TabbyEqEditor (*this);
 }
 
 //==============================================================================

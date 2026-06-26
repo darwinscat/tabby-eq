@@ -28,8 +28,19 @@ public:
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
-    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor (*this); }
+    juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
+
+    //==========================================================================
+    // Analyzer + curve support for the editor (message thread).
+    // Ref-counted so concurrent editors don't disable each other's analyzer.
+    void setAnalyzerActive (bool shouldRun) noexcept
+    {
+        const int delta = shouldRun ? 1 : -1;
+        engine.setSpectrumActive ((analyzerRefs.fetch_add (delta, std::memory_order_relaxed) + delta) > 0);
+    }
+    bool pullSpectrum (bool pre, float* dst) noexcept { return (pre ? engine.inputTap() : engine.outputTap()).tryPull (dst); }
+    teq::BandParams readBand (int b) const noexcept;   // BandParams from the APVTS atomics
 
     const juce::String getName() const override { return JucePlugin_Name; }
     bool acceptsMidi() const override  { return false; }
@@ -58,6 +69,8 @@ private:
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;
+    juce::LinearSmoothedValue<float> outputGainSmoothed { 1.0f };   // de-zippered output trim
+    std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
 
     static constexpr int kStateVersion = 1;
 

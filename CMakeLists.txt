@@ -63,6 +63,8 @@ juce_add_plugin(TabbyEQ
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT  "TabbyEQ analyses live audio input to draw the spectrum."
     COPY_PLUGIN_AFTER_BUILD     TRUE)
 
 clap_juce_extensions_plugin(TARGET TabbyEQ
@@ -71,7 +73,9 @@ clap_juce_extensions_plugin(TARGET TabbyEQ
 
 target_sources(TabbyEQ PRIVATE
     src/PluginProcessor.cpp
-    src/Parameters.cpp)
+    src/Parameters.cpp
+    src/PluginEditor.cpp
+    src/ui/EqCurveDisplay.cpp)
 
 target_include_directories(TabbyEQ PRIVATE src)   # "Parameters.h", "Vocab.h"
 
@@ -83,9 +87,18 @@ target_compile_definitions(TabbyEQ PUBLIC
 
 target_link_libraries(TabbyEQ PRIVATE
     teq_core                            # the framework-agnostic EQ engine
-    juce::juce_audio_utils              # AudioProcessor + GenericAudioProcessorEditor
+    juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
+    juce::juce_dsp                      # FFT for the spectrum analyser
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+# Re-sign the Standalone ad-hoc with the correct bundle id so macOS TCC (mic access) persists
+# across rebuilds — JUCE's linker-sign otherwise uses the exe name ("TabbyEQ") as the identifier.
+if(APPLE)
+    add_custom_command(TARGET TabbyEQ_Standalone POST_BUILD
+        COMMAND codesign --force --sign - --identifier "com.darwinscat.tabbyeq" "$<TARGET_BUNDLE_DIR:TabbyEQ_Standalone>"
+        VERBATIM)
+endif()
 
 endif()  # TABBYEQ_BUILD_PLUGIN
