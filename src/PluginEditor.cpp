@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "PluginEditor.h"
+#include "ui/Palette.h"
 
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
@@ -17,6 +18,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the strip
 
     output.setTextValueSuffix (" dB");
+    output.setColour (juce::Slider::trackColourId, tabby::palette::violet());
     addAndMakeVisible (output);
     outputLabel.setText ("Output", juce::dontSendNotification);
     outputLabel.setColour (juce::Label::textColourId, juce::Colours::white);
@@ -31,7 +33,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
 void TabbyEqEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff0e1014));
+    g.fillAll (tabby::palette::bg());
 }
 
 void TabbyEqEditor::resized()

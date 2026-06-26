@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/EqCurveDisplay.h"
+#include "ui/Palette.h"
 
 namespace
 {
@@ -200,23 +201,23 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     const auto w = (float) getWidth(), h = (float) getHeight();
     refreshDesigns();
 
-    g.fillAll (juce::Colour (0xff14171c));
+    g.fillAll (tabby::palette::bg());
 
     // --- grid -------------------------------------------------------------
     g.setFont (11.0f);
     for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
     {
         const float x = freqToX (f);
-        g.setColour (juce::Colour (0x18ffffff));
+        g.setColour (tabby::palette::grid());
         g.drawVerticalLine ((int) x, 0.0f, h);
-        g.setColour (juce::Colour (0x55ffffff));
+        g.setColour (tabby::palette::axisText());
         g.drawText (f >= 1000.0 ? juce::String (f / 1000.0, (f == 1000.0 ? 0 : 0)) + "k" : juce::String ((int) f),
                     (int) x + 2, (int) h - 14, 34, 12, juce::Justification::left);
     }
     for (double db : { -18.0, -12.0, -6.0, 0.0, 6.0, 12.0, 18.0 })
     {
         const float y = dbToY (db);
-        g.setColour (db == 0.0 ? juce::Colour (0x40ffffff) : juce::Colour (0x14ffffff));
+        g.setColour (db == 0.0 ? tabby::palette::gridZero() : tabby::palette::grid());
         g.drawHorizontalLine ((int) y, 0.0f, w);
     }
 
@@ -224,29 +225,60 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     {
         juce::Path s;
         bool started = false;
+        float lastY = h;
         for (int i = 1; i < (int) specDb.size(); ++i)
         {
             const double f = (double) i * fsCache / (double) teq::kSpectrumFftSize;
             if (f < kFreqMin || f > kFreqMax) continue;
             const float x = freqToX (f), y = specDbToY (specDb[(size_t) i]);
-            if (! started) { s.startNewSubPath (x, h); s.lineTo (x, y); started = true; }
+            // anchor the fill to the LEFT EDGE (the first bin sits a hair above 20 Hz: bin = fs/N)
+            if (! started) { s.startNewSubPath (0.0f, h); s.lineTo (0.0f, y); s.lineTo (x, y); started = true; }
             else            s.lineTo (x, y);
+            lastY = y;
         }
-        if (started) { s.lineTo (w, h); s.closeSubPath(); g.setColour (juce::Colour (0x2266e7a8)); g.fillPath (s); }
+        if (started)
+        {
+            s.lineTo (w, lastY); s.lineTo (w, h); s.closeSubPath();   // extend to the right edge too
+            g.setColour (tabby::palette::spectrum().withAlpha (0.13f));
+            g.fillPath (s);
+        }
     }
 
-    // --- response curve (sampled on a ~240-pt grid, not per-pixel) --------
+    // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
         constexpr int pts = 240;
-        juce::Path c;
+        const float y0 = dbToY (0.0);
+        juce::Path line, fill;
+        fill.startNewSubPath (0.0f, y0);
         for (int i = 0; i <= pts; ++i)
         {
             const float x = (float) i / (float) pts * w;
             const float y = dbToY (compositeDb (xToFreq (x)));
-            if (i == 0) c.startNewSubPath (x, y); else c.lineTo (x, y);
+            if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
+            fill.lineTo (x, y);
         }
-        g.setColour (juce::Colour (0xffe8eef5));
-        g.strokePath (c, juce::PathStrokeType (1.6f));
+        fill.lineTo (w, y0);
+        fill.closeSubPath();
+
+        // boost (above 0 dB) reads warm = orange; cut (below) reads cool = violet. One fill path,
+        // clipped to each half. Violet gets more alpha — it's the dimmer of the two brand colours.
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (0, 0, (int) w, juce::jmax (0, (int) y0));
+            g.setColour (tabby::palette::orange().withAlpha (0.14f));
+            g.fillPath (fill);
+        }
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (0, (int) y0, (int) w, juce::jmax (0, (int) (h - y0)));
+            g.setColour (tabby::palette::violet().withAlpha (0.20f));
+            g.fillPath (fill);
+        }
+
+        // faux-glow: stacked low-alpha wide strokes in lifted violet (NO real blur), then the line
+        g.setColour (tabby::palette::violetLo().withAlpha (0.10f)); g.strokePath (line, juce::PathStrokeType (6.0f));
+        g.setColour (tabby::palette::violetLo().withAlpha (0.20f)); g.strokePath (line, juce::PathStrokeType (3.0f));
+        g.setColour (tabby::palette::line());                       g.strokePath (line, juce::PathStrokeType (1.6f));
     }
 
     // --- nodes ------------------------------------------------------------
@@ -275,9 +307,9 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const float tw = (float) txt.length() * 6.6f + 12.0f, th = 18.0f;
         const float bx = juce::jlimit (2.0f, w - tw - 2.0f, pos.x - tw * 0.5f);
         const float by = juce::jlimit (2.0f, h - th - 2.0f, pos.y - kNodeR - 8.0f - th);
-        g.setColour (juce::Colour (0xee0e1014)); g.fillRoundedRectangle (bx, by, tw, th, 4.0f);
-        g.setColour (juce::Colour (0x40ffffff)); g.drawRoundedRectangle (bx, by, tw, th, 4.0f, 1.0f);
-        g.setColour (juce::Colours::white); g.setFont (12.0f);
+        g.setColour (tabby::palette::panel().withAlpha (0.96f));    g.fillRoundedRectangle (bx, by, tw, th, 4.0f);
+        g.setColour (tabby::palette::violetLo().withAlpha (0.55f)); g.drawRoundedRectangle (bx, by, tw, th, 4.0f, 1.0f);
+        g.setColour (tabby::palette::text()); g.setFont (12.0f);
         g.drawText (txt, juce::Rectangle<float> (bx, by, tw, th), juce::Justification::centred);
     }
 }

@@ -2,15 +2,17 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/BandEditStrip.h"
+#include "ui/Palette.h"
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
 {
     title.setText ("—", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (13.0f).withStyle ("Bold")));
-    title.setColour (juce::Label::textColourId, juce::Colours::white);
+    title.setColour (juce::Label::textColourId, tabby::palette::text());
     title.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (title);
 
+    onButton.setColour (juce::ToggleButton::tickColourId, tabby::palette::violet());
     addAndMakeVisible (onButton);
 
     const char* types[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass" };
@@ -28,13 +30,13 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
         s.setSliderStyle (juce::Slider::LinearBar);          // shows the value; double-click to type
         s.setTextValueSuffix (suffix);
         s.setNumDecimalPlacesToDisplay (decimals);
-        s.setColour (juce::Slider::trackColourId,       juce::Colour (0x22ffffff));
-        s.setColour (juce::Slider::textBoxTextColourId, juce::Colours::white);
+        s.setColour (juce::Slider::trackColourId,       tabby::palette::violet().withAlpha (0.45f));
+        s.setColour (juce::Slider::textBoxTextColourId, tabby::palette::text());
         addAndMakeVisible (s);
 
         cap.setText (capText, juce::dontSendNotification);
         cap.setFont (juce::Font (juce::FontOptions (10.0f)));
-        cap.setColour (juce::Label::textColourId, juce::Colour (0x99ffffff));
+        cap.setColour (juce::Label::textColourId, tabby::palette::textDim());
         cap.setJustificationType (juce::Justification::centredLeft);
         addAndMakeVisible (cap);
     };
@@ -90,7 +92,7 @@ void BandEditStrip::updateForType()
 
 void BandEditStrip::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xff1a1e24));
+    g.setColour (tabby::palette::panel());
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
 }
 
