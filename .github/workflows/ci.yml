@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# TabbyEQ CI — configure, build, and run the headless DSP unit tests (the cramping gate).
+# TabbyEQ CI — configure, build, and run the JUCE-free teq DSP unit tests (the cramping +
+# engine correctness gate). No JUCE fetch needed: the teq core is framework-agnostic std C++20.
 name: CI
 
 on:
@@ -13,22 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # JUCE's Linux build wants these even for a console app linking juce_core.
-      - name: Install JUCE Linux deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
-            libfreetype6-dev libx11-dev libxext-dev libxrandr-dev \
-            libxinerama-dev libxcursor-dev libglu1-mesa-dev
-
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build tests
-        run: cmake --build build --target TabbyEQ_Tests -j
+      - name: Build
+        run: cmake --build build --target teq_tests -j
 
-      - name: Run tests
+      - name: Test
         run: |
-          bin="$(find build -type f -name TabbyEQTests -perm -u+x | head -1)"
+          bin="$(find build -type f -name teq_tests -perm -u+x | head -1)"
           echo "running $bin"
           "$bin"
