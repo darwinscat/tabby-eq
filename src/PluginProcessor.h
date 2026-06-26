@@ -42,6 +42,9 @@ public:
     bool pullSpectrum (bool pre, float* dst) noexcept { return (pre ? engine.inputTap() : engine.outputTap()).tryPull (dst); }
     teq::BandParams readBand (int b) const noexcept;   // BandParams from the APVTS atomics
 
+    void setSoloBand (int b) noexcept { soloBand.store (b, std::memory_order_relaxed); }   // -1 = no solo
+    int  getSoloBand() const noexcept { return soloBand.load (std::memory_order_relaxed); }
+
     const juce::String getName() const override { return JucePlugin_Name; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
@@ -71,6 +74,8 @@ private:
     std::atomic<float>* outputGain = nullptr;
     juce::LinearSmoothedValue<float> outputGainSmoothed { 1.0f };   // de-zippered output trim
     std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
+    teq::Svf         soloFilter;                                    // band-listen band-pass (solo)
+    std::atomic<int> soloBand { -1 };                               // soloed band index, or -1
 
     static constexpr int kStateVersion = 1;
 

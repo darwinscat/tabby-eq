@@ -15,6 +15,11 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     onButton.setColour (juce::ToggleButton::tickColourId, tabby::palette::violet());
     addAndMakeVisible (onButton);
 
+    soloButton.setClickingTogglesState (true);
+    soloButton.setColour (juce::TextButton::buttonOnColourId, tabby::palette::orange());
+    soloButton.onClick = [this] { proc.setSoloBand (soloButton.getToggleState() ? curBand : -1); };
+    addAndMakeVisible (soloButton);
+
     const char* types[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
     for (int i = 0; i < 9; ++i) typeBox.addItem (types[i], i + 1);
     typeBox.onChange = [this] { updateForType(); };
@@ -47,17 +52,20 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setBand (-1);
 }
 
+BandEditStrip::~BandEditStrip() { proc.setSoloBand (-1); }   // never leave audio stuck in solo
+
 void BandEditStrip::setBand (int band)
 {
     curBand = band;
     const bool has = curBand >= 0;
 
     title.setText (has ? "BAND " + juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &typeBox, &slopeBox, &freq, &q, &gain };
+    juce::Component* controls[] = { &onButton, &soloButton, &typeBox, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
 
     rebind();
     updateForType();
+    soloButton.setToggleState (has && proc.getSoloBand() == curBand, juce::dontSendNotification);
     repaint();
 }
 
@@ -103,6 +111,8 @@ void BandEditStrip::resized()
     title.setBounds (r.removeFromLeft (62));
     r.removeFromLeft (6);
     onButton.setBounds (r.removeFromLeft (42).withSizeKeepingCentre (42, 24));
+    r.removeFromLeft (4);
+    soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
     r.removeFromLeft (8);
     typeBox.setBounds (r.removeFromLeft (104).withSizeKeepingCentre (104, 24));
     r.removeFromLeft (10);

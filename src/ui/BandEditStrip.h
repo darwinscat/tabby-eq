@@ -18,6 +18,7 @@ class BandEditStrip : public juce::Component
 {
 public:
     explicit BandEditStrip (TabbyEqAudioProcessor& p);
+    ~BandEditStrip() override;
 
     void setBand (int band);                 // -1 = nothing selected (controls disabled)
 
@@ -37,6 +38,7 @@ private:
 
     juce::Label        title;
     juce::ToggleButton onButton { "On" };
+    juce::TextButton   soloButton { "S" };
     juce::ComboBox     typeBox, slopeBox;
     juce::Slider       freq, q, gain;
     juce::Label        freqCap, qCap, gainCap;

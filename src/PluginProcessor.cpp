@@ -29,6 +29,7 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels());   // engine clamps to teq::kMaxChannels
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
+    soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
 }
 
 // Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
@@ -57,6 +58,24 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     // Up-mix a mono input into stereo (the only non-matched layout we accept) => identical L/R.
     for (int c = juce::jmax (1, numIn); c < nc; ++c) buffer.copyFrom (c, 0, buffer, 0, 0, n);
+
+    // Solo (band-listen): replace the output with a band-pass of the input at the soloed band's
+    // freq/Q, so you hear only that region. Skips the normal EQ.
+    const int solo = soloBand.load (std::memory_order_relaxed);
+    if (solo >= 0 && solo < tabby::kNumBands)
+    {
+        const auto bp = readBand (solo);
+        soloFilter.setParams (teq::FilterType::BandPass, bp.freq, juce::jlimit (0.5, 12.0, bp.Q), 0.0);
+        for (int c = 0; c < nc; ++c)
+        {
+            float* d = buffer.getWritePointer (c);
+            for (int s = 0; s < n; ++s) d[s] = soloFilter.processSample (c, d[s]);
+        }
+        soloFilter.flushDenormals();
+        outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+        outputGainSmoothed.applyGain (buffer, n);
+        return;
+    }
 
     // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
     // — the engine's contract. Smoothing + recompute-skip live inside the engine.
