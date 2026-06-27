@@ -42,7 +42,7 @@ private:
     juce::ComboBox     typeBox, slopeBox;
     juce::Slider       freq, q, gain;
     juce::Label        freqCap, qCap, gainCap;
-    juce::Rectangle<int> iconBounds;   // the filter-shape icon, left of the type box
+    std::unique_ptr<juce::LookAndFeel> typeMenuLnf;   // draws filter-shape icons in the type dropdown
 
     std::unique_ptr<ButtonAtt> onAtt;
     std::unique_ptr<ComboAtt>  typeAtt, slopeAtt;

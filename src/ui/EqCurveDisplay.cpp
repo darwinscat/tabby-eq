@@ -313,8 +313,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // premium radial vignette: centre lifted a touch, corners deepened
     {
         const auto bb = getLocalBounds().toFloat();
-        juce::ColourGradient vg (tabby::palette::bg().brighter (0.10f), bb.getCentreX(), bb.getCentreY() - h * 0.06f,
-                                 tabby::palette::bg().darker (0.30f),   bb.getX(),       bb.getBottom(), true);
+        juce::ColourGradient vg (tabby::palette::bg().brighter (0.18f), bb.getCentreX(), bb.getCentreY() - h * 0.06f,
+                                 tabby::palette::bg().darker (0.55f),   bb.getX(),       bb.getBottom(), true);
         g.setGradientFill (vg);
         g.fillRect (bb);
     }
@@ -594,6 +594,16 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
     if (hoverPos.x < 0.0f || draggingBand >= 0)     return { -1.0f, -1.0f };
     if (nodeAt (hoverPos) >= 0)                      return { -1.0f, -1.0f };   // on a node -> no "+"
+
+    // don't surface "+" over the selected band's whisker bar (so you can grab a handle)
+    if (selBand >= 0 && paramCache[(size_t) selBand].on && whiskerRelevant (paramCache[(size_t) selBand].type))
+    {
+        const auto wk = whiskerEnds (selBand);
+        const float ny = nodePos (selBand).y;
+        if (std::abs (hoverPos.y - ny) < 12.0f && hoverPos.x > wk.first.x - 8.0f && hoverPos.x < wk.second.x + 8.0f)
+            return { -1.0f, -1.0f };
+    }
+
     bool anyFree = false;
     for (int i = 0; i < tabby::kNumBands; ++i) if (! paramCache[(size_t) i].on) { anyFree = true; break; }
     if (! anyFree)                                   return { -1.0f, -1.0f };   // all bands used

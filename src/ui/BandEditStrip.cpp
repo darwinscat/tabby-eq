@@ -35,6 +35,42 @@ namespace
         g.setColour (col);
         g.strokePath (p, juce::PathStrokeType (1.6f));
     }
+
+    const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+
+    // LookAndFeel that draws a filter-shape icon beside each item in the type dropdown.
+    class TypeMenuLNF : public juce::LookAndFeel_V4
+    {
+    public:
+        void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,
+                                bool isSeparator, bool isActive, bool isHighlighted, bool isTicked,
+                                bool hasSubMenu, const juce::String& text, const juce::String& shortcutKeyText,
+                                const juce::Drawable* icon, const juce::Colour* textColour) override
+        {
+            if (isSeparator)
+            {
+                juce::LookAndFeel_V4::drawPopupMenuItem (g, area, isSeparator, isActive, isHighlighted, isTicked,
+                                                         hasSubMenu, text, shortcutKeyText, icon, textColour);
+                return;
+            }
+            auto r = area.reduced (1);
+            if (isHighlighted && isActive) { g.setColour (tabby::palette::violet().withAlpha (0.30f)); g.fillRect (r); }
+
+            int idx = -1;
+            for (int i = 0; i < 9; ++i) if (text == kTypeNames[i]) { idx = i; break; }
+            const auto iconR = r.removeFromLeft (34).reduced (7, 5).toFloat();
+            if (idx >= 0) drawFilterShape (g, iconR, tabby::filterTypeFromChoice (idx), tabby::palette::violetLo());
+
+            g.setColour (isActive ? tabby::palette::text() : tabby::palette::textDim());
+            g.setFont (14.0f);
+            g.drawText (text, r.withTrimmedLeft (2), juce::Justification::centredLeft);
+            if (isTicked)
+            {
+                g.setColour (tabby::palette::violet());
+                g.fillEllipse ((float) r.getRight() - 14.0f, (float) r.getCentreY() - 3.0f, 6.0f, 6.0f);
+            }
+        }
+    };
 }
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
@@ -53,10 +89,11 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     soloButton.onClick = [this] { proc.setSoloBand (soloButton.getToggleState() ? curBand : -1); };
     addAndMakeVisible (soloButton);
 
-    const char* types[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
-    for (int i = 0; i < 9; ++i) typeBox.addItem (types[i], i + 1);
+    for (int i = 0; i < 9; ++i) typeBox.addItem (kTypeNames[i], i + 1);
     typeBox.onChange = [this] { updateForType(); };
     addAndMakeVisible (typeBox);
+    typeMenuLnf = std::make_unique<TypeMenuLNF>();
+    typeBox.setLookAndFeel (typeMenuLnf.get());
 
     const char* slopes[] = { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
     for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
@@ -85,7 +122,7 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setBand (-1);
 }
 
-BandEditStrip::~BandEditStrip() { proc.setSoloBand (-1); }   // never leave audio stuck in solo
+BandEditStrip::~BandEditStrip() { typeBox.setLookAndFeel (nullptr); proc.setSoloBand (-1); }   // never leave audio stuck in solo / dangling LNF
 
 void BandEditStrip::setBand (int band)
 {
@@ -137,10 +174,6 @@ void BandEditStrip::paint (juce::Graphics& g)
 {
     g.setColour (tabby::palette::panel());
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
-    if (curBand >= 0)
-        drawFilterShape (g, iconBounds.toFloat(),
-                         tabby::filterTypeFromChoice (typeBox.getSelectedItemIndex()),
-                         tabby::palette::violetLo());
 }
 
 void BandEditStrip::resized()
@@ -152,9 +185,7 @@ void BandEditStrip::resized()
     r.removeFromLeft (4);
     soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
     r.removeFromLeft (8);
-    iconBounds = r.removeFromLeft (24).withSizeKeepingCentre (24, 16);
-    r.removeFromLeft (4);
-    typeBox.setBounds (r.removeFromLeft (104).withSizeKeepingCentre (104, 24));
+    typeBox.setBounds (r.removeFromLeft (116).withSizeKeepingCentre (116, 24));
     r.removeFromLeft (10);
 
     auto field = [&r] (juce::Label& cap, juce::Slider& s, int w)
