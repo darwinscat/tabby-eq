@@ -999,14 +999,15 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             {
                 setParamGestured (tabby::bandId (selBand, "gain"),
                                   juce::jlimit (-kGainRange, kGainRange, p.gainDb + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                positionToolbar();
                 return true;                                                            // gain +/- 0.5 dB
             }
         }
         else   // Alt / Option
         {
             const double fStep = std::exp2 (1.0 / 24.0);                                // a quarter-tone
-            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); return true; }
-            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); return true; }
+            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); positionToolbar(); return true; }
+            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); positionToolbar(); return true; }
             if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
@@ -1014,6 +1015,7 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
                     setParamGestured (tabby::bandId (selBand, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) p.slope) + d));
                 else                                                                    // others -> Q +/- 0.1
                     setParamGestured (tabby::bandId (selBand, "q"), juce::jlimit (0.05, 40.0, p.Q + 0.1 * d));
+                positionToolbar();
                 return true;
             }
         }
