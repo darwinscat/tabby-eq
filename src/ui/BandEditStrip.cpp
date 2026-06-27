@@ -6,12 +6,14 @@
 
 namespace
 {
-    // A tiny line-drawing of each filter's response shape (like the Neutron type menu).
-    void drawFilterShape (juce::Graphics& g, juce::Rectangle<float> a, teq::FilterType t, juce::Colour col)
+    const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+
+    // The response-shape path for a filter type, inside `a` (used for the type-menu icons).
+    juce::Path filterShapePath (teq::FilterType t, juce::Rectangle<float> a)
     {
         using FT = teq::FilterType;
         const float x0 = a.getX(), x1 = a.getRight(), w = a.getWidth(), cx = a.getCentreX();
-        const float top = a.getY() + 1.5f, bot = a.getBottom() - 1.5f, mid = a.getCentreY();
+        const float top = a.getY() + 1.0f, bot = a.getBottom() - 1.0f, mid = a.getCentreY();
         juce::Path p;
         switch (t)
         {
@@ -32,45 +34,25 @@ namespace
             case FT::Tilt:      p.startNewSubPath (x0, bot); p.lineTo (x1, top); break;
             case FT::AllPass:   p.startNewSubPath (x0, mid); p.lineTo (x1, mid); break;
         }
-        g.setColour (col);
-        g.strokePath (p, juce::PathStrokeType (1.6f));
+        return p;
     }
 
-    const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
-
-    // LookAndFeel that draws a filter-shape icon beside each item in the type dropdown.
-    class TypeMenuLNF : public juce::LookAndFeel_V4
+    std::unique_ptr<juce::Drawable> makeFilterDrawable (teq::FilterType t)
     {
-    public:
-        void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,
-                                bool isSeparator, bool isActive, bool isHighlighted, bool isTicked,
-                                bool hasSubMenu, const juce::String& text, const juce::String& shortcutKeyText,
-                                const juce::Drawable* icon, const juce::Colour* textColour) override
-        {
-            if (isSeparator)
-            {
-                juce::LookAndFeel_V4::drawPopupMenuItem (g, area, isSeparator, isActive, isHighlighted, isTicked,
-                                                         hasSubMenu, text, shortcutKeyText, icon, textColour);
-                return;
-            }
-            auto r = area.reduced (1);
-            if (isHighlighted && isActive) { g.setColour (tabby::palette::violet().withAlpha (0.30f)); g.fillRect (r); }
+        auto dp = std::make_unique<juce::DrawablePath>();
+        dp->setPath (filterShapePath (t, { 0.0f, 0.0f, 24.0f, 14.0f }));
+        dp->setFill (juce::FillType (juce::Colours::transparentBlack));
+        dp->setStrokeFill (juce::FillType (tabby::palette::violetLo()));
+        dp->setStrokeType (juce::PathStrokeType (1.5f));
+        return dp;
+    }
 
-            int idx = -1;
-            for (int i = 0; i < 9; ++i) if (text == kTypeNames[i]) { idx = i; break; }
-            const auto iconR = r.removeFromLeft (34).reduced (7, 5).toFloat();
-            if (idx >= 0) drawFilterShape (g, iconR, tabby::filterTypeFromChoice (idx), tabby::palette::violetLo());
-
-            g.setColour (isActive ? tabby::palette::text() : tabby::palette::textDim());
-            g.setFont (14.0f);
-            g.drawText (text, r.withTrimmedLeft (2), juce::Justification::centredLeft);
-            if (isTicked)
-            {
-                g.setColour (tabby::palette::violet());
-                g.fillEllipse ((float) r.getRight() - 14.0f, (float) r.getCentreY() - 3.0f, 6.0f, 6.0f);
-            }
-        }
-    };
+    int typeIndexOf (TabbyEqAudioProcessor& proc, int band)
+    {
+        if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "type"))))
+            return juce::jlimit (0, 8, prm->getIndex());
+        return 0;
+    }
 }
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
@@ -89,11 +71,12 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     soloButton.onClick = [this] { proc.setSoloBand (soloButton.getToggleState() ? curBand : -1); };
     addAndMakeVisible (soloButton);
 
-    for (int i = 0; i < 9; ++i) typeBox.addItem (kTypeNames[i], i + 1);
-    typeBox.onChange = [this] { updateForType(); };
-    addAndMakeVisible (typeBox);
-    typeMenuLnf = std::make_unique<TypeMenuLNF>();
-    typeBox.setLookAndFeel (typeMenuLnf.get());
+    // Type: a button (showing the current type) that opens a menu whose items carry shape icons —
+    // a plain ComboBox can't render per-item images, so we drive the menu ourselves.
+    typeButton.setColour (juce::TextButton::buttonColourId,   tabby::palette::panel().brighter (0.18f));
+    typeButton.setColour (juce::TextButton::textColourOffId,  tabby::palette::text());
+    typeButton.onClick = [this] { showTypeMenu(); };
+    addAndMakeVisible (typeButton);
 
     const char* slopes[] = { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
     for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
@@ -122,7 +105,7 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setBand (-1);
 }
 
-BandEditStrip::~BandEditStrip() { typeBox.setLookAndFeel (nullptr); proc.setSoloBand (-1); }   // never leave audio stuck in solo / dangling LNF
+BandEditStrip::~BandEditStrip() { proc.setSoloBand (-1); }   // never leave audio stuck in solo
 
 void BandEditStrip::setBand (int band)
 {
@@ -130,8 +113,9 @@ void BandEditStrip::setBand (int band)
     const bool has = curBand >= 0;
 
     title.setText (has ? "BAND " + juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &soloButton, &typeBox, &slopeBox, &freq, &q, &gain };
+    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
+    typeButton.setButtonText (has ? kTypeNames[typeIndexOf (proc, curBand)] : juce::String ("—"));
 
     rebind();
     updateForType();
@@ -142,23 +126,50 @@ void BandEditStrip::setBand (int band)
 void BandEditStrip::rebind()
 {
     // Drop the old bindings first (an attachment must outlive nothing it points at).
-    onAtt.reset(); typeAtt.reset(); slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset();
+    onAtt.reset(); slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset();
     if (curBand < 0) return;
 
     auto id = [this] (juce::StringRef s) { return tabby::bandId (curBand, s); };
     onAtt    = std::make_unique<ButtonAtt> (proc.apvts, id ("on"),    onButton);
-    typeAtt  = std::make_unique<ComboAtt>  (proc.apvts, id ("type"),  typeBox);
     slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, id ("slope"), slopeBox);
     freqAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("freq"),  freq);
     qAtt     = std::make_unique<SliderAtt> (proc.apvts, id ("q"),     q);
     gainAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("gain"),  gain);
 }
 
+void BandEditStrip::showTypeMenu()
+{
+    if (curBand < 0) return;
+    const int cur = typeIndexOf (proc, curBand);
+
+    juce::PopupMenu m;
+    for (int i = 0; i < 9; ++i)
+    {
+        juce::PopupMenu::Item it;
+        it.itemID = i + 1;
+        it.text   = kTypeNames[i];
+        it.setImage (makeFilterDrawable (tabby::filterTypeFromChoice (i)));
+        it.setTicked (i == cur);
+        m.addItem (it);
+    }
+
+    juce::Component::SafePointer<BandEditStrip> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (typeButton),
+                     [safe] (int r)
+                     {
+                         if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
+                         if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "type")))
+                             prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
+                         safe->typeButton.setButtonText (kTypeNames[r - 1]);
+                         safe->updateForType();
+                     });
+}
+
 void BandEditStrip::updateForType()
 {
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
-    const auto t       = tabby::filterTypeFromChoice (typeBox.getSelectedItemIndex());
+    const auto t       = tabby::filterTypeFromChoice (typeIndexOf (proc, curBand));
     const bool isCut   = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass);
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
@@ -167,7 +178,6 @@ void BandEditStrip::updateForType()
     slopeBox.setVisible (isCut);                       // slope only applies to HP/LP
     gain.setEnabled (hasGain);                         // HP/LP/BP/notch/all-pass have no gain
     q.setEnabled (! isShelf && ! isTilt && ! isCut);   // shelves/tilt/HP/LP are Butterworth — Q unused
-    repaint();                                         // refresh the filter-shape icon
 }
 
 void BandEditStrip::paint (juce::Graphics& g)
@@ -185,7 +195,7 @@ void BandEditStrip::resized()
     r.removeFromLeft (4);
     soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
     r.removeFromLeft (8);
-    typeBox.setBounds (r.removeFromLeft (116).withSizeKeepingCentre (116, 24));
+    typeButton.setBounds (r.removeFromLeft (116).withSizeKeepingCentre (116, 24));
     r.removeFromLeft (10);
 
     auto field = [&r] (juce::Label& cap, juce::Slider& s, int w)

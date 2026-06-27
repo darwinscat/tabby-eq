@@ -32,6 +32,7 @@ private:
 
     void rebind();                           // (re)create attachments for the current band
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
+    void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
 
     TabbyEqAudioProcessor& proc;
     int curBand = -1;
@@ -39,13 +40,13 @@ private:
     juce::Label        title;
     juce::ToggleButton onButton { "On" };
     juce::TextButton   soloButton { "S" };
-    juce::ComboBox     typeBox, slopeBox;
+    juce::TextButton   typeButton;
+    juce::ComboBox     slopeBox;
     juce::Slider       freq, q, gain;
     juce::Label        freqCap, qCap, gainCap;
-    std::unique_ptr<juce::LookAndFeel> typeMenuLnf;   // draws filter-shape icons in the type dropdown
 
     std::unique_ptr<ButtonAtt> onAtt;
-    std::unique_ptr<ComboAtt>  typeAtt, slopeAtt;
+    std::unique_ptr<ComboAtt>  slopeAtt;
     std::unique_ptr<SliderAtt> freqAtt, qAtt, gainAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BandEditStrip)
