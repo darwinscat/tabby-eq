@@ -199,9 +199,10 @@ void BandEditStrip::updateForType()
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
 
-    slopeBox.setVisible (isCut);                       // slope only applies to HP/LP
-    gain.setEnabled (hasGain);                         // HP/LP/BP/notch/all-pass have no gain
-    q.setEnabled (! isTilt && ! isCut);   // bells & resonant shelves have Q; tilt / HP / LP don't
+    slopeBox.setVisible (isCut);                       // HP/LP -> the slope combo replaces Q
+    gain.setVisible (hasGain);   gain.setEnabled (hasGain);
+    q.setVisible (! isCut && ! isTilt);   q.setEnabled (! isCut && ! isTilt);   // no Q for HP/LP or tilt
+    resized();                                         // visibility changed -> re-lay the bottom row
 }
 
 void BandEditStrip::paint (juce::Graphics& g)
@@ -232,14 +233,30 @@ void BandEditStrip::resized()
     top.removeFromLeft (6);
     routeButton.setBounds (top.removeFromLeft (36).withSizeKeepingCentre (36, 22));
 
-    // bottom row (one line): freq · q · (gain OR slope for HP/LP) — value + unit live inside each bar
+    // bottom row (one line), adapts to the type:
+    //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
+    //   band-pass/notch/all-pass -> FREQ + Q · tilt -> FREQ + GAIN
     auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
     if (slopeBox.isVisible())
-        slopeBox.setBounds (row.removeFromRight (78).withSizeKeepingCentre (78, 22));
+    {
+        slopeBox.setBounds (row.removeFromRight (96).withSizeKeepingCentre (96, 22));
+        row.removeFromRight (8);
+        freq.setBounds (row);
+    }
     else
-        gain.setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 22));
-    row.removeFromRight (8);
-    freq.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (70, 22));
-    row.removeFromLeft (8);
-    q.setBounds (row.withSizeKeepingCentre (row.getWidth(), 22));   // middle fills the rest
+    {
+        if (gain.isVisible())
+        {
+            gain.setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 22));
+            row.removeFromRight (8);
+        }
+        if (q.isVisible())
+        {
+            freq.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (70, 22));
+            row.removeFromLeft (8);
+            q.setBounds (row);
+        }
+        else
+            freq.setBounds (row);
+    }
 }
