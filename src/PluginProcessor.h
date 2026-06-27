@@ -68,7 +68,7 @@ private:
 
     struct BandPtrs
     {
-        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{};
+        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{}, *bypass{};
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;

@@ -45,7 +45,6 @@ private:
     juce::Slider       freq, q, gain;
     juce::Label        freqCap, qCap, gainCap;
 
-    std::unique_ptr<ButtonAtt> onAtt;
     std::unique_ptr<ComboAtt>  slopeAtt;
     std::unique_ptr<SliderAtt> freqAtt, qAtt, gainAtt;
 

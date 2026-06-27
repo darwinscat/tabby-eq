@@ -64,6 +64,13 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     addAndMakeVisible (title);
 
     onButton.setColour (juce::ToggleButton::tickColourId, tabby::palette::violet());
+    onButton.setClickingTogglesState (true);
+    onButton.onClick = [this]
+    {
+        if (curBand < 0) return;
+        if (auto* prm = proc.apvts.getParameter (tabby::bandId (curBand, "bypass")))
+            prm->setValueNotifyingHost (onButton.getToggleState() ? 0.0f : 1.0f);   // "On" ticked = enabled = not bypassed
+    };
     addAndMakeVisible (onButton);
 
     soloButton.setClickingTogglesState (true);
@@ -117,6 +124,9 @@ void BandEditStrip::setBand (int band)
     for (auto* c : controls) c->setEnabled (has);
     typeButton.setButtonText (has ? kTypeNames[typeIndexOf (proc, curBand)] : juce::String ("—"));
 
+    const bool byp = has && proc.apvts.getRawParameterValue (tabby::bandId (curBand, "bypass"))->load() > 0.5f;
+    onButton.setToggleState (has && ! byp, juce::dontSendNotification);   // "On" reflects enabled (= not bypassed)
+
     rebind();
     updateForType();
     soloButton.setToggleState (has && proc.getSoloBand() == curBand, juce::dontSendNotification);
@@ -126,11 +136,10 @@ void BandEditStrip::setBand (int band)
 void BandEditStrip::rebind()
 {
     // Drop the old bindings first (an attachment must outlive nothing it points at).
-    onAtt.reset(); slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset();
+    slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset();
     if (curBand < 0) return;
 
     auto id = [this] (juce::StringRef s) { return tabby::bandId (curBand, s); };
-    onAtt    = std::make_unique<ButtonAtt> (proc.apvts, id ("on"),    onButton);
     slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, id ("slope"), slopeBox);
     freqAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("freq"),  freq);
     qAtt     = std::make_unique<SliderAtt> (proc.apvts, id ("q"),     q);

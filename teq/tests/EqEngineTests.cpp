@@ -274,6 +274,15 @@ void runEqEngineTests()
         }
     }
 
+    group ("bypass: a bypassed band is transparent");
+    {
+        EqBand band; band.prepare (fs, 1);
+        BandParams p; p.on = true; p.bypass = true; p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 2.0; p.gainDb = 12.0;
+        band.setParams (p);
+        const double g = sineGainDb ([&] (float* const* ch, int nc, int n) { band.processBlock (ch, nc, n); }, 1000.0, fs);
+        expectNear (g, 0.0, 0.05, "bypassed band passes audio at 0 dB");
+    }
+
     group ("turning a band off resets state (no stale tail on re-enable)");
     {
         EqBand band; band.prepare (fs, 1);

@@ -88,7 +88,7 @@ inline std::complex<double> evalCoeffs (const BiquadCoeffs& c, double w) noexcep
 // Race-free GUI response at digital w — computed purely from a caller-owned BandParams snapshot.
 inline std::complex<double> bandResponse (const BandParams& p, double fs, double w) noexcept
 {
-    if (! p.on) return { 1.0, 0.0 };
+    if (! p.on || p.bypass) return { 1.0, 0.0 };
     const BandDesign d = designBand (p, fs);
     std::complex<double> h { 1.0, 0.0 };
     for (int s = 0; s < d.n; ++s) h *= evalCoeffs (d.sec[s], w);
@@ -165,9 +165,10 @@ public:
     // Audio thread. In-place. RT-safe (no alloc / lock / IO).
     void processBlock (float* const* channels, int numChannels, int numSamples) noexcept
     {
-        if (! p.on || numSamples <= 0)
+        const bool active = p.on && ! p.bypass;
+        if (! active || numSamples <= 0)
         {
-            if (! p.on && wasActive) { reset(); wasActive = false; }   // clear the tail so re-enabling doesn't pop
+            if (! active && wasActive) { reset(); wasActive = false; }   // clear the tail so re-enabling doesn't pop
             return;
         }
         wasActive = true;
@@ -208,7 +209,7 @@ public:
     // For a race-free GUI curve prefer the free bandResponse() with your own BandParams snapshot.
     std::complex<double> response (double w) const noexcept
     {
-        if (! p.on) return { 1.0, 0.0 };
+        if (! p.on || p.bypass) return { 1.0, 0.0 };
         std::complex<double> h { 1.0, 0.0 };
         for (int s = 0; s < designN; ++s) h *= evalCoeffs (coeffs[s], w);
         return h;

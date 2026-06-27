@@ -126,7 +126,7 @@ double EqCurveDisplay::compositeDb (double f) const noexcept
     const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
     std::complex<double> h { 1.0, 0.0 };
     for (int b = 0; b < tabby::kNumBands; ++b)
-        if (paramCache[b].on)
+        if (paramCache[b].on && ! paramCache[b].bypass)
             for (int s = 0; s < designCache[b].n; ++s)
                 h *= teq::evalCoeffs (designCache[b].sec[s], w);
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
@@ -410,12 +410,22 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         {
             const auto pos = nodePos (b);
             const auto col = bandColour (paramCache[b].type);
-            g.setColour (col.withAlpha (0.25f)); g.fillEllipse (pos.x - kNodeR - 2, pos.y - kNodeR - 2, (kNodeR + 2) * 2, (kNodeR + 2) * 2);
-            g.setColour (col);                   g.fillEllipse (pos.x - kNodeR,     pos.y - kNodeR,     kNodeR * 2,       kNodeR * 2);
-            g.setColour (juce::Colours::black.withAlpha (0.5f)); g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.0f);
-            g.setColour (juce::Colours::white);
-            g.setFont (10.0f);
-            g.drawText (juce::String (b + 1), juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2), juce::Justification::centred);
+            const auto numR = juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2);
+            if (paramCache[b].bypass)   // ghost: dim hollow ring — still hit-tested, so it's clickable back on
+            {
+                g.setColour (col.withAlpha (0.45f));
+                g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.5f);
+                g.setColour (juce::Colours::white.withAlpha (0.45f)); g.setFont (10.0f);
+                g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
+            }
+            else
+            {
+                g.setColour (col.withAlpha (0.25f)); g.fillEllipse (pos.x - kNodeR - 2, pos.y - kNodeR - 2, (kNodeR + 2) * 2, (kNodeR + 2) * 2);
+                g.setColour (col);                   g.fillEllipse (pos.x - kNodeR,     pos.y - kNodeR,     kNodeR * 2,       kNodeR * 2);
+                g.setColour (juce::Colours::black.withAlpha (0.5f)); g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.0f);
+                g.setColour (juce::Colours::white); g.setFont (10.0f);
+                g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
+            }
         }
 
     // --- selection highlight + live value bubble --------------------------
@@ -476,6 +486,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at)
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass || ft == teq::FilterType::LowPass) ? 0.707 : 1.0);
+            setParamGestured (tabby::bandId (b, "bypass"), 0.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);
             selectBand (b);
             return;
@@ -615,7 +626,14 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
     refreshDesigns();
-    if (nodeAt (e.position) < 0) addBandOfType (0, e.position);   // empty → add a Bell
+    const int b = nodeAt (e.position);
+    if (b >= 0)                                                   // on a node -> toggle bypass (ghost on/off)
+    {
+        setParamGestured (tabby::bandId (b, "bypass"), paramCache[(size_t) b].bypass ? 0.0 : 1.0);
+        selectBand (b);
+    }
+    else
+        addBandOfType (0, e.position);                            // empty -> add a Bell
 }
 
 void EqCurveDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

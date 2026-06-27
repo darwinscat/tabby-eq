@@ -20,6 +20,7 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.gain  = apvts.getRawParameterValue (tabby::bandId (b, "gain"));
         p.slope = apvts.getRawParameterValue (tabby::bandId (b, "slope"));
         p.swept = apvts.getRawParameterValue (tabby::bandId (b, "swept"));
+        p.bypass = apvts.getRawParameterValue (tabby::bandId (b, "bypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
 }
@@ -116,6 +117,7 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
     static constexpr int kSlopeDb[] = { 6, 12, 24, 36, 48, 72, 96 };
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, (int) p.slope->load())];
     bp.swept  = p.swept->load() > 0.5f;
+    bp.bypass = p.bypass->load() > 0.5f;
     return bp;
 }
 
