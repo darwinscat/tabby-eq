@@ -969,13 +969,42 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
 
     if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
     {
-        if (k == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }
-        if (k == juce::KeyPress::rightKey) { stepSelection (+1); return true; }
         if (k == juce::KeyPress::backspaceKey || k == juce::KeyPress::deleteKey)
         {
             setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
             selectBand (-1);
             return true;
+        }
+
+        refreshDesigns();
+        const auto& p   = paramCache[(size_t) selBand];
+        const bool  alt = k.getModifiers().isAltDown();
+
+        if (! alt)
+        {
+            if (k == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }   // prev band
+            if (k == juce::KeyPress::rightKey) { stepSelection (+1); return true; }   // next band
+            if ((k == juce::KeyPress::upKey || k == juce::KeyPress::downKey) && hasGain (p.type))
+            {
+                setParamGestured (tabby::bandId (selBand, "gain"),
+                                  juce::jlimit (-kGainRange, kGainRange, p.gainDb + (k == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                return true;                                                          // gain +/- 0.5 dB
+            }
+        }
+        else   // Alt / Option
+        {
+            const double fStep = std::exp2 (1.0 / 24.0);                              // a quarter-tone
+            if (k == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); return true; }
+            if (k == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); return true; }
+            if (k == juce::KeyPress::upKey || k == juce::KeyPress::downKey)
+            {
+                const int d = (k == juce::KeyPress::upKey) ? +1 : -1;
+                if (isCut (p.type))                                                   // HP/LP -> step the slope (octaves)
+                    setParamGestured (tabby::bandId (selBand, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) p.slope) + d));
+                else                                                                  // others -> Q +/- 0.1
+                    setParamGestured (tabby::bandId (selBand, "q"), juce::jlimit (0.05, 40.0, p.Q + 0.1 * d));
+                return true;
+            }
         }
     }
     return false;
