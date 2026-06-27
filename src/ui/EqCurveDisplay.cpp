@@ -3,6 +3,7 @@
 
 #include "ui/EqCurveDisplay.h"
 #include "ui/Palette.h"
+#include "ui/FilterShapes.h"
 
 namespace
 {
@@ -507,7 +508,14 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (b >= 0)   // on a node: change type / remove
         {
             for (int i = 0; i < 9; ++i)
-                m.addItem (i + 1, names[i], true, paramCache[b].type == tabby::filterTypeFromChoice (i));
+            {
+                juce::PopupMenu::Item it;
+                it.itemID = i + 1;
+                it.text   = names[i];
+                it.setImage (tabby::shapes::icon (tabby::filterTypeFromChoice (i), tabby::palette::violetLo()));
+                it.setTicked (paramCache[b].type == tabby::filterTypeFromChoice (i));
+                m.addItem (it);
+            }
             m.addSeparator();
             m.addItem (100, "Remove band");
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b] (int r) {
@@ -524,7 +532,14 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             if (anyFree)
             {
                 juce::PopupMenu add;
-                for (int i = 0; i < 9; ++i) add.addItem (i + 1, names[i]);
+                for (int i = 0; i < 9; ++i)
+                {
+                    juce::PopupMenu::Item it;
+                    it.itemID = i + 1;
+                    it.text   = names[i];
+                    it.setImage (tabby::shapes::icon (tabby::filterTypeFromChoice (i), tabby::palette::violetLo()));
+                    add.addItem (it);
+                }
                 m.addSubMenu ("Add band", add);
             }
             else
