@@ -414,7 +414,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
                 const bool hot = (solo == b) || (solo < 0 && b == selBand);   // soloed or selected -> emphasised
                 const auto col = bandColour (b);
-                g.setColour (col.withAlpha (hot ? 0.14f : 0.06f)); g.fillPath (bf);
+                if (perBandFill) { g.setColour (col.withAlpha (hot ? 0.14f : 0.06f)); g.fillPath (bf); }
                 g.setColour (col.withAlpha (hot ? 0.95f : 0.55f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.8f : 1.0f));
             }
     }

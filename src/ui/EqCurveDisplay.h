@@ -36,6 +36,14 @@ public:
     std::function<void(int)> onBandSelected;
     int  selectedBand() const noexcept { return selBand; }
     void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
+    void setViewBandColors (bool v) noexcept { perBandColors = v; repaint(); }
+    void setViewBandCurves (bool v) noexcept { perBandCurves = v; repaint(); }
+    void setViewBandFill   (bool v) noexcept { perBandFill = v; repaint(); }
+    void setViewLongSolo   (bool v) noexcept { longPressSolo = v; }
+    bool viewBandColors() const noexcept { return perBandColors; }
+    bool viewBandCurves() const noexcept { return perBandCurves; }
+    bool viewBandFill()   const noexcept { return perBandFill; }
+    bool viewLongSolo()   const noexcept { return longPressSolo; }
 
 private:
     void timerCallback() override;
@@ -96,6 +104,7 @@ private:
     bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
     bool perBandColors = true;                      // each band a fixed distinct colour (else by type)
     bool perBandCurves = true;                      // draw each band's own faint colour curve
+    bool perBandFill   = false;                     // fill under each band's curve (off by default)
     bool longPressSolo = true;                      // hold the mouse on a node to solo it
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
