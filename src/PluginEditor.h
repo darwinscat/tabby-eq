@@ -25,6 +25,7 @@ public:
 private:
     void showViewMenu();
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)
+    void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only
 
     TabbyEqAudioProcessor& proc;
 
@@ -38,6 +39,7 @@ private:
     juce::TextButton prePost;
     juce::TextButton viewButton;
     juce::TextButton resetButton;
+    juce::TextButton fullButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)

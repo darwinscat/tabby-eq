@@ -937,11 +937,13 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
             setParam (tabby::bandId (draggingBand, "slope"), (double) slopeIndexForBw (bw));
         else                // others -> continuous Q (calibrated, hits 40 / 0.1 at the ends)
             setParam (tabby::bandId (draggingBand, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
+        positionToolbar();   // follow the node while dragging it by mouse
         return;
     }
     setParam (tabby::bandId (draggingBand, "freq"), xToFreq (e.position.x));
     if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
         setParam (tabby::bandId (draggingBand, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
+    positionToolbar();   // follow the node while dragging it by mouse (cursor is on the node, not the bar)
 }
 
 void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
@@ -965,11 +967,21 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
 
 bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
 {
-    if (placing && k == juce::KeyPress::escapeKey) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
+    const int  code = k.getKeyCode();                 // compare the key alone; check modifiers separately
+    const bool alt  = k.getModifiers().isAltDown();   // (k == KeyPress(code) also compares modifiers — a trap)
+
+    if (code == 'F' && onToggleFullscreen) { onToggleFullscreen(); return true; }   // f toggles fullscreen
+
+    if (code == juce::KeyPress::escapeKey)
+    {
+        if (juce::Desktop::getInstance().getKioskModeComponent() != nullptr)
+        { juce::Desktop::getInstance().setKioskModeComponent (nullptr); return true; }   // Esc exits fullscreen
+        if (placing) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
+    }
 
     if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
     {
-        if (k == juce::KeyPress::backspaceKey || k == juce::KeyPress::deleteKey)
+        if (code == juce::KeyPress::backspaceKey || code == juce::KeyPress::deleteKey)
         {
             setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
             selectBand (-1);
@@ -977,31 +989,30 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         }
 
         refreshDesigns();
-        const auto& p   = paramCache[(size_t) selBand];
-        const bool  alt = k.getModifiers().isAltDown();
+        const auto& p = paramCache[(size_t) selBand];
 
         if (! alt)
         {
-            if (k == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }   // prev band
-            if (k == juce::KeyPress::rightKey) { stepSelection (+1); return true; }   // next band
-            if ((k == juce::KeyPress::upKey || k == juce::KeyPress::downKey) && hasGain (p.type))
+            if (code == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }   // prev band
+            if (code == juce::KeyPress::rightKey) { stepSelection (+1); return true; }   // next band
+            if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (p.type))
             {
                 setParamGestured (tabby::bandId (selBand, "gain"),
-                                  juce::jlimit (-kGainRange, kGainRange, p.gainDb + (k == juce::KeyPress::upKey ? 0.5 : -0.5)));
-                return true;                                                          // gain +/- 0.5 dB
+                                  juce::jlimit (-kGainRange, kGainRange, p.gainDb + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                return true;                                                            // gain +/- 0.5 dB
             }
         }
         else   // Alt / Option
         {
-            const double fStep = std::exp2 (1.0 / 24.0);                              // a quarter-tone
-            if (k == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); return true; }
-            if (k == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); return true; }
-            if (k == juce::KeyPress::upKey || k == juce::KeyPress::downKey)
+            const double fStep = std::exp2 (1.0 / 24.0);                                // a quarter-tone
+            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); return true; }
+            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); return true; }
+            if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
-                const int d = (k == juce::KeyPress::upKey) ? +1 : -1;
-                if (isCut (p.type))                                                   // HP/LP -> step the slope (octaves)
+                const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
+                if (isCut (p.type))                                                     // HP/LP -> step the slope (octaves)
                     setParamGestured (tabby::bandId (selBand, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) p.slope) + d));
-                else                                                                  // others -> Q +/- 0.1
+                else                                                                    // others -> Q +/- 0.1
                     setParamGestured (tabby::bandId (selBand, "q"), juce::jlimit (0.05, 40.0, p.Q + 0.1 * d));
                 return true;
             }

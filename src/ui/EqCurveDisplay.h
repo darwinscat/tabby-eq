@@ -44,6 +44,7 @@ public:
 
     // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
     std::function<void(int)> onBandSelected;
+    std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
     int  selectedBand() const noexcept { return selBand; }
     void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
     void setViewBandColors (bool v) noexcept { perBandColors = v; repaint(); }

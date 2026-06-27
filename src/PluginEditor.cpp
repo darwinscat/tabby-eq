@@ -61,6 +61,12 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     resetButton.onClick = [this] { resetAll(); };
     addAndMakeVisible (resetButton);
 
+    fullButton.setButtonText ("Full");
+    fullButton.onClick = [this] { toggleFullscreen(); };
+    fullButton.setVisible (juce::JUCEApplicationBase::isStandaloneApp());   // kiosk only makes sense standalone
+    addAndMakeVisible (fullButton);
+    display.onToggleFullscreen = [this] { toggleFullscreen(); };            // 'f' key
+
     display.setViewBandColors ((bool) proc.apvts.state.getProperty ("viewBandColors", true));
     display.setViewBandCurves ((bool) proc.apvts.state.getProperty ("viewBandCurves", true));
     display.setViewBandFill   ((bool) proc.apvts.state.getProperty ("viewBandFill",   false));
@@ -71,7 +77,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
 
     setResizable (true, true);
-    setResizeLimits (640, 360, 3840, 2400);   // allow maximise / fullscreen on large displays
+    setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);
 }
 
@@ -119,6 +125,14 @@ void TabbyEqEditor::showViewMenu()
     });
 }
 
+void TabbyEqEditor::toggleFullscreen()
+{
+    if (! juce::JUCEApplicationBase::isStandaloneApp()) return;   // don't kiosk a DAW's window
+    auto& d = juce::Desktop::getInstance();
+    if (d.getKioskModeComponent() != nullptr) d.setKioskModeComponent (nullptr);          // exit
+    else if (auto* top = getTopLevelComponent()) d.setKioskModeComponent (top, false);    // enter (borderless)
+}
+
 void TabbyEqEditor::resetAll()
 {
     for (auto* p : proc.getParameters())          // every band param + output back to its default
@@ -140,6 +154,7 @@ void TabbyEqEditor::resized()
     prePost.setBounds (top.removeFromRight (74).reduced (6, 3));
     viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
+    fullButton.setBounds (top.removeFromRight (50).reduced (4, 3));
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
     //  it used to occupy is reserved for the upcoming Helper.)
