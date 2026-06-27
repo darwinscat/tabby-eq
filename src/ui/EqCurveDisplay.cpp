@@ -979,6 +979,10 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         if (placing) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
     }
 
+    // Alt + Left/Right steps the band selection (and picks the first band if none is selected yet).
+    if (alt && code == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }
+    if (alt && code == juce::KeyPress::rightKey) { stepSelection (+1); return true; }
+
     if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
     {
         if (code == juce::KeyPress::backspaceKey || code == juce::KeyPress::deleteKey)
@@ -993,8 +997,9 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
 
         if (! alt)
         {
-            if (code == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }   // prev band
-            if (code == juce::KeyPress::rightKey) { stepSelection (+1); return true; }   // next band
+            const double fStep = std::exp2 (1.0 / 24.0);                                // freq nudge: a quarter-tone
+            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); positionToolbar(); return true; }
+            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); positionToolbar(); return true; }
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (p.type))
             {
                 setParamGestured (tabby::bandId (selBand, "gain"),
@@ -1003,11 +1008,8 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
                 return true;                                                            // gain +/- 0.5 dB
             }
         }
-        else   // Alt / Option
+        else   // Alt + Up/Down -> Q (or slope for HP/LP);  Alt+Left/Right handled above
         {
-            const double fStep = std::exp2 (1.0 / 24.0);                                // a quarter-tone
-            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); positionToolbar(); return true; }
-            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); positionToolbar(); return true; }
             if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
