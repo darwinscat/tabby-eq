@@ -36,9 +36,8 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
 
     onButton.onClick = [this]
     {
-        if (curBand < 0) return;
-        if (auto* prm = proc.apvts.getParameter (tabby::bandId (curBand, "bypass")))
-            prm->setValueNotifyingHost (onButton.getToggleState() ? 0.0f : 1.0f);   // lit = enabled = not bypassed
+        if (bypassAtt != nullptr)
+            bypassAtt->setValueAsCompleteGesture (onButton.getToggleState() ? 1.0f : 0.0f);   // lit -> bypass it
     };
     addAndMakeVisible (onButton);
 
@@ -66,23 +65,16 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
     addAndMakeVisible (slopeBox);
 
-    auto setupField = [this] (juce::Slider& s, juce::Label& unit, const juce::String& unitText)
+    auto setupField = [this] (juce::Slider& s)
     {
-        s.setSliderStyle (juce::Slider::LinearBar);          // value inside the bar; double-click types the NUMBER only
+        s.setSliderStyle (juce::Slider::LinearBar);          // value + unit live inside the bar; editing types the number
         s.setColour (juce::Slider::trackColourId,       tabby::palette::violet().withAlpha (0.45f));
         s.setColour (juce::Slider::textBoxTextColourId, tabby::palette::text());
         addAndMakeVisible (s);
-
-        unit.setText (unitText, juce::dontSendNotification);   // static unit beside the bar (not editable)
-        unit.setFont (juce::Font (juce::FontOptions (10.0f)));
-        unit.setColour (juce::Label::textColourId, tabby::palette::textDim());
-        unit.setJustificationType (juce::Justification::centredLeft);
-        addAndMakeVisible (unit);
     };
-    setupField (freq, freqCap, "Hz");
-    setupField (q,    qCap,    "");
-    setupField (gain, gainCap, "dB");
-    qCap.setVisible (false);   // Q has no unit
+    setupField (freq);
+    setupField (q);
+    setupField (gain);
 
     setBand (-1);
 }
@@ -104,10 +96,7 @@ void BandEditStrip::setBand (int band)
     routeButton.setColour (juce::TextButton::textColourOffId,
                            (has && rIdx != 0) ? tabby::palette::orange() : tabby::palette::text());
 
-    const bool byp = has && proc.apvts.getRawParameterValue (tabby::bandId (curBand, "bypass"))->load() > 0.5f;
-    onButton.setToggleState (has && ! byp, juce::dontSendNotification);   // "On" reflects enabled (= not bypassed)
-
-    rebind();
+    rebind();   // (re)creates the bypass attachment, which drives the power button's lit state
     updateForType();
     soloButton.setToggleState (has && proc.getSoloBand() == curBand, juce::dontSendNotification);
     repaint();
@@ -116,14 +105,23 @@ void BandEditStrip::setBand (int band)
 void BandEditStrip::rebind()
 {
     // Drop the old bindings first (an attachment must outlive nothing it points at).
-    slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset();
-    if (curBand < 0) return;
+    slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset();
+    if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); return; }
 
     auto id = [this] (juce::StringRef s) { return tabby::bandId (curBand, s); };
     slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, id ("slope"), slopeBox);
     freqAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("freq"),  freq);
     qAtt     = std::make_unique<SliderAtt> (proc.apvts, id ("q"),     q);
     gainAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("gain"),  gain);
+
+    // Power button mirrors the bypass param — single source of truth (node double-click + button both
+    // write it; this keeps the button's lit state in sync however it's toggled).
+    if (auto* bp = proc.apvts.getParameter (id ("bypass")))
+    {
+        bypassAtt = std::make_unique<juce::ParameterAttachment> (*bp,
+            [this] (float v) { onButton.setToggleState (v < 0.5f, juce::dontSendNotification); onButton.repaint(); });
+        bypassAtt->sendInitialUpdate();
+    }
 }
 
 void BandEditStrip::showTypeMenu()
@@ -219,18 +217,14 @@ void BandEditStrip::resized()
     top.removeFromLeft (6);
     routeButton.setBounds (top.removeFromLeft (36).withSizeKeepingCentre (36, 22));
 
-    // bottom row (one line, no captions): freq Hz · q · (gain dB OR slope for HP/LP)
+    // bottom row (one line): freq · q · (gain OR slope for HP/LP) — value + unit live inside each bar
     auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
     if (slopeBox.isVisible())
-        slopeBox.setBounds (row.removeFromRight (76).withSizeKeepingCentre (76, 22));
+        slopeBox.setBounds (row.removeFromRight (78).withSizeKeepingCentre (78, 22));
     else
-    {
-        gainCap.setBounds (row.removeFromRight (16));
-        gain.setBounds    (row.removeFromRight (46));
-    }
+        gain.setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 22));
     row.removeFromRight (8);
-    freq.setBounds    (row.removeFromLeft (50));
-    freqCap.setBounds (row.removeFromLeft (16));
+    freq.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (70, 22));
     row.removeFromLeft (8);
-    q.setBounds       (row.removeFromLeft (42));
+    q.setBounds (row.withSizeKeepingCentre (row.getWidth(), 22));   // middle fills the rest
 }

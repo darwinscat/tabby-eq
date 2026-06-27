@@ -396,7 +396,6 @@ void EqCurveDisplay::timerCallback()
         proc.setSoloBand (pressBand);
     }
     pushSpectrum();
-    positionToolbar();   // keep it glued to the node while it (or the curve) moves
     repaint();
 }
 
@@ -595,14 +594,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             }
         }
 
-        const juce::String txt = readoutText (rb);
-        const float tw = (float) txt.length() * 6.6f + 12.0f, th = 18.0f;
-        const float bx = juce::jlimit (2.0f, w - tw - 2.0f, pos.x - tw * 0.5f);
-        const float by = juce::jlimit (2.0f, h - th - 2.0f, pos.y - kNodeR - 8.0f - th);
-        g.setColour (tabby::palette::panel().withAlpha (0.96f));    g.fillRoundedRectangle (bx, by, tw, th, 4.0f);
-        g.setColour (tabby::palette::violetLo().withAlpha (0.55f)); g.drawRoundedRectangle (bx, by, tw, th, 4.0f, 1.0f);
-        g.setColour (tabby::palette::text()); g.setFont (12.0f);
-        g.drawText (txt, juce::Rectangle<float> (bx, by, tw, th), juce::Justification::centred);
+        // (the live value bubble is gone — the floating toolbar shows freq/Q/gain now)
     }
 
     // --- drag-audition visualisation: spotlight band OR a narrow bell, per the View option ---
@@ -968,6 +960,18 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
 bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
 {
     if (placing && k == juce::KeyPress::escapeKey) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
+
+    if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
+    {
+        if (k == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }
+        if (k == juce::KeyPress::rightKey) { stepSelection (+1); return true; }
+        if (k == juce::KeyPress::backspaceKey || k == juce::KeyPress::deleteKey)
+        {
+            setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
+            selectBand (-1);
+            return true;
+        }
+    }
     return false;
 }
 

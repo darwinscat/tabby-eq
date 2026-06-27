@@ -17,7 +17,7 @@
 class PowerButton : public juce::Button
 {
 public:
-    PowerButton() : juce::Button ({}) { setClickingTogglesState (true); }
+    PowerButton() : juce::Button ({}) {}   // toggle state is driven by the bypass parameter, not self-toggled
     void paintButton (juce::Graphics& g, bool, bool) override
     {
         auto b = getLocalBounds().toFloat().reduced (5.0f);
@@ -112,11 +112,11 @@ private:
     ChevronButton      prevButton { -1 };   // lightweight outline <
     ChevronButton      nextButton { +1 };   // lightweight outline >
     juce::ComboBox     slopeBox;
-    juce::Slider       freq, q, gain;
-    juce::Label        freqCap, qCap, gainCap;
+    juce::Slider       freq, q, gain;            // value + unit shown inside each LinearBar
 
     std::unique_ptr<ComboAtt>  slopeAtt;
     std::unique_ptr<SliderAtt> freqAtt, qAtt, gainAtt;
+    std::unique_ptr<juce::ParameterAttachment> bypassAtt;   // power button <-> bypass param (single source)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BandEditStrip)
 };
