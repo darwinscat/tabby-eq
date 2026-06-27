@@ -286,6 +286,8 @@ void EqCurveDisplay::resized() { positionToolbar(); }
 
 void EqCurveDisplay::clearSelection() { selectBand (-1); }
 
+void EqCurveDisplay::refreshToolbar() { positionToolbar(); }   // re-place after a window-slider edit ends
+
 void EqCurveDisplay::stepSelection (int dir)
 {
     refreshDesigns();
@@ -958,8 +960,7 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
         return;   // the new band's selectBand() already placed the toolbar
     }
     endDragGesture();
-    // No reposition on drag-end: the toolbar stays put through any drag; it only moves when the
-    // SELECTION changes (click / < > / add). Editing FREQ/Q/GAIN never nudges it.
+    positionToolbar();   // canvas node-drag: re-snap to the node AFTER the drag ends (never during)
 }
 
 bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)

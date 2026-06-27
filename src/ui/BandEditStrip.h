@@ -87,6 +87,7 @@ public:
 
     void setBand (int band);                 // -1 = nothing selected (controls disabled)
     std::function<void(int)> onStep;         // < / > pressed: step the selection by +/-1 (set by the editor)
+    std::function<void()>    onEdited;       // a value-bar drag ended — editor re-places the floating toolbar
 
     void paint (juce::Graphics&) override;
     void resized() override;

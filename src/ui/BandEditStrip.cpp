@@ -76,6 +76,9 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setupField (q);
     setupField (gain);
 
+    freq.onDragEnd = [this] { if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
+    gain.onDragEnd = [this] { if (onEdited) onEdited(); };
+
     setBand (-1);
 }
 

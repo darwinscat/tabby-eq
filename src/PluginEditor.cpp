@@ -16,7 +16,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
     display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the toolbar
-    strip.onStep = [this] (int d) { display.stepSelection (d); };     // < / > step to the prev / next band
+    strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step to the prev / next band
+    strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
     strip.setAlpha (0.88f);                                           // semi-transparent floating panel
 
     // OUT rail trim — a minimalist vertical fader; double-click returns to 0 dB.

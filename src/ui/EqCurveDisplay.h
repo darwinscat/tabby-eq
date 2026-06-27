@@ -30,6 +30,7 @@ public:
     void setToolbar (juce::Component* t) noexcept;
     void stepSelection (int dir);   // select the prev/next active band (frequency order, wraps)
     void clearSelection();          // deselect (hides the floating toolbar)
+    void refreshToolbar();          // re-place the toolbar at the selected node (after a window edit)
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;
