@@ -51,6 +51,8 @@ private:
     double compositeDb (double f) const noexcept;  // total response (dB) from the cache
     juce::Point<float> nodePos (int band) const noexcept;
     std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b) const noexcept;   // Q-handle positions
+    juce::Colour bandColour (int b) const noexcept;    // per-band (or per-type) colour
+    double       bandDb (int b, double f) const noexcept;   // one band's response (dB) for its faint curve
     juce::Point<float> addButtonAt() const noexcept;   // the "+" on the curve under the cursor, or {-1,-1}
     int    nodeAt (juce::Point<float> p) const noexcept;   // band index under p, or -1
     void   setParam (const juce::String& id, double value);
@@ -81,10 +83,20 @@ private:
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     bool whiskerSlope = false;   // the dragged whisker sets slope (HP/LP) rather than Q
+
+    juce::uint32 pressMs = 0;     // long-press-to-solo: time / band / moved? / active? / prior solo
+    int  pressBand     = -1;
+    bool pressMoved    = false;
+    bool momentarySolo = false;
+    int  prevSoloBand  = -1;
+    juce::Point<float> pressPos;
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
     bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
+    bool perBandColors = true;                      // each band a fixed distinct colour (else by type)
+    bool perBandCurves = true;                      // draw each band's own faint colour curve
+    bool longPressSolo = true;                      // hold the mouse on a node to solo it
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
     static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)

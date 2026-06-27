@@ -47,7 +47,7 @@ namespace
         return juce::jlimit (0, 6, (int) std::round (t * 6.0));
     }
 
-    juce::Colour bandColour (teq::FilterType t) noexcept
+    juce::Colour typeColour (teq::FilterType t) noexcept
     {
         using FT = teq::FilterType;
         switch (t)
@@ -61,6 +61,15 @@ namespace
             case FT::Bell:      default:            return juce::Colour (0xff6ee7a8);   // green
         }
     }
+
+    // Hand-picked per-band palette — vibrant, distinct on the dark bg, warm/cool alternating so
+    // adjacent band slots read apart. One colour per band.
+    const juce::uint32 kBandColours[tabby::kNumBands] = {
+        0xff5ec8ff, 0xffffb74d, 0xff62d2a2, 0xfff06292, 0xffb388ff, 0xffaed581,
+        0xffff8a65, 0xff4dd0e1, 0xffba68c8, 0xffffd54f, 0xff7986cb, 0xff81c784,
+        0xffe57373, 0xff64b5f6, 0xffdce775, 0xfff48fb1, 0xff4db6ac, 0xffffab40,
+        0xff9575cd, 0xff9ccc65, 0xffff8a80, 0xff4fc3f7, 0xffffd180, 0xff80cbc4
+    };
 }
 
 EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
@@ -156,6 +165,21 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
 
+juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
+{
+    if (perBandColors)   // hand-picked fixed colour per band slot
+        return juce::Colour (kBandColours[juce::jlimit (0, tabby::kNumBands - 1, b)]);
+    return typeColour (paramCache[(size_t) b].type);
+}
+
+double EqCurveDisplay::bandDb (int b, double f) const noexcept
+{
+    const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
+    std::complex<double> h { 1.0, 0.0 };
+    for (int s = 0; s < designCache[(size_t) b].n; ++s) h *= teq::evalCoeffs (designCache[(size_t) b].sec[s], w);
+    return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
+}
+
 int EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
 {
     int best = -1; float bestD = (kNodeR + 5.0f) * (kNodeR + 5.0f);
@@ -200,6 +224,9 @@ void EqCurveDisplay::endDragGesture()
                 if (auto* gp = proc.apvts.getParameter (tabby::bandId (draggingBand, "gain"))) gp->endChangeGesture();
         }
     }
+    if (momentarySolo) { proc.setSoloBand (prevSoloBand); momentarySolo = false; }   // release momentary solo
+    pressBand    = -1;
+    pressMoved   = false;
     draggingBand = -1;
     draggingGain = false;
     draggingQ    = false;
@@ -301,6 +328,14 @@ void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOu
 
 void EqCurveDisplay::timerCallback()
 {
+    // hold a node still for ~0.35 s -> momentary solo while the mouse stays down
+    if (longPressSolo && pressBand >= 0 && ! pressMoved && ! momentarySolo
+        && juce::Time::getMillisecondCounter() - pressMs > 350)
+    {
+        momentarySolo = true;
+        prevSoloBand  = proc.getSoloBand();
+        proc.setSoloBand (pressBand);
+    }
     pushSpectrum();
     repaint();
 }
@@ -310,6 +345,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 {
     const auto w = (float) getWidth(), h = (float) getHeight();
     refreshDesigns();
+    const int solo = proc.getSoloBand();   // >=0: spotlight that band's curve, dim the composite
 
     // premium radial vignette: centre lifted a touch, corners deepened
     {
@@ -356,6 +392,26 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
     }
 
+    // --- per-band response curves (faint, each in its own colour); soloing -> only that band -----
+    if (perBandCurves || solo >= 0)
+    {
+        constexpr int pts = 240;
+        for (int b = 0; b < tabby::kNumBands; ++b)
+            if (paramCache[b].on && ! paramCache[b].bypass && (solo < 0 || solo == b))
+            {
+                juce::Path bc;
+                for (int i = 0; i <= pts; ++i)
+                {
+                    const float x = (float) i / (float) pts * w;
+                    const float y = dbToY (bandDb (b, xToFreq (x)));
+                    if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
+                }
+                const bool hot = (solo == b);
+                g.setColour (bandColour (b).withAlpha (hot ? 0.95f : 0.5f));
+                g.strokePath (bc, juce::PathStrokeType (hot ? 1.8f : 1.0f));
+            }
+    }
+
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
         constexpr int pts = 240;
@@ -374,23 +430,28 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
         // boost (above 0 dB) reads warm = orange; cut (below) reads cool = violet. One fill path,
         // clipped to each half. Violet gets more alpha — it's the dimmer of the two brand colours.
+        const bool dim = (solo >= 0);   // soloing: pull the composite right back so the band stands out
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (0, 0, (int) w, juce::jmax (0, (int) y0));
-            g.setColour (tabby::palette::orange().withAlpha (0.14f));
+            g.setColour (tabby::palette::orange().withAlpha (dim ? 0.04f : 0.14f));
             g.fillPath (fill);
         }
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (0, (int) y0, (int) w, juce::jmax (0, (int) (h - y0)));
-            g.setColour (tabby::palette::violet().withAlpha (0.20f));
+            g.setColour (tabby::palette::violet().withAlpha (dim ? 0.05f : 0.20f));
             g.fillPath (fill);
         }
 
         // faux-glow: stacked low-alpha wide strokes in lifted violet (NO real blur), then the line
-        g.setColour (tabby::palette::violetLo().withAlpha (0.10f)); g.strokePath (line, juce::PathStrokeType (6.0f));
-        g.setColour (tabby::palette::violetLo().withAlpha (0.20f)); g.strokePath (line, juce::PathStrokeType (3.0f));
-        g.setColour (tabby::palette::line());                       g.strokePath (line, juce::PathStrokeType (1.6f));
+        if (! dim)
+        {
+            g.setColour (tabby::palette::violetLo().withAlpha (0.10f)); g.strokePath (line, juce::PathStrokeType (6.0f));
+            g.setColour (tabby::palette::violetLo().withAlpha (0.20f)); g.strokePath (line, juce::PathStrokeType (3.0f));
+        }
+        g.setColour (tabby::palette::line().withAlpha (dim ? 0.22f : 1.0f));
+        g.strokePath (line, juce::PathStrokeType (1.6f));
     }
 
     // --- hover halo on the node under the cursor --------------------------
@@ -400,7 +461,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (hb >= 0)
         {
             const auto hp = nodePos (hb);
-            g.setColour (bandColour (paramCache[(size_t) hb].type).withAlpha (0.22f));
+            g.setColour (bandColour (hb).withAlpha (0.22f));
             g.fillEllipse (hp.x - kNodeR - 7, hp.y - kNodeR - 7, (kNodeR + 7) * 2, (kNodeR + 7) * 2);
         }
     }
@@ -410,7 +471,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (paramCache[b].on)
         {
             const auto pos = nodePos (b);
-            const auto col = bandColour (paramCache[b].type);
+            const auto col = bandColour (b);
             const auto numR = juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2);
             if (paramCache[b].bypass)   // ghost: dim hollow ring — still hit-tested, so it's clickable back on
             {
@@ -441,7 +502,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (whiskerRelevant (paramCache[(size_t) rb].type))
         {
             const auto wk  = whiskerEnds (rb);
-            const auto col = bandColour (paramCache[(size_t) rb].type);
+            const auto col = bandColour (rb);
             g.setColour (col.withAlpha (0.85f));
             g.drawLine (wk.first.x, pos.y, wk.second.x, pos.y, 1.5f);
             for (const auto& hp : { wk.first, wk.second })
@@ -582,6 +643,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     draggingBand = b;
     if (b >= 0)
     {
+        pressBand = b; pressPos = e.position; pressMs = juce::Time::getMillisecondCounter(); pressMoved = false;
         if (auto* fp = proc.apvts.getParameter (tabby::bandId (b, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (paramCache[b].type);
         if (draggingGain)
@@ -592,6 +654,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 {
     if (draggingBand < 0) return;
+    if (pressBand >= 0 && e.position.getDistanceFrom (pressPos) > 4.0f) pressMoved = true;   // a real drag cancels long-press
     if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
     {
         const double f0 = paramCache[(size_t) draggingBand].freq;
