@@ -89,6 +89,25 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         if (pk >= 1.0f) outClip.store (true, std::memory_order_relaxed);
     };
 
+    // Drag-audition: a narrow band-pass at an arbitrary frequency (search-by-ear while dragging),
+    // independent of the band list. Takes precedence over the normal path and per-band solo.
+    if (auditionOn.load (std::memory_order_relaxed))
+    {
+        soloFilter.setParams (teq::FilterType::BandPass,
+                              juce::jlimit (20.0, 20000.0, (double) auditionFreq.load (std::memory_order_relaxed)),
+                              juce::jlimit (0.5, 18.0,     (double) auditionQ.load   (std::memory_order_relaxed)), 0.0);
+        for (int c = 0; c < nc; ++c)
+        {
+            float* d = buffer.getWritePointer (c);
+            for (int s = 0; s < n; ++s) d[s] = soloFilter.processSample (c, d[s]);
+        }
+        soloFilter.flushDenormals();
+        outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+        outputGainSmoothed.applyGain (buffer, n);
+        meterOutput();
+        return;
+    }
+
     // Solo (band-listen): replace the output with a band-pass of the input at the soloed band's
     // freq/Q, so you hear only that region. Skips the normal EQ.
     const int solo = soloBand.load (std::memory_order_relaxed);

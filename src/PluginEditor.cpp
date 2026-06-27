@@ -55,10 +55,18 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     viewButton.onClick = [this] { showViewMenu(); };
     addAndMakeVisible (viewButton);
 
+    resetButton.setButtonText ("Reset");
+    resetButton.onClick = [this] { resetAll(); };
+    addAndMakeVisible (resetButton);
+
     display.setViewBandColors ((bool) proc.apvts.state.getProperty ("viewBandColors", true));
     display.setViewBandCurves ((bool) proc.apvts.state.getProperty ("viewBandCurves", true));
     display.setViewBandFill   ((bool) proc.apvts.state.getProperty ("viewBandFill",   false));
     display.setViewLongSolo   ((bool) proc.apvts.state.getProperty ("viewLongSolo",   true));
+    display.setAddLineMode    ((int)  proc.apvts.state.getProperty ("addLineMode",    3));   // default: both lines
+    display.setAuditionVisual ((int)  proc.apvts.state.getProperty ("auditionVisual", 1));   // default: bell
+    display.setAuditionQ      ((float) (double) proc.apvts.state.getProperty ("auditionQ", 6.0));
+    display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
 
     setResizable (true, true);
     setResizeLimits (640, 360, 1600, 1000);
@@ -72,6 +80,26 @@ void TabbyEqEditor::showViewMenu()
     m.addItem (2, "Per-band curves",  true, display.viewBandCurves());
     m.addItem (3, "Per-band fill",    true, display.viewBandFill());
     m.addItem (4, "Long-press solo",  true, display.viewLongSolo());
+
+    juce::PopupMenu addLineMenu;
+    const int cur = display.addLineMode();
+    addLineMenu.addItem (10, "Off",          true, cur == 0);
+    addLineMenu.addItem (11, "0 dB line",    true, cur == 1);
+    addLineMenu.addItem (12, "Curve",        true, cur == 2);
+    addLineMenu.addItem (13, "0 dB + curve", true, cur == 3);
+    m.addSubMenu ("Show \"+\" on", addLineMenu);
+
+    juce::PopupMenu audMenu;
+    audMenu.addSectionHeader ("Visual");
+    audMenu.addItem (20, "Spotlight (band)", true, display.auditionVisual() == 0);
+    audMenu.addItem (21, "Bell curve",       true, display.auditionVisual() == 1);
+    audMenu.addItem (22, "Lock gain (sweep freq only)", true, display.auditionLockGain());
+    audMenu.addSectionHeader ("Listen Q");
+    const int audQv[] = { 3, 6, 9, 12 };
+    for (int i = 0; i < 4; ++i)
+        audMenu.addItem (30 + i, "Q " + juce::String (audQv[i]), true, juce::roundToInt (display.auditionQ()) == audQv[i]);
+    m.addSubMenu ("Audition (Alt-drag)", audMenu);
+
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
     {
@@ -82,7 +110,19 @@ void TabbyEqEditor::showViewMenu()
         if (r == 2) { const bool v = ! d.viewBandCurves(); d.setViewBandCurves (v); st.setProperty ("viewBandCurves", v, nullptr); }
         if (r == 3) { const bool v = ! d.viewBandFill();   d.setViewBandFill (v);   st.setProperty ("viewBandFill", v, nullptr); }
         if (r == 4) { const bool v = ! d.viewLongSolo();   d.setViewLongSolo (v);   st.setProperty ("viewLongSolo", v, nullptr); }
+        if (r >= 10 && r <= 13) { const int mode = r - 10; d.setAddLineMode (mode); st.setProperty ("addLineMode", mode, nullptr); }
+        if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
+        if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }
+        if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
     });
+}
+
+void TabbyEqEditor::resetAll()
+{
+    for (auto* p : proc.getParameters())          // every band param + output back to its default
+        p->setValueNotifyingHost (p->getDefaultValue());
+    proc.setSoloBand (-1);                         // clear any solo
+    strip.setBand (-1);                            // clear the inspector selection
 }
 
 void TabbyEqEditor::paint (juce::Graphics& g)
@@ -97,6 +137,7 @@ void TabbyEqEditor::resized()
     title.setBounds (top.removeFromLeft (160).reduced (8, 4));
     prePost.setBounds (top.removeFromRight (74).reduced (6, 3));
     viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
+    resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
 
     strip.setBounds (r.removeFromBottom (52).reduced (8, 4));
 

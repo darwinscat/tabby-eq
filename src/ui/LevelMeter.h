@@ -31,9 +31,9 @@ public:
 
         // Gradient anchored to dB position (violet low -> orange hot); clip the paint to the filled
         // portion so the colour at a height is stable regardless of the current level.
-        juce::ColourGradient grad (tabby::palette::violet(), 0.0f, r.getBottom(),
+        juce::ColourGradient grad (tabby::palette::violet().withAlpha (0.50f), 0.0f, r.getBottom(),
                                    tabby::palette::orange(), 0.0f, r.getY(), false);
-        grad.addColour (0.58, tabby::palette::violet());   // violet up to ~58%, then warms to orange
+        grad.addColour (0.58, tabby::palette::violet().withAlpha (0.60f));   // thinner violet up to ~58%, then warms to orange
         const float yLevel = dbToY (level, r);
         {
             juce::Graphics::ScopedSaveState ss (g);

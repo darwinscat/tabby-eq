@@ -83,6 +83,7 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     specDb.fill (-120.0f);
     specPeak.fill (-120.0f);
     proc.setAnalyzerActive (true);
+    setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
     startTimerHz (30);
 }
 
@@ -211,8 +212,17 @@ void EqCurveDisplay::setParamGestured (const juce::String& id, double value)
     }
 }
 
+void EqCurveDisplay::driveAudition (bool on, float freqHz, float q)
+{
+    auditioning = on;
+    if (on) { audFreq = freqHz; audQ = q; }
+    proc.setAudition (on, freqHz, q);
+    repaint();
+}
+
 void EqCurveDisplay::endDragGesture()
 {
+    driveAudition (false);   // never leave the drag-audition latched
     if (draggingBand >= 0)
     {
         if (draggingQ)
@@ -442,7 +452,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         // clipped to each half. Violet gets more alpha — it's the dimmer of the two brand colours.
         const bool dim = (solo >= 0);   // soloing: pull the composite right back so the band stands out
         const auto  vio   = tabby::palette::violet();       // fill (both halves): brand violet, gradient
-        const float aZero = dim ? 0.08f : 0.55f;            // densest at the 0 dB line; fades to 0 toward +-24 dB
+        const float aZero = dim ? 0.06f : 0.40f;            // densest at the 0 dB line; fades to 0 toward +-24 dB
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (0, 0, (int) w, juce::jmax (0, (int) y0));
@@ -548,16 +558,73 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.drawText (txt, juce::Rectangle<float> (bx, by, tw, th), juce::Justification::centred);
     }
 
-    // --- "+" add-band button where the cursor crosses the curve ----------
-    const auto addBtn = addButtonAt();
-    if (addBtn.x >= 0.0f)
+    // --- drag-audition visualisation: spotlight band OR a narrow bell, per the View option ---
+    if (auditioning)
     {
-        const float r = kNodeR + 2.0f;
-        g.setColour (tabby::palette::panel().withAlpha (0.92f));    g.fillEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2);
-        g.setColour (tabby::palette::violetLo().withAlpha (0.85f)); g.drawEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2, 1.5f);
+        const double f0   = juce::jlimit (kFreqMin, kFreqMax, (double) audFreq);
+        const float  xc   = freqToX (f0);
+        const auto   orng = tabby::palette::orange();
+
+        if (audVisual == AudVisual::Bell)
+        {
+            teq::BandParams bp;
+            bp.on = true; bp.type = teq::FilterType::Bell; bp.freq = f0;
+            bp.Q = juce::jmax (0.5, (double) audQ); bp.gainDb = 20.0;            // a tall narrow bell = what you hear
+            const float y0 = dbToY (0.0);
+            juce::Path line, fill; bool started = false;
+            for (float x = 0.0f; x <= w; x += 3.0f)
+            {
+                const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
+                const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+                const float  y  = dbToY (db);
+                if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
+                else           { line.lineTo (x, y); fill.lineTo (x, y); }
+            }
+            fill.lineTo (w, y0); fill.closeSubPath();
+            g.setColour (orng.withAlpha (0.14f)); g.fillPath (fill);
+            g.setColour (orng.withAlpha (0.90f)); g.strokePath (line, juce::PathStrokeType (1.6f));
+        }
+        else   // Spotlight: dim everything outside the narrow listen band
+        {
+            const double inv = 1.0 / (2.0 * juce::jmax (0.5, (double) audQ));    // -3 dB band-pass edges (octave-ish)
+            const double k   = std::sqrt (1.0 + inv * inv);
+            const float  xLo = freqToX (f0 * (k - inv));
+            const float  xHi = freqToX (f0 * (k + inv));
+            g.setColour (juce::Colours::black.withAlpha (0.5f));
+            g.fillRect (0.0f, 0.0f, juce::jmax (0.0f, xLo), h);
+            g.fillRect (xHi, 0.0f, juce::jmax (0.0f, w - xHi), h);
+            g.setColour (orng.withAlpha (0.10f));
+            g.fillRect (xLo, 0.0f, juce::jmax (0.0f, xHi - xLo), h);
+        }
+
+        g.setColour (orng.withAlpha (0.85f));                                    // centre line + label (both modes)
+        g.drawLine (xc, 0.0f, xc, h, 1.5f);
+        const juce::String fl = f0 >= 1000.0 ? juce::String (f0 / 1000.0, 2) + " kHz"
+                                             : juce::String (juce::roundToInt (f0)) + " Hz";
         g.setColour (tabby::palette::text());
-        g.drawLine (addBtn.x - 4.0f, addBtn.y, addBtn.x + 4.0f, addBtn.y, 1.6f);
-        g.drawLine (addBtn.x, addBtn.y - 4.0f, addBtn.x, addBtn.y + 4.0f, 1.6f);
+        g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+        g.drawText ("LISTEN  " + fl, juce::Rectangle<float> (juce::jmin (xc + 6.0f, w - 116.0f), 4.0f, 116.0f, 14.0f),
+                    juce::Justification::centredLeft);
+    }
+
+    // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
+    if (placing)
+    {
+        drawAddPreview (g, placeSpec, placePos, placeGainFromDrag);
+    }
+    else
+    {
+        const auto addBtn = addButtonAt();
+        if (addBtn.x >= 0.0f)
+        {
+            drawAddPreview (g, predictAdd (addBtn), addBtn, false);   // ghost of what a click adds (default gain)
+            const float r = kNodeR + 2.0f;
+            g.setColour (tabby::palette::panel().withAlpha (0.92f));    g.fillEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2);
+            g.setColour (tabby::palette::violetLo().withAlpha (0.95f)); g.drawEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2, 1.5f);
+            g.setColour (tabby::palette::text());
+            g.drawLine (addBtn.x - 4.0f, addBtn.y, addBtn.x + 4.0f, addBtn.y, 1.6f);
+            g.drawLine (addBtn.x, addBtn.y - 4.0f, addBtn.x, addBtn.y + 4.0f, 1.6f);
+        }
     }
 }
 
@@ -582,41 +649,110 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         }
 }
 
-void EqCurveDisplay::smartAdd (juce::Point<float> at)
+void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::Point<float> at, bool dragging) const
 {
-    refreshDesigns();
-    const double f = xToFreq (at.x);
-    int active = 0; bool hasHP = false, hasLP = false;
-    double minAll = 1.0e9, maxAll = -1.0e9, minTon = 1.0e9, maxTon = -1.0e9;   // Ton = non HP/LP bands
+    const auto ft = tabby::filterTypeFromChoice (s.typeIndex);
+
+    teq::BandParams bp;
+    bp.on     = true;
+    bp.type   = ft;
+    bp.freq   = juce::jlimit (kFreqMin, kFreqMax, xToFreq (at.x));
+    bp.Q      = isCut (ft) ? 0.707 : 1.0;
+    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)) : s.gainDb) : 0.0;
+    bp.gainDb = gain;
+    bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
+
+    const auto col = tabby::palette::violetLo();
+
+    // ghost response curve
+    juce::Path path;
+    const float wpx = (float) getWidth();
+    bool started = false;
+    for (float x = 0.0f; x <= wpx; x += 3.0f)
+    {
+        const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
+        const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+        const float  y  = dbToY (db);
+        if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
+    }
+    g.setColour (col.withAlpha (0.5f));
+    g.strokePath (path, juce::PathStrokeType (1.4f));
+
+    // node dot (matches nodePos: hasGain -> own gain; notch/all-pass -> 0; cut -> its own corner)
+    double nodeDb = 0.0;
+    if (hasGain (ft)) nodeDb = gain;
+    else if (! (ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
+        nodeDb = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (
+                     teq::bandResponse (bp, fsCache, 2.0 * juce::MathConstants<double>::pi * bp.freq / fsCache))));
+    const float nx = freqToX (bp.freq), ny = dbToY (nodeDb);
+    g.setColour (col.withAlpha (0.9f));
+    g.drawEllipse (nx - kNodeR, ny - kNodeR, kNodeR * 2.0f, kNodeR * 2.0f, 1.5f);
+
+    // type icon + label
+    const char* names[] = { "Bell", "Low Shelf", "High Shelf", "HPF", "LPF", "Band Pass", "Notch", "All Pass", "Tilt" };
+    juce::String label = names[juce::jlimit (0, 8, s.typeIndex)];
+    if (isCut (ft)) label << " " << juce::String (bp.slope);
+    label << "   " << (bp.freq >= 1000.0 ? juce::String (bp.freq / 1000.0, 2) + " kHz"
+                                         : juce::String (juce::roundToInt (bp.freq)) + " Hz");
+    if (! isCut (ft) && s.hasGainCtrl) label << "   " << (gain >= 0.0 ? "+" : "") << juce::String (gain, 1) << " dB";
+
+    const float lblW = (float) label.length() * 6.6f + 22.0f, lblH = 16.0f;
+    const float lx = juce::jlimit (2.0f, wpx - lblW - 2.0f, nx + kNodeR + 6.0f);
+    const float ly = juce::jlimit (2.0f, (float) getHeight() - lblH - 2.0f, ny - kNodeR - 18.0f);
+    g.setColour (tabby::palette::panel().withAlpha (0.92f));
+    g.fillRoundedRectangle (lx, ly, lblW, lblH, 4.0f);
+    if (auto d = tabby::shapes::icon (ft, col))
+        d->drawWithin (g, juce::Rectangle<float> (lx + 2.0f, ly + 2.0f, 14.0f, lblH - 4.0f), juce::RectanglePlacement::centred, 1.0f);
+    g.setColour (tabby::palette::text());
+    g.setFont (11.0f);
+    g.drawText (label, juce::Rectangle<float> (lx + 18.0f, ly, lblW - 20.0f, lblH), juce::Justification::centredLeft);
+}
+
+EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const noexcept
+{
+    const double f      = xToFreq (at.x);
+    const bool   above0 = yToDb (at.y) >= 0.0;                                       // side of the 0 dB line
+    const double frac   = std::log (f / kFreqMin) / std::log (kFreqMax / kFreqMin);  // 0 (20 Hz) .. 1 (20 kHz)
+    const bool   left   = frac < (1.0 / 3.0);                                        // freq thirds (log axis)
+    const bool   right  = frac > (2.0 / 3.0);
+
+    bool hasHP = false, hasLP = false, hasLowShelf = false, hasHighShelf = false;
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
         {
-            ++active;
             const auto t = paramCache[b].type;
-            hasHP = hasHP || t == teq::FilterType::HighPass;
-            hasLP = hasLP || t == teq::FilterType::LowPass;
-            minAll = juce::jmin (minAll, paramCache[b].freq);
-            maxAll = juce::jmax (maxAll, paramCache[b].freq);
-            if (t != teq::FilterType::HighPass && t != teq::FilterType::LowPass)
-            { minTon = juce::jmin (minTon, paramCache[b].freq); maxTon = juce::jmax (maxTon, paramCache[b].freq); }
+            hasHP        = hasHP        || t == teq::FilterType::HighPass;
+            hasLP        = hasLP        || t == teq::FilterType::LowPass;
+            hasLowShelf  = hasLowShelf  || t == teq::FilterType::LowShelf;
+            hasHighShelf = hasHighShelf || t == teq::FilterType::HighShelf;
         }
 
-    // Edge zones of the (log) frequency axis — used when there's nothing to compare against yet.
-    const double frac     = std::log (f / kFreqMin) / std::log (kFreqMax / kFreqMin);   // 0 (20 Hz) .. 1 (20 kHz)
-    const bool   lowZone  = frac <= 0.20;
-    const bool   highZone = frac >= 0.80;
+    AddSpec s;
+    s.gainDb = above0 ? 2.0 : -2.0;                          // default boost/cut by side of 0 dB
 
-    if (active == 0)                             // the very first point: edge -> cut filter, else Bell
+    if (left)
     {
-        if (lowZone)  { addBandOfType (3, at, 2); return; }   // far left  -> HPF 24
-        if (highZone) { addBandOfType (4, at, 1); return; }   // far right -> LPF 12
-        addBandOfType (0, at); return;                        // middle    -> Bell
+        if (! above0 && ! hasHP) { s.typeIndex = 3; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }  // HPF 24
+        else if (! hasLowShelf)  { s.typeIndex = 1; }                                                           // Low Shelf +-2
+        else                     { s.typeIndex = 0; }                                                           // Bell +-2
     }
-    if (! hasHP && (f <= minAll || lowZone))     { addBandOfType (3, at, 2); return; }                       // leftmost / low edge  -> HPF 24
-    if (! hasLP && (f >= maxAll || highZone))    { addBandOfType (4, at, 1); return; }                       // rightmost / high edge -> LPF 12
-    if (hasHP && minTon < 1.0e8 && f <= minTon)  { addBandOfType (1, { at.x, dbToY (2.0) }); return; }       // low-end inside  -> Low Shelf +2
-    if (hasLP && maxTon > -1.0e8 && f >= maxTon) { addBandOfType (2, { at.x, dbToY (2.0) }); return; }       // high-end inside -> High Shelf +2
-    addBandOfType (0, at);                                                                                   // middle -> Bell
+    else if (right)
+    {
+        if (! above0 && ! hasLP) { s.typeIndex = 4; s.slopeIndex = 1; s.gainDb = 0.0; s.hasGainCtrl = false; }  // LPF 12
+        else if (! hasHighShelf) { s.typeIndex = 2; }                                                           // High Shelf +-2
+        else                     { s.typeIndex = 0; }                                                           // Bell +-2
+    }
+    else                         { s.typeIndex = 0; }                                                           // middle -> Bell +-2
+
+    return s;
+}
+
+void EqCurveDisplay::smartAdd (juce::Point<float> at)
+{
+    refreshDesigns();
+    const AddSpec s = predictAdd (at);
+    if (s.hasGainCtrl) addBandOfType (s.typeIndex, { at.x, dbToY (s.gainDb) }, s.slopeIndex);   // default +-2 by side
+    else               addBandOfType (s.typeIndex, at, s.slopeIndex);                            // cut: gain ignored
 }
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
@@ -678,11 +814,16 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    // "+" on the curve under the cursor -> add a flat Bell at that frequency
+    // "+" near a trigger line -> start a press-drag placement (drag to set gain, release to commit)
     const auto addBtn = addButtonAt();
-    if (addBtn.x >= 0.0f && e.position.getDistanceFrom (addBtn) < kNodeR + 6.0f)
+    if (addBtn.x >= 0.0f)
     {
-        smartAdd ({ addBtn.x, dbToY (0.0) });
+        placing = true; placeMoved = false; placeGainFromDrag = false; placeDown = e.position; placePos = e.position;
+        placeSpec = predictAdd (e.position);
+        lastDragFreq = (float) xToFreq (e.position.x);
+        grabKeyboardFocus();   // so Esc can cancel
+        if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);   // engage at once if Alt already held
+        repaint();
         return;
     }
 
@@ -698,6 +839,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             whiskerSlope = isCut (paramCache[(size_t) selBand].type);
             if (auto* prm = proc.apvts.getParameter (tabby::bandId (selBand, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
+            lastDragFreq = (float) paramCache[(size_t) selBand].freq;
+            grabKeyboardFocus();
+            if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
             return;
         }
     }
@@ -712,13 +856,30 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         draggingGain = hasGain (paramCache[b].type);
         if (draggingGain)
             if (auto* gp = proc.apvts.getParameter (tabby::bandId (b, "gain"))) gp->beginChangeGesture();
+        lastDragFreq = (float) paramCache[b].freq;
+        grabKeyboardFocus();
+        if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
     }
 }
 
 void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 {
+    if (placing)   // press-drag placement: gain follows Y, freq follows X; preview only (commit on release)
+    {
+        placePos = e.position;
+        if (e.position.getDistanceFrom (placeDown) > 4.0f) placeMoved = true;
+        const bool lockY = e.mods.isAltDown() && audLockGain;
+        placeGainFromDrag = placeMoved && ! lockY;                                            // Alt+lock -> gain stays default
+        lastDragFreq = (float) xToFreq (placePos.x);
+        driveAudition (e.mods.isAltDown(), lastDragFreq, audQSetting);                        // Alt = listen to the region
+        repaint();
+        return;
+    }
     if (draggingBand < 0) return;
     if (pressBand >= 0 && e.position.getDistanceFrom (pressPos) > 4.0f) pressMoved = true;   // a real drag cancels long-press
+    const bool lockY = e.mods.isAltDown() && audLockGain;                                     // Alt+lock -> sweep freq only
+    lastDragFreq = (float) (draggingQ ? paramCache[(size_t) draggingBand].freq : xToFreq (e.position.x));
+    driveAudition (e.mods.isAltDown(), lastDragFreq, audQSetting);                            // Alt = narrow band-listen
     if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
     {
         const double f0 = paramCache[(size_t) draggingBand].freq;
@@ -734,19 +895,50 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
         return;
     }
     setParam (tabby::bandId (draggingBand, "freq"), xToFreq (e.position.x));
-    if (draggingGain)   // latched at mouseDown so the gain begin/end gesture stays balanced
+    if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
         setParam (tabby::bandId (draggingBand, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
 }
 
-void EqCurveDisplay::mouseUp (const juce::MouseEvent&) { endDragGesture(); }
+void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
+{
+    driveAudition (false);   // stop any drag-audition
+    if (placing)   // release inside -> commit the previewed band; outside -> cancel
+    {
+        if (getLocalBounds().toFloat().contains (e.position))
+        {
+            if (placeGainFromDrag && placeSpec.hasGainCtrl)
+                addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from drag Y
+            else
+                addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // freq from X, default gain
+        }
+        placing = false; placeMoved = false; repaint();
+        return;
+    }
+    endDragGesture();
+}
+
+bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
+{
+    if (placing && k == juce::KeyPress::escapeKey) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
+    return false;
+}
+
+void EqCurveDisplay::modifierKeysChanged (const juce::ModifierKeys& mods)
+{
+    if (placing || draggingBand >= 0)                          // toggle the listen the instant Alt changes
+        driveAudition (mods.isAltDown(), lastDragFreq, audQSetting);
+    if (placing)
+        placeGainFromDrag = placeMoved && ! (mods.isAltDown() && audLockGain);
+}
 
 void EqCurveDisplay::mouseMove (const juce::MouseEvent& e) { hoverPos = e.position; repaint(); }
 void EqCurveDisplay::mouseExit (const juce::MouseEvent&)   { hoverPos = { -1.0f, -1.0f }; repaint(); }
 
 juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
-    if (hoverPos.x < 0.0f || draggingBand >= 0)     return { -1.0f, -1.0f };
-    if (nodeAt (hoverPos) >= 0)                      return { -1.0f, -1.0f };   // on a node -> no "+"
+    if (addLine == AddLine::Off)                          return { -1.0f, -1.0f };
+    if (hoverPos.x < 0.0f || draggingBand >= 0 || placing) return { -1.0f, -1.0f };
+    if (nodeAt (hoverPos) >= 0)                           return { -1.0f, -1.0f };   // on a node -> no "+"
 
     // don't surface "+" over the selected band's whisker bar (so you can grab a handle)
     if (selBand >= 0 && paramCache[(size_t) selBand].on && whiskerRelevant (paramCache[(size_t) selBand].type))
@@ -759,10 +951,17 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 
     bool anyFree = false;
     for (int i = 0; i < tabby::kNumBands; ++i) if (! paramCache[(size_t) i].on) { anyFree = true; break; }
-    if (! anyFree)                                   return { -1.0f, -1.0f };   // all bands used
-    const float cy = dbToY (compositeDb (xToFreq (hoverPos.x)));
-    if (std::abs (hoverPos.y - cy) > kAddThreshold)  return { -1.0f, -1.0f };   // not near the curve
-    return { hoverPos.x, cy };
+    if (! anyFree)                                        return { -1.0f, -1.0f };   // all bands used
+
+    // surface "+" when the cursor is within reach of an enabled trigger line (0 dB and/or the curve)
+    const float yZero  = dbToY (0.0);
+    const float yCurve = dbToY (compositeDb (xToFreq (hoverPos.x)));
+    float best = kAddThreshold;
+    bool  hit  = false;
+    if (addLine == AddLine::ZeroLine || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yZero);  if (d < best) { best = d; hit = true; } }
+    if (addLine == AddLine::Curve    || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yCurve); if (d < best) { best = d; hit = true; } }
+    if (! hit)                                            return { -1.0f, -1.0f };
+    return hoverPos;   // "+" sits at the cursor; predictAdd reads its Y for above/below 0
 }
 
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)

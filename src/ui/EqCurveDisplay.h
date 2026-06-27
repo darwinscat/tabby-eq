@@ -31,6 +31,8 @@ public:
     void mouseExit        (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove   (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    bool keyPressed       (const juce::KeyPress&) override;   // Esc cancels an in-progress add-drag
+    void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
     // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
     std::function<void(int)> onBandSelected;
@@ -44,6 +46,14 @@ public:
     bool viewBandCurves() const noexcept { return perBandCurves; }
     bool viewBandFill()   const noexcept { return perBandFill; }
     bool viewLongSolo()   const noexcept { return longPressSolo; }
+    void setAddLineMode (int m) noexcept { addLine = (AddLine) juce::jlimit (0, 3, m); repaint(); }   // 0 off /1 zero /2 curve /3 both
+    int  addLineMode() const noexcept { return (int) addLine; }
+    void  setAuditionQ (float q) noexcept { audQSetting = juce::jlimit (0.5f, 18.0f, q); }            // Alt-drag listen width
+    float auditionQ() const noexcept { return audQSetting; }
+    void  setAuditionVisual (int v) noexcept { audVisual = (AudVisual) juce::jlimit (0, 1, v); repaint(); }   // 0 spotlight /1 bell
+    int   auditionVisual() const noexcept { return (int) audVisual; }
+    void  setAuditionLockGain (bool v) noexcept { audLockGain = v; }   // Alt-drag changes only freq (sweep)
+    bool  auditionLockGain() const noexcept { return audLockGain; }
 
 private:
     void timerCallback() override;
@@ -67,7 +77,15 @@ private:
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
     void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
     void   addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex = -1);   // enable the first free band
-    void   smartAdd (juce::Point<float> at);   // add with a smart default type (edge -> HP/LP)
+    void   smartAdd (juce::Point<float> at);   // add with a smart default type (grid 3x2 -> see predictAdd)
+
+    // Smart add default: which type/slope/gain a click at `at` produces (grid: 3 freq-thirds x
+    // above/below 0 dB). Single source of truth for the action AND the "+" ghost preview.
+    enum class AddLine { Off, ZeroLine, Curve, Both };
+    struct AddSpec { int typeIndex = 0; int slopeIndex = -1; double gainDb = 2.0; bool hasGainCtrl = true; };
+    AddSpec predictAdd (juce::Point<float> at) const noexcept;
+    void    drawAddPreview (juce::Graphics&, const AddSpec&, juce::Point<float> at, bool dragging) const;
+    void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
     void   selectBand (int newSel);                  // update selection + fire onBandSelected
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
@@ -107,6 +125,22 @@ private:
     bool perBandCurves = true;                      // draw each band's own faint colour curve
     bool perBandFill   = false;                     // fill under each band's curve (off by default)
     bool longPressSolo = true;                      // hold the mouse on a node to solo it
+
+    AddLine addLine = AddLine::Both;                 // which line surfaces "+" (View option)
+    bool    placing    = false;                      // press-drag add in progress
+    bool    placeMoved = false;                      // moved enough to take the gain from the drag Y
+    AddSpec placeSpec;                               // type/slope locked at press
+    juce::Point<float> placeDown { -1.0f, -1.0f };   // press origin
+    juce::Point<float> placePos  { -1.0f, -1.0f };   // current cursor during the place-drag
+
+    bool  auditioning = false;                       // drag-audition active -> draw the listen spotlight
+    float audFreq = 1000.0f, audQ = 6.0f;            // its centre / Q (for the spotlight width)
+    float audQSetting = 6.0f;                         // configurable audition Q (View option)
+    enum class AudVisual { Spotlight, Bell };
+    AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
+    bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
+    float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
+    bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
     static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)

@@ -45,6 +45,16 @@ public:
     void setSoloBand (int b) noexcept { soloBand.store (b, std::memory_order_relaxed); }   // -1 = no solo
     int  getSoloBand() const noexcept { return soloBand.load (std::memory_order_relaxed); }
 
+    // Drag-audition: listen to a narrow band-pass at an arbitrary frequency, independent of the band
+    // list (so it works even while placing a not-yet-created band). The editor drives this while a
+    // node/add is dragged with the audition modifier held. RT-safe (atomics only).
+    void setAudition (bool on, float freqHz = 1000.0f, float q = 6.0f) noexcept
+    {
+        auditionFreq.store (freqHz, std::memory_order_relaxed);
+        auditionQ.store    (q,      std::memory_order_relaxed);
+        auditionOn.store   (on,     std::memory_order_relaxed);
+    }
+
     // IN/OUT level meters for the editor. The audio thread accumulates the peak |sample| since the
     // last UI read (read-and-reset); clip is sticky until the UI clears it. All lock-free.
     float readInPeak()  noexcept { return inPeak.exchange  (0.0f, std::memory_order_relaxed); }
@@ -85,6 +95,8 @@ private:
     std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
     teq::Svf         soloFilter;                                    // band-listen band-pass (solo)
     std::atomic<int> soloBand { -1 };                               // soloed band index, or -1
+    std::atomic<bool>  auditionOn   { false };                      // drag-audition active (narrow listen)
+    std::atomic<float> auditionFreq { 1000.0f }, auditionQ { 6.0f };
 
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets

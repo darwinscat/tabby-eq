@@ -24,6 +24,7 @@ public:
 
 private:
     void showViewMenu();
+    void resetAll();          // clear every band + output to defaults (temporary dev convenience)
 
     TabbyEqAudioProcessor& proc;
 
@@ -36,6 +37,7 @@ private:
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
     juce::TextButton prePost;
     juce::TextButton viewButton;
+    juce::TextButton resetButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)
