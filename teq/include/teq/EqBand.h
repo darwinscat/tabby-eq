@@ -64,9 +64,9 @@ inline BandDesign designBand (const BandParams& in, double fs) noexcept
     {
         switch (p.type)
         {
-            case FilterType::Bell:      d.sec[0] = matched::peakingDb  (p.freq, fs, p.Q, p.gainDb); break;
-            case FilterType::LowShelf:  d.sec[0] = matched::lowShelfDb  (p.freq, fs, p.gainDb);     break;
-            case FilterType::HighShelf: d.sec[0] = matched::highShelfDb (p.freq, fs, p.gainDb);     break;
+            case FilterType::Bell:      d.sec[0] = matched::peakingDb    (p.freq, fs, p.Q, p.gainDb);     break;
+            case FilterType::LowShelf:  d.sec[0] = matched::lowShelfQDb  (p.freq, fs, p.gainDb, p.Q);     break;  // resonant (Q) shelf
+            case FilterType::HighShelf: d.sec[0] = matched::highShelfQDb (p.freq, fs, p.gainDb, p.Q);     break;
             case FilterType::HighPass:  d.sec[0] = matched::highpass     (p.freq, fs, p.Q);         break;  // swept fallback (single)
             case FilterType::LowPass:   d.sec[0] = matched::lowpass      (p.freq, fs, p.Q);         break;  // swept fallback (single)
             case FilterType::BandPass:  d.sec[0] = matched::bandpass     (p.freq, fs, p.Q);         break;

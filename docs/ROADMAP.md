@@ -125,8 +125,10 @@ vignette + 0 dB glow · analyzer pre/post toggle · HP/LP whisker steps the disc
 filter-type shape icons · **per-band bypass + ghost node** (used-vs-bypassed flag; bypassed nodes
 stay clickable, not deleted) · per-band colours + ghost curves · long-press-to-solo · View toggles ·
 **IN/OUT level meters** (peak-hold + sticky clip, violet→orange, click to reset) + vertical output
-fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-only; node M/S/L/R badge).
-(235 engine checks; all four Mac formats build + AU passes auval.)
+fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-only; node M/S/L/R badge) ·
+**resonant shelf-Q** (matched, Pro-Q-style overshoot/dip; exact mirror ±G; stable to Nyquist) ·
+**add-band UX** (3×2 grid defaults, ghost preview, press-drag-to-place, Alt drag-audition w/ spotlight
+or bell + Listen Q). (591 engine checks; all four Mac formats build + AU passes auval.)
 
 **Deferred — need a decision / live feedback:**
 - **Floating point-toolbar** (Neutron-style) — a mini panel by the node holding ALL point info +

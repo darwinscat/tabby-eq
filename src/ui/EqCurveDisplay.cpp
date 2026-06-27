@@ -15,8 +15,9 @@ namespace
 
     bool qRelevant (teq::FilterType t) noexcept   // Q sets bandwidth -> show the Q whiskers
     {                                             // HP/LP use discrete slopes (their own whisker), not Q
-        return t == teq::FilterType::Bell  || t == teq::FilterType::BandPass
-            || t == teq::FilterType::Notch || t == teq::FilterType::AllPass;
+        return t == teq::FilterType::Bell      || t == teq::FilterType::BandPass
+            || t == teq::FilterType::Notch     || t == teq::FilterType::AllPass
+            || t == teq::FilterType::LowShelf  || t == teq::FilterType::HighShelf;   // resonant shelves have Q
     }
 
     // Q-whisker calibration — half-bandwidth (octaves) <-> Q, log-linear. Tuned by feel so the
@@ -262,8 +263,7 @@ juce::String EqCurveDisplay::readoutText (int b) const
                                  : juce::String (juce::roundToInt (f)) + " Hz";
     if (hasGain (p.type))
         s << "   " << (p.gainDb >= 0.0 ? "+" : "") << juce::String (p.gainDb, 1) << " dB";
-    const bool showsQ = ! (p.type == teq::FilterType::LowShelf || p.type == teq::FilterType::HighShelf
-                           || p.type == teq::FilterType::Tilt);                          // shelves & tilt ignore Q
+    const bool showsQ = p.type != teq::FilterType::Tilt;                                 // tilt ignores Q (shelves now resonant)
     if (showsQ)
         s << "   Q " << juce::String (p.Q, 2);
     return s;
@@ -640,7 +640,8 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             setParamGestured (tabby::bandId (b, "freq"), xToFreq (at.x));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
-            setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass || ft == teq::FilterType::LowPass) ? 0.707 : 1.0);
+            setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
+                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
             if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);

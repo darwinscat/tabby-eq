@@ -189,7 +189,7 @@ void BandEditStrip::updateForType()
 
     slopeBox.setVisible (isCut);                       // slope only applies to HP/LP
     gain.setEnabled (hasGain);                         // HP/LP/BP/notch/all-pass have no gain
-    q.setEnabled (! isShelf && ! isTilt && ! isCut);   // shelves/tilt/HP/LP are Butterworth — Q unused
+    q.setEnabled (! isTilt && ! isCut);   // bells & resonant shelves have Q; tilt / HP / LP don't
 }
 
 void BandEditStrip::paint (juce::Graphics& g)
