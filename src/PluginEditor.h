@@ -8,6 +8,7 @@
 #include "PluginProcessor.h"
 #include "ui/EqCurveDisplay.h"
 #include "ui/BandEditStrip.h"
+#include "ui/LevelMeter.h"
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
@@ -28,9 +29,11 @@ private:
 
     EqCurveDisplay display;
     BandEditStrip  strip;
+    LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
+    LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
+    juce::Label    inCap, outCap;
     juce::Label    title;
-    juce::Slider   output { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
-    juce::Label    outputLabel;
+    juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
     juce::TextButton prePost;
     juce::TextButton viewButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;

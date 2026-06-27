@@ -423,4 +423,74 @@ void runEqEngineTests()
         checkIndependence (false, "static biquad");
         checkIndependence (true,  "swept SVF");
     }
+
+    group ("EqBand routing: Left/Right touch one channel; Mid/Side preserve the other axis exactly");
+    {
+        const int n = 256;
+        auto fillLR = [&] (std::vector<float>& L, std::vector<float>& R)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                L[(size_t) i] = (float) (0.20 * std::sin (2.0 * kPi * 700.0 * i / fs));
+                R[(size_t) i] = (float) (0.15 * std::sin (2.0 * kPi * 700.0 * i / fs + 0.9));   // decorrelated
+            }
+        };
+        auto runRoute = [&] (Route r, std::vector<float>& L, std::vector<float>& R)
+        {
+            EqBand band; band.prepare (fs, 2);
+            BandParams p; p.on = true; p.type = FilterType::Bell; p.freq = 700.0; p.Q = 2.0; p.gainDb = 9.0; p.route = r;
+            band.setParams (p);
+            float* ch[2] = { L.data(), R.data() };
+            band.processBlock (ch, 2, n);
+        };
+
+        // Left: R bit-identical (untouched), L changed.
+        {
+            std::vector<float> L ((size_t) n), R ((size_t) n); fillLR (L, R);
+            const std::vector<float> L0 = L, R0 = R;
+            runRoute (Route::Left, L, R);
+            double rErr = 0.0, lChg = 0.0;
+            for (int i = 0; i < n; ++i) { rErr = std::max (rErr, (double) std::fabs (R[(size_t) i] - R0[(size_t) i]));
+                                          lChg += std::fabs (L[(size_t) i] - L0[(size_t) i]); }
+            expectTrue (rErr == 0.0, "Left route: R channel bit-identical (untouched)");
+            expectTrue (lChg > 0.0,  "Left route: L channel changed");
+        }
+        // Right: L bit-identical (untouched).
+        {
+            std::vector<float> L ((size_t) n), R ((size_t) n); fillLR (L, R);
+            const std::vector<float> L0 = L;
+            runRoute (Route::Right, L, R);
+            double lErr = 0.0;
+            for (int i = 0; i < n; ++i) lErr = std::max (lErr, (double) std::fabs (L[(size_t) i] - L0[(size_t) i]));
+            expectTrue (lErr == 0.0, "Right route: L channel bit-identical (untouched)");
+        }
+        // Mid: Side axis (L-R) preserved; equal change to L and R.
+        {
+            std::vector<float> L ((size_t) n), R ((size_t) n); fillLR (L, R);
+            const std::vector<float> L0 = L, R0 = R;
+            runRoute (Route::Mid, L, R);
+            double sideErr = 0.0, deltaDiff = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                sideErr   = std::max (sideErr,   (double) std::fabs ((L[(size_t) i] - R[(size_t) i]) - (L0[(size_t) i] - R0[(size_t) i])));
+                deltaDiff = std::max (deltaDiff, (double) std::fabs ((L[(size_t) i] - L0[(size_t) i]) - (R[(size_t) i] - R0[(size_t) i])));
+            }
+            expectNear (sideErr,   0.0, 1e-6, "Mid route: Side (L-R) preserved");
+            expectNear (deltaDiff, 0.0, 1e-6, "Mid route: equal change to L and R");
+        }
+        // Side: Mid axis (L+R) preserved; opposite change to L and R.
+        {
+            std::vector<float> L ((size_t) n), R ((size_t) n); fillLR (L, R);
+            const std::vector<float> L0 = L, R0 = R;
+            runRoute (Route::Side, L, R);
+            double midErr = 0.0, deltaSum = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                midErr   = std::max (midErr,   (double) std::fabs ((L[(size_t) i] + R[(size_t) i]) - (L0[(size_t) i] + R0[(size_t) i])));
+                deltaSum = std::max (deltaSum, (double) std::fabs ((L[(size_t) i] - L0[(size_t) i]) + (R[(size_t) i] - R0[(size_t) i])));
+            }
+            expectNear (midErr,   0.0, 1e-6, "Side route: Mid (L+R) preserved");
+            expectNear (deltaSum, 0.0, 1e-6, "Side route: opposite change to L and R");
+        }
+    }
 }

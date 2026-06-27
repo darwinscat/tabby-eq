@@ -66,7 +66,8 @@ private:
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
     void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
-    void   addBandOfType (int typeIndex, juce::Point<float> at);   // enable the first free band
+    void   addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex = -1);   // enable the first free band
+    void   smartAdd (juce::Point<float> at);   // add with a smart default type (edge -> HP/LP)
     void   pushSpectrum();
     void   selectBand (int newSel);                  // update selection + fire onBandSelected
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble

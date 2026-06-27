@@ -24,6 +24,18 @@ teq::FilterType filterTypeFromChoice (int idx) noexcept
     }
 }
 
+teq::Route routeFromChoice (int idx) noexcept
+{
+    switch (idx)
+    {
+        case 1:  return teq::Route::Left;
+        case 2:  return teq::Route::Right;
+        case 3:  return teq::Route::Mid;
+        case 4:  return teq::Route::Side;
+        default: return teq::Route::Stereo;
+    }
+}
+
 static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout, int b)
 {
     using namespace juce;
@@ -47,6 +59,8 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
                                                         StringArray { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1));
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "swept"), 1 }, n + "Swept", false));
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "bypass"), 1 }, n + "Bypass", false));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "route"), 1 }, n + "Route",
+                                                        StringArray { "Stereo", "Left", "Right", "Mid", "Side" }, 0));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()

@@ -65,10 +65,13 @@ namespace
     // Hand-picked per-band palette — vibrant, distinct on the dark bg, warm/cool alternating so
     // adjacent band slots read apart. One colour per band.
     const juce::uint32 kBandColours[tabby::kNumBands] = {
-        0xff5ec8ff, 0xffffb74d, 0xff62d2a2, 0xfff06292, 0xffb388ff, 0xffaed581,
-        0xffff8a65, 0xff4dd0e1, 0xffba68c8, 0xffffd54f, 0xff7986cb, 0xff81c784,
-        0xffe57373, 0xff64b5f6, 0xffdce775, 0xfff48fb1, 0xff4db6ac, 0xffffab40,
-        0xff9575cd, 0xff9ccc65, 0xffff8a80, 0xff4fc3f7, 0xffffd180, 0xff80cbc4
+        // cool / non-orange first so early bands don't clash with the orange composite line
+        0xff5ec8ff, 0xff62d2a2, 0xffb388ff, 0xfff06292, 0xff4dd0e1, 0xff81c784,
+        0xff7986cb, 0xffba68c8, 0xff64b5f6, 0xff4db6ac, 0xfff48fb1, 0xff9575cd,
+        0xffaed581, 0xff4fc3f7, 0xff80cbc4, 0xff9ccc65,
+        // warmer / orange-ish last
+        0xffe57373, 0xffdce775, 0xffff8a80, 0xffffd54f, 0xffffb74d, 0xffff8a65,
+        0xffffab40, 0xffffd180
     };
 }
 
@@ -414,8 +417,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
                 const bool hot = (solo == b) || (solo < 0 && b == selBand);   // soloed or selected -> emphasised
                 const auto col = bandColour (b);
-                if (perBandFill) { g.setColour (col.withAlpha (hot ? 0.14f : 0.06f)); g.fillPath (bf); }
-                g.setColour (col.withAlpha (hot ? 0.95f : 0.55f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.8f : 1.0f));
+                if (perBandFill) { g.setColour (col.withAlpha (hot ? 0.12f : 0.05f)); g.fillPath (bf); }
+                g.setColour (col.withAlpha (hot ? 0.70f : 0.32f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.4f : 0.9f));
             }
     }
 
@@ -438,27 +441,32 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         // boost (above 0 dB) reads warm = orange; cut (below) reads cool = violet. One fill path,
         // clipped to each half. Violet gets more alpha — it's the dimmer of the two brand colours.
         const bool dim = (solo >= 0);   // soloing: pull the composite right back so the band stands out
+        const auto  vio   = tabby::palette::violet();       // fill (both halves): brand violet, gradient
+        const float aZero = dim ? 0.08f : 0.55f;            // densest at the 0 dB line; fades to 0 toward +-24 dB
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (0, 0, (int) w, juce::jmax (0, (int) y0));
-            g.setColour (tabby::palette::orange().withAlpha (dim ? 0.04f : 0.14f));
+            g.setGradientFill (juce::ColourGradient (vio.withAlpha (0.0f),  0.0f, 0.0f,
+                                                     vio.withAlpha (aZero), 0.0f, y0, false));
             g.fillPath (fill);
         }
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (0, (int) y0, (int) w, juce::jmax (0, (int) (h - y0)));
-            g.setColour (tabby::palette::violet().withAlpha (dim ? 0.05f : 0.20f));
+            g.setGradientFill (juce::ColourGradient (vio.withAlpha (0.0f),  0.0f, h,
+                                                     vio.withAlpha (aZero), 0.0f, y0, false));
             g.fillPath (fill);
         }
 
-        // faux-glow: stacked low-alpha wide strokes in lifted violet (NO real blur), then the line
+        // composite curve = brand orange, with a faint orange glow (stacked strokes, no real blur)
+        const auto orng = tabby::palette::orange();
         if (! dim)
         {
-            g.setColour (tabby::palette::violetLo().withAlpha (0.10f)); g.strokePath (line, juce::PathStrokeType (6.0f));
-            g.setColour (tabby::palette::violetLo().withAlpha (0.20f)); g.strokePath (line, juce::PathStrokeType (3.0f));
+            g.setColour (orng.withAlpha (0.12f)); g.strokePath (line, juce::PathStrokeType (5.0f));
+            g.setColour (orng.withAlpha (0.22f)); g.strokePath (line, juce::PathStrokeType (2.5f));
         }
-        g.setColour (tabby::palette::line().withAlpha (dim ? 0.22f : 1.0f));
-        g.strokePath (line, juce::PathStrokeType (1.6f));
+        g.setColour (dim ? orng.withAlpha (0.30f) : orng);
+        g.strokePath (line, juce::PathStrokeType (1.8f));
     }
 
     // --- hover halo on the node under the cursor --------------------------
@@ -494,6 +502,17 @@ void EqCurveDisplay::paint (juce::Graphics& g)
                 g.setColour (juce::Colours::black.withAlpha (0.5f)); g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.0f);
                 g.setColour (juce::Colours::white); g.setFont (10.0f);
                 g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
+            }
+
+            if (paramCache[b].route != teq::Route::Stereo)   // tiny M/S/L/R badge above-right of the node
+            {
+                const auto rt = paramCache[b].route;
+                const char* s = rt == teq::Route::Left ? "L" : rt == teq::Route::Right ? "R"
+                              : rt == teq::Route::Mid  ? "M" : "S";
+                const juce::Rectangle<float> badge (pos.x + 2.0f, pos.y - kNodeR - 11.0f, 12.0f, 11.0f);
+                g.setColour (tabby::palette::orange().withAlpha (paramCache[b].bypass ? 0.5f : 0.95f));
+                g.setFont (juce::Font (juce::FontOptions (9.5f).withStyle ("Bold")));
+                g.drawText (s, badge, juce::Justification::centred);
             }
         }
 
@@ -543,7 +562,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at)
+void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex)
 {
     refreshDesigns();
     for (int b = 0; b < tabby::kNumBands; ++b)
@@ -555,11 +574,49 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at)
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass || ft == teq::FilterType::LowPass) ? 0.707 : 1.0);
+            if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);
             selectBand (b);
             return;
         }
+}
+
+void EqCurveDisplay::smartAdd (juce::Point<float> at)
+{
+    refreshDesigns();
+    const double f = xToFreq (at.x);
+    int active = 0; bool hasHP = false, hasLP = false;
+    double minAll = 1.0e9, maxAll = -1.0e9, minTon = 1.0e9, maxTon = -1.0e9;   // Ton = non HP/LP bands
+    for (int b = 0; b < tabby::kNumBands; ++b)
+        if (paramCache[b].on)
+        {
+            ++active;
+            const auto t = paramCache[b].type;
+            hasHP = hasHP || t == teq::FilterType::HighPass;
+            hasLP = hasLP || t == teq::FilterType::LowPass;
+            minAll = juce::jmin (minAll, paramCache[b].freq);
+            maxAll = juce::jmax (maxAll, paramCache[b].freq);
+            if (t != teq::FilterType::HighPass && t != teq::FilterType::LowPass)
+            { minTon = juce::jmin (minTon, paramCache[b].freq); maxTon = juce::jmax (maxTon, paramCache[b].freq); }
+        }
+
+    // Edge zones of the (log) frequency axis — used when there's nothing to compare against yet.
+    const double frac     = std::log (f / kFreqMin) / std::log (kFreqMax / kFreqMin);   // 0 (20 Hz) .. 1 (20 kHz)
+    const bool   lowZone  = frac <= 0.20;
+    const bool   highZone = frac >= 0.80;
+
+    if (active == 0)                             // the very first point: edge -> cut filter, else Bell
+    {
+        if (lowZone)  { addBandOfType (3, at, 2); return; }   // far left  -> HPF 24
+        if (highZone) { addBandOfType (4, at, 1); return; }   // far right -> LPF 12
+        addBandOfType (0, at); return;                        // middle    -> Bell
+    }
+    if (! hasHP && (f <= minAll || lowZone))     { addBandOfType (3, at, 2); return; }                       // leftmost / low edge  -> HPF 24
+    if (! hasLP && (f >= maxAll || highZone))    { addBandOfType (4, at, 1); return; }                       // rightmost / high edge -> LPF 12
+    if (hasHP && minTon < 1.0e8 && f <= minTon)  { addBandOfType (1, { at.x, dbToY (2.0) }); return; }       // low-end inside  -> Low Shelf +2
+    if (hasLP && maxTon > -1.0e8 && f >= maxTon) { addBandOfType (2, { at.x, dbToY (2.0) }); return; }       // high-end inside -> High Shelf +2
+    addBandOfType (0, at);                                                                                   // middle -> Bell
 }
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
@@ -625,7 +682,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     const auto addBtn = addButtonAt();
     if (addBtn.x >= 0.0f && e.position.getDistanceFrom (addBtn) < kNodeR + 6.0f)
     {
-        addBandOfType (0, { addBtn.x, dbToY (0.0) });
+        smartAdd ({ addBtn.x, dbToY (0.0) });
         return;
     }
 
@@ -718,7 +775,7 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
         selectBand (b);
     }
     else
-        addBandOfType (0, e.position);                            // empty -> add a Bell
+        smartAdd (e.position);                                   // empty -> add (edge -> HP/LP, else Bell)
 }
 
 void EqCurveDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

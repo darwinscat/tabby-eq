@@ -45,6 +45,15 @@ public:
     void setSoloBand (int b) noexcept { soloBand.store (b, std::memory_order_relaxed); }   // -1 = no solo
     int  getSoloBand() const noexcept { return soloBand.load (std::memory_order_relaxed); }
 
+    // IN/OUT level meters for the editor. The audio thread accumulates the peak |sample| since the
+    // last UI read (read-and-reset); clip is sticky until the UI clears it. All lock-free.
+    float readInPeak()  noexcept { return inPeak.exchange  (0.0f, std::memory_order_relaxed); }
+    float readOutPeak() noexcept { return outPeak.exchange (0.0f, std::memory_order_relaxed); }
+    bool  inClipped()   const noexcept { return inClip.load  (std::memory_order_relaxed); }
+    bool  outClipped()  const noexcept { return outClip.load (std::memory_order_relaxed); }
+    void  clearInClip()  noexcept { inClip.store  (false, std::memory_order_relaxed); }
+    void  clearOutClip() noexcept { outClip.store (false, std::memory_order_relaxed); }
+
     const juce::String getName() const override { return JucePlugin_Name; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
@@ -68,7 +77,7 @@ private:
 
     struct BandPtrs
     {
-        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{}, *bypass{};
+        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{}, *bypass{}, *route{};
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;
@@ -76,6 +85,9 @@ private:
     std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
     teq::Svf         soloFilter;                                    // band-listen band-pass (solo)
     std::atomic<int> soloBand { -1 };                               // soloed band index, or -1
+
+    std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
+    std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
 
     static constexpr int kStateVersion = 1;
 

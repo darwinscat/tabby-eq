@@ -8,11 +8,20 @@
 namespace
 {
     const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+    const char* kRouteNames[5] = { "Stereo", "Left", "Right", "Mid", "Side" };
+    const char* kRouteShort[5] = { "ST", "L", "R", "M", "S" };   // compact label on the button
 
     int typeIndexOf (TabbyEqAudioProcessor& proc, int band)
     {
         if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "type"))))
             return juce::jlimit (0, 8, prm->getIndex());
+        return 0;
+    }
+
+    int routeIndexOf (TabbyEqAudioProcessor& proc, int band)
+    {
+        if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "route"))))
+            return juce::jlimit (0, 4, prm->getIndex());
         return 0;
     }
 }
@@ -46,6 +55,11 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     typeButton.setColour (juce::TextButton::textColourOffId,  tabby::palette::text());
     typeButton.onClick = [this] { showTypeMenu(); };
     addAndMakeVisible (typeButton);
+
+    // Route: Stereo / L / R / Mid / Side — a compact button opening a menu (stereo-only; honest param).
+    routeButton.setColour (juce::TextButton::buttonColourId, tabby::palette::panel().brighter (0.18f));
+    routeButton.onClick = [this] { showRouteMenu(); };
+    addAndMakeVisible (routeButton);
 
     const char* slopes[] = { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
     for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
@@ -82,9 +96,14 @@ void BandEditStrip::setBand (int band)
     const bool has = curBand >= 0;
 
     title.setText (has ? "BAND " + juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &slopeBox, &freq, &q, &gain };
+    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &routeButton, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
     typeButton.setButtonText (has ? kTypeNames[typeIndexOf (proc, curBand)] : juce::String ("—"));
+
+    const int rIdx = has ? routeIndexOf (proc, curBand) : 0;
+    routeButton.setButtonText (has ? kRouteShort[rIdx] : juce::String ("—"));
+    routeButton.setColour (juce::TextButton::textColourOffId,
+                           (has && rIdx != 0) ? tabby::palette::orange() : tabby::palette::text());
 
     const bool byp = has && proc.apvts.getRawParameterValue (tabby::bandId (curBand, "bypass"))->load() > 0.5f;
     onButton.setToggleState (has && ! byp, juce::dontSendNotification);   // "On" reflects enabled (= not bypassed)
@@ -136,6 +155,28 @@ void BandEditStrip::showTypeMenu()
                      });
 }
 
+void BandEditStrip::showRouteMenu()
+{
+    if (curBand < 0) return;
+    const int cur = routeIndexOf (proc, curBand);
+
+    juce::PopupMenu m;
+    for (int i = 0; i < 5; ++i) m.addItem (i + 1, kRouteNames[i], true, i == cur);
+
+    juce::Component::SafePointer<BandEditStrip> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (routeButton),
+                     [safe] (int r)
+                     {
+                         if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
+                         if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "route")))
+                             prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
+                         safe->routeButton.setButtonText (kRouteShort[r - 1]);
+                         safe->routeButton.setColour (juce::TextButton::textColourOffId,
+                                                      r - 1 != 0 ? tabby::palette::orange() : tabby::palette::text());
+                         safe->routeButton.repaint();
+                     });
+}
+
 void BandEditStrip::updateForType()
 {
     if (curBand < 0) { slopeBox.setVisible (false); return; }
@@ -165,6 +206,8 @@ void BandEditStrip::resized()
     onButton.setBounds (r.removeFromLeft (42).withSizeKeepingCentre (42, 24));
     r.removeFromLeft (4);
     soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
+    r.removeFromLeft (8);
+    routeButton.setBounds (r.removeFromLeft (44).withSizeKeepingCentre (44, 24));
     r.removeFromLeft (8);
     typeButton.setBounds (r.removeFromLeft (116).withSizeKeepingCentre (116, 24));
     r.removeFromLeft (10);

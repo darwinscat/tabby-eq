@@ -33,8 +33,8 @@ optional accelerator on top, riding the same real, automatable parameters a huma
 - Types: bell, low/high shelf, HP, LP, BP **+ notch, all-pass, tilt**.
 - Variable HP/LP slopes **6 / 12 / 24 / 36 / 48** (72/96 later) — stack matched sections.
 - Per-band **on, solo/listen**.
-- **M/S · L/R per band** (standard; lowest priority — may slip past first cut).
-- In/out metering. Output trim (done).
+- **M/S · L/R per band** (delta-fold in L/R; stereo-only) — done.
+- In/out metering + output trim — done.
 
 **Control / UX**
 - **Selected-band edit strip** — type / freq / Q / gain / slope, numeric + keyboard entry; live
@@ -122,11 +122,13 @@ peak-hold + 4.5 dB/oct pink tilt + peak-detail; Neutron/FabFilter-ish) · Q-whis
 log-linear-calibrated, side-clamped) · "+"-on-curve add + node hover-halo · notch / all-pass / tilt ·
 variable HP/LP slopes 6–96 dB/oct (Butterworth cascade) · per-band solo (band-listen) · premium
 vignette + 0 dB glow · analyzer pre/post toggle · HP/LP whisker steps the discrete slope ·
-filter-type shape icons. (227 engine checks; all four Mac formats build + AU passes auval.)
+filter-type shape icons · **per-band bypass + ghost node** (used-vs-bypassed flag; bypassed nodes
+stay clickable, not deleted) · per-band colours + ghost curves · long-press-to-solo · View toggles ·
+**IN/OUT level meters** (peak-hold + sticky clip, violet→orange, click to reset) + vertical output
+fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-only; node M/S/L/R badge).
+(235 engine checks; all four Mac formats build + AU passes auval.)
 
 **Deferred — need a decision / live feedback:**
-- **Node on/off + ghost** — needs a band "used vs bypassed" flag (distinct from `on=false` = free
-  slot), part of the reserved band-provenance schema, so we don't ghost all 24 empty slots.
 - **Floating point-toolbar** (Neutron-style) — a mini panel by the node holding ALL point info +
   control (type-icon + on/off + solo + close + dropdown + freq/gain/Q/note). The bottom strip then
   goes away and the bottom is **reserved for the Helper**. Big UI move — do with live feedback.

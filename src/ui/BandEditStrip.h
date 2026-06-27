@@ -33,6 +33,7 @@ private:
     void rebind();                           // (re)create attachments for the current band
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
+    void showRouteMenu();                    // popup Stereo/L/R/M/S -> sets the route param
 
     TabbyEqAudioProcessor& proc;
     int curBand = -1;
@@ -41,6 +42,7 @@ private:
     juce::ToggleButton onButton { "On" };
     juce::TextButton   soloButton { "S" };
     juce::TextButton   typeButton;
+    juce::TextButton   routeButton;
     juce::ComboBox     slopeBox;
     juce::Slider       freq, q, gain;
     juce::Label        freqCap, qCap, gainCap;
