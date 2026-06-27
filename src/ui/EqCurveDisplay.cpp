@@ -392,23 +392,30 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
     }
 
-    // --- per-band response curves (faint, each in its own colour); soloing -> only that band -----
+    // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the
+    //     selected band's own curve is lifted ------------------------------------------------------
     if (perBandCurves || solo >= 0)
     {
         constexpr int pts = 240;
+        const float y0 = dbToY (0.0);
         for (int b = 0; b < tabby::kNumBands; ++b)
             if (paramCache[b].on && ! paramCache[b].bypass && (solo < 0 || solo == b))
             {
-                juce::Path bc;
+                juce::Path bc, bf;
+                bf.startNewSubPath (0.0f, y0);
                 for (int i = 0; i <= pts; ++i)
                 {
                     const float x = (float) i / (float) pts * w;
                     const float y = dbToY (bandDb (b, xToFreq (x)));
                     if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
+                    bf.lineTo (x, y);
                 }
-                const bool hot = (solo == b);
-                g.setColour (bandColour (b).withAlpha (hot ? 0.95f : 0.5f));
-                g.strokePath (bc, juce::PathStrokeType (hot ? 1.8f : 1.0f));
+                bf.lineTo (w, y0); bf.closeSubPath();
+
+                const bool hot = (solo == b) || (solo < 0 && b == selBand);   // soloed or selected -> emphasised
+                const auto col = bandColour (b);
+                g.setColour (col.withAlpha (hot ? 0.14f : 0.06f)); g.fillPath (bf);
+                g.setColour (col.withAlpha (hot ? 0.95f : 0.55f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.8f : 1.0f));
             }
     }
 
