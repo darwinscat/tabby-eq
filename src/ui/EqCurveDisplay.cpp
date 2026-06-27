@@ -955,11 +955,11 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
                 addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // freq from X, default gain
         }
         placing = false; placeMoved = false; repaint();
-        positionToolbar();
-        return;
+        return;   // the new band's selectBand() already placed the toolbar
     }
     endDragGesture();
-    positionToolbar();   // after a node drag ends, the toolbar may re-snap to the node (not during)
+    // No reposition on drag-end: the toolbar stays put through any drag; it only moves when the
+    // SELECTION changes (click / < > / add). Editing FREQ/Q/GAIN never nudges it.
 }
 
 bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
