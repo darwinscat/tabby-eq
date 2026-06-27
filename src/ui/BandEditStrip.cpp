@@ -79,8 +79,20 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     freq.onDragEnd = [this] { if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
     gain.onDragEnd = [this] { if (onEdited) onEdited(); };
 
+    setAlpha (0.55f);                 // translucent by default; opaque while the mouse is over / editing
+    addMouseListener (this, true);    // also receive child mouse events for the hover-opacity logic
+
     setBand (-1);
 }
+
+void BandEditStrip::updateOpacity()
+{
+    setAlpha (isMouseOverOrDragging (true) ? 1.0f : 0.55f);
+}
+
+void BandEditStrip::mouseEnter (const juce::MouseEvent&) { updateOpacity(); }
+void BandEditStrip::mouseExit  (const juce::MouseEvent&) { updateOpacity(); }
+void BandEditStrip::mouseUp    (const juce::MouseEvent&) { updateOpacity(); }
 
 BandEditStrip::~BandEditStrip() { proc.setSoloBand (-1); }   // never leave audio stuck in solo
 

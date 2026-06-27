@@ -91,6 +91,9 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseEnter (const juce::MouseEvent&) override;   // opaque on hover / edit, translucent otherwise
+    void mouseExit  (const juce::MouseEvent&) override;
+    void mouseUp    (const juce::MouseEvent&) override;
 
 private:
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -98,6 +101,7 @@ private:
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     void rebind();                           // (re)create attachments for the current band
+    void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
     void showRouteMenu();                    // popup Stereo/L/R/M/S -> sets the route param
