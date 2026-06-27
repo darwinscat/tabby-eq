@@ -47,13 +47,18 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
 
     NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);   // matches the canvas range
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "freq"), 1 }, n + "Freq",
-                                                        freqRange, 1000.0f, AudioParameterFloatAttributes().withLabel ("Hz")));
+                                                        freqRange, 1000.0f,
+                                                        AudioParameterFloatAttributes().withLabel ("Hz")
+                                                            .withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)); })));
 
     NormalisableRange<float> qRange (0.05f, 40.0f); qRange.setSkewForCentre (1.0f);
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f));
+    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f,
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1); })));
 
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "gain"), 1 }, n + "Gain",
-                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));   // matches the canvas ±24
+                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,   // matches the canvas ±24
+                                                        AudioParameterFloatAttributes().withLabel ("dB")
+                                                            .withStringFromValueFunction ([] (float v, int) { return juce::String (v, 1); })));
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "slope"), 1 }, n + "Slope",
                                                         StringArray { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1));

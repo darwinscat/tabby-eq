@@ -31,16 +31,14 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     title.setText ("—", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (13.0f).withStyle ("Bold")));
     title.setColour (juce::Label::textColourId, tabby::palette::text());
-    title.setJustificationType (juce::Justification::centredLeft);
+    title.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (title);
 
-    onButton.setColour (juce::ToggleButton::tickColourId, tabby::palette::violet());
-    onButton.setClickingTogglesState (true);
     onButton.onClick = [this]
     {
         if (curBand < 0) return;
         if (auto* prm = proc.apvts.getParameter (tabby::bandId (curBand, "bypass")))
-            prm->setValueNotifyingHost (onButton.getToggleState() ? 0.0f : 1.0f);   // "On" ticked = enabled = not bypassed
+            prm->setValueNotifyingHost (onButton.getToggleState() ? 0.0f : 1.0f);   // lit = enabled = not bypassed
     };
     addAndMakeVisible (onButton);
 
@@ -51,8 +49,6 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
 
     // Type: a button (showing the current type) that opens a menu whose items carry shape icons —
     // a plain ComboBox can't render per-item images, so we drive the menu ourselves.
-    typeButton.setColour (juce::TextButton::buttonColourId,   tabby::palette::panel().brighter (0.18f));
-    typeButton.setColour (juce::TextButton::textColourOffId,  tabby::palette::text());
     typeButton.onClick = [this] { showTypeMenu(); };
     addAndMakeVisible (typeButton);
 
@@ -61,29 +57,32 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     routeButton.onClick = [this] { showRouteMenu(); };
     addAndMakeVisible (routeButton);
 
+    prevButton.onClick = [this] { if (onStep) onStep (-1); };   // editor maps these to display.stepSelection
+    nextButton.onClick = [this] { if (onStep) onStep (+1); };
+    addAndMakeVisible (prevButton);
+    addAndMakeVisible (nextButton);
+
     const char* slopes[] = { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
     for (int i = 0; i < 7; ++i) slopeBox.addItem (slopes[i], i + 1);
     addAndMakeVisible (slopeBox);
 
-    auto setupField = [this] (juce::Slider& s, juce::Label& cap, const juce::String& capText,
-                              const juce::String& suffix, int decimals)
+    auto setupField = [this] (juce::Slider& s, juce::Label& unit, const juce::String& unitText)
     {
-        s.setSliderStyle (juce::Slider::LinearBar);          // shows the value; double-click to type
-        s.setTextValueSuffix (suffix);
-        s.setNumDecimalPlacesToDisplay (decimals);
+        s.setSliderStyle (juce::Slider::LinearBar);          // value inside the bar; double-click types the NUMBER only
         s.setColour (juce::Slider::trackColourId,       tabby::palette::violet().withAlpha (0.45f));
         s.setColour (juce::Slider::textBoxTextColourId, tabby::palette::text());
         addAndMakeVisible (s);
 
-        cap.setText (capText, juce::dontSendNotification);
-        cap.setFont (juce::Font (juce::FontOptions (10.0f)));
-        cap.setColour (juce::Label::textColourId, tabby::palette::textDim());
-        cap.setJustificationType (juce::Justification::centredLeft);
-        addAndMakeVisible (cap);
+        unit.setText (unitText, juce::dontSendNotification);   // static unit beside the bar (not editable)
+        unit.setFont (juce::Font (juce::FontOptions (10.0f)));
+        unit.setColour (juce::Label::textColourId, tabby::palette::textDim());
+        unit.setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (unit);
     };
-    setupField (freq, freqCap, "FREQ", " Hz", 0);
-    setupField (q,    qCap,    "Q",    "",    2);
-    setupField (gain, gainCap, "GAIN", " dB", 1);
+    setupField (freq, freqCap, "Hz");
+    setupField (q,    qCap,    "");
+    setupField (gain, gainCap, "dB");
+    qCap.setVisible (false);   // Q has no unit
 
     setBand (-1);
 }
@@ -95,10 +94,10 @@ void BandEditStrip::setBand (int band)
     curBand = band;
     const bool has = curBand >= 0;
 
-    title.setText (has ? "BAND " + juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &routeButton, &slopeBox, &freq, &q, &gain };
+    title.setText (has ? juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
+    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &routeButton, &prevButton, &nextButton, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
-    typeButton.setButtonText (has ? kTypeNames[typeIndexOf (proc, curBand)] : juce::String ("—"));
+    typeButton.setType (tabby::filterTypeFromChoice (has ? typeIndexOf (proc, curBand) : 0));
 
     const int rIdx = has ? routeIndexOf (proc, curBand) : 0;
     routeButton.setButtonText (has ? kRouteShort[rIdx] : juce::String ("—"));
@@ -150,7 +149,7 @@ void BandEditStrip::showTypeMenu()
                          if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
                          if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "type")))
                              prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
-                         safe->typeButton.setButtonText (kTypeNames[r - 1]);
+                         safe->typeButton.setType (tabby::filterTypeFromChoice (r - 1));
                          safe->updateForType();
                      });
 }
@@ -194,33 +193,44 @@ void BandEditStrip::updateForType()
 
 void BandEditStrip::paint (juce::Graphics& g)
 {
+    auto rr = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (tabby::palette::panel());
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    g.fillRoundedRectangle (rr, 8.0f);
+    g.setColour (tabby::palette::violetLo().withAlpha (0.35f));        // floating-panel rim
+    g.drawRoundedRectangle (rr, 8.0f, 1.0f);
 }
 
 void BandEditStrip::resized()
 {
-    auto r = getLocalBounds().reduced (8, 5);
-    title.setBounds (r.removeFromLeft (62));
-    r.removeFromLeft (6);
-    onButton.setBounds (r.removeFromLeft (42).withSizeKeepingCentre (42, 24));
-    r.removeFromLeft (4);
-    soloButton.setBounds (r.removeFromLeft (28).withSizeKeepingCentre (28, 24));
-    r.removeFromLeft (8);
-    routeButton.setBounds (r.removeFromLeft (44).withSizeKeepingCentre (44, 24));
-    r.removeFromLeft (8);
-    typeButton.setBounds (r.removeFromLeft (116).withSizeKeepingCentre (116, 24));
-    r.removeFromLeft (10);
+    auto r = getLocalBounds().reduced (8, 6);
 
-    auto field = [&r] (juce::Label& cap, juce::Slider& s, int w)
+    // top row: power · < index > · type-icon · solo · route
+    auto top = r.removeFromTop (22);
+    r.removeFromTop (8);
+    onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
+    top.removeFromLeft (6);
+    prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
+    title.setBounds (top.removeFromLeft (18));
+    nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
+    top.removeFromLeft (8);
+    typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
+    top.removeFromLeft (8);
+    soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
+    top.removeFromLeft (6);
+    routeButton.setBounds (top.removeFromLeft (36).withSizeKeepingCentre (36, 22));
+
+    // bottom row (one line, no captions): freq Hz · q · (gain dB OR slope for HP/LP)
+    auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
+    if (slopeBox.isVisible())
+        slopeBox.setBounds (row.removeFromRight (76).withSizeKeepingCentre (76, 22));
+    else
     {
-        auto col = r.removeFromLeft (w);
-        cap.setBounds (col.removeFromTop (12));
-        s.setBounds   (col.reduced (0, 1));
-        r.removeFromLeft (8);
-    };
-    field (freqCap, freq, 90);
-    field (qCap,    q,    64);
-    field (gainCap, gain, 80);
-    slopeBox.setBounds (r.removeFromLeft (96).withSizeKeepingCentre (96, 24));
+        gainCap.setBounds (row.removeFromRight (16));
+        gain.setBounds    (row.removeFromRight (46));
+    }
+    row.removeFromRight (8);
+    freq.setBounds    (row.removeFromLeft (50));
+    freqCap.setBounds (row.removeFromLeft (16));
+    row.removeFromLeft (8);
+    q.setBounds       (row.removeFromLeft (42));
 }

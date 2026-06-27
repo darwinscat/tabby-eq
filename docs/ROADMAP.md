@@ -128,10 +128,14 @@ stay clickable, not deleted) · per-band colours + ghost curves · long-press-to
 fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-only; node M/S/L/R badge) ·
 **resonant shelf-Q** (matched, Pro-Q-style overshoot/dip; exact mirror ±G; stable to Nyquist) ·
 **add-band UX** (3×2 grid defaults, ghost preview, press-drag-to-place, Alt drag-audition w/ spotlight
-or bell + Listen Q). (591 engine checks; all four Mac formats build + AU passes auval.)
+or bell + Listen Q) · **floating per-band toolbar** (Neutron-style: power-enable, ‹ › prev/next,
+icon-only type, solo, route, freq/Q/gain inline, right-click delete; semi-transparent, tracks the
+node; the bottom is now **reserved for the Helper**). (591 engine checks; all four Mac formats build
++ AU passes auval.)
 
 **Deferred — need a decision / live feedback:**
-- **Floating point-toolbar** (Neutron-style) — a mini panel by the node holding ALL point info +
-  control (type-icon + on/off + solo + close + dropdown + freq/gain/Q/note). The bottom strip then
-  goes away and the bottom is **reserved for the Helper**. Big UI move — do with live feedback.
-  *(Current bottom strip + the type-shape icon are interim, to be folded into this toolbar.)*
+- **Per-band Stereo↔M/S dual-mode** (next) — one node with two modes: `ST` (as today) and `M/S`,
+  where Mid and Side each get their OWN type/freq/Q/gain (and later dynamics), edited via two tabs
+  on the floating toolbar. Supersedes the current per-band Left/Right/Mid/Side *routing* selector
+  (keep routing too). Needs a schema decision (a band carries a Mid sub-band + a Side sub-band).
+- **Multi-select / modifier-drag** of nodes — iterate.

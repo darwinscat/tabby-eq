@@ -23,6 +23,12 @@ public:
     ~EqCurveDisplay() override;
 
     void paint (juce::Graphics&) override;
+    void resized() override;
+
+    // The floating per-band toolbar (owned by the editor) is parented here so it overlays the canvas
+    // and tracks the selected node. Pass nullptr to detach.
+    void setToolbar (juce::Component* t) noexcept;
+    void stepSelection (int dir);   // select the prev/next active band (frequency order, wraps)
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;
@@ -88,6 +94,7 @@ private:
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
     void   selectBand (int newSel);                  // update selection + fire onBandSelected
+    void   positionToolbar();                        // float the toolbar near the selected node
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
@@ -138,6 +145,9 @@ private:
     float audQSetting = 6.0f;                         // configurable audition Q (View option)
     enum class AudVisual { Spotlight, Bell };
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
+    juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
+    static constexpr int kToolbarW = 220, kToolbarH = 64;
+
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
     bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)

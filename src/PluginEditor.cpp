@@ -14,8 +14,10 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     addAndMakeVisible (display);
 
-    addAndMakeVisible (strip);
-    display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the strip
+    display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
+    display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the toolbar
+    strip.onStep = [this] (int d) { display.stepSelection (d); };     // < / > step to the prev / next band
+    strip.setAlpha (0.88f);                                           // semi-transparent floating panel
 
     // OUT rail trim — a minimalist vertical fader; double-click returns to 0 dB.
     output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 40, 14);
@@ -69,7 +71,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
 
     setResizable (true, true);
-    setResizeLimits (640, 360, 1600, 1000);
+    setResizeLimits (640, 360, 3840, 2400);   // allow maximise / fullscreen on large displays
     setSize (860, 500);
 }
 
@@ -139,7 +141,8 @@ void TabbyEqEditor::resized()
     viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
 
-    strip.setBounds (r.removeFromBottom (52).reduced (8, 4));
+    // (The per-band editor is now a floating toolbar parented in the display; the bottom area
+    //  it used to occupy is reserved for the upcoming Helper.)
 
     // IN / OUT rails flank the graph; the OUT rail also holds the output trim fader.
     auto leftRail  = r.removeFromLeft (30);

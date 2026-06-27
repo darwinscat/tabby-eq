@@ -252,7 +252,53 @@ void EqCurveDisplay::selectBand (int newSel)
 {
     if (newSel == selBand) return;
     selBand = newSel;
-    if (onBandSelected) onBandSelected (selBand);
+    if (onBandSelected) onBandSelected (selBand);   // updates the toolbar's controls first
+    positionToolbar();                               // then place it near the new node
+}
+
+void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
+{
+    toolbar = t;
+    if (t != nullptr) addChildComponent (t);         // hidden until a band is selected
+}
+
+void EqCurveDisplay::positionToolbar()
+{
+    if (toolbar == nullptr) return;
+    const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
+    if (! show) { toolbar->setVisible (false); return; }
+
+    const auto pos = nodePos (selBand);
+    int tx = (int) (pos.x - kToolbarW * 0.5f);
+    int ty = (int) (pos.y - kNodeR - 12.0f - kToolbarH);              // above the node...
+    if (ty < 2) ty = (int) (pos.y + kNodeR + 12.0f);                  // ...or below if no room
+    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
+    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+
+    const juce::Rectangle<int> b (tx, ty, kToolbarW, kToolbarH);
+    if (toolbar->getBounds() != b) toolbar->setBounds (b);
+    if (! toolbar->isVisible()) toolbar->setVisible (true);
+    toolbar->toFront (false);
+}
+
+void EqCurveDisplay::resized() { positionToolbar(); }
+
+void EqCurveDisplay::stepSelection (int dir)
+{
+    refreshDesigns();
+    int idx[tabby::kNumBands]; int n = 0;
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) idx[n++] = b;
+    if (n == 0) return;
+    for (int i = 1; i < n; ++i)                       // insertion sort by frequency (n <= 24)
+    {
+        const int k = idx[i]; int j = i - 1;
+        while (j >= 0 && paramCache[idx[j]].freq > paramCache[k].freq) { idx[j + 1] = idx[j]; --j; }
+        idx[j + 1] = k;
+    }
+    int cur = -1;
+    for (int i = 0; i < n; ++i) if (idx[i] == selBand) { cur = i; break; }
+    const int next = (cur < 0) ? (dir > 0 ? 0 : n - 1) : (((cur + dir) % n) + n) % n;
+    selectBand (idx[next]);
 }
 
 juce::String EqCurveDisplay::readoutText (int b) const
@@ -265,7 +311,7 @@ juce::String EqCurveDisplay::readoutText (int b) const
         s << "   " << (p.gainDb >= 0.0 ? "+" : "") << juce::String (p.gainDb, 1) << " dB";
     const bool showsQ = p.type != teq::FilterType::Tilt;                                 // tilt ignores Q (shelves now resonant)
     if (showsQ)
-        s << "   Q " << juce::String (p.Q, 2);
+        s << "   Q " << juce::String (p.Q, 1);
     return s;
 }
 
@@ -350,6 +396,7 @@ void EqCurveDisplay::timerCallback()
         proc.setSoloBand (pressBand);
     }
     pushSpectrum();
+    positionToolbar();   // keep it glued to the node while it (or the curve) moves
     repaint();
 }
 
