@@ -29,6 +29,7 @@ public:
     // and tracks the selected node. Pass nullptr to detach.
     void setToolbar (juce::Component* t) noexcept;
     void stepSelection (int dir);   // select the prev/next active band (frequency order, wraps)
+    void clearSelection();          // deselect (hides the floating toolbar)
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;

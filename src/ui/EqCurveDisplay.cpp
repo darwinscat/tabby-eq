@@ -265,6 +265,7 @@ void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
 void EqCurveDisplay::positionToolbar()
 {
     if (toolbar == nullptr) return;
+    refreshDesigns();   // ensure the cache reflects a just-added/just-toggled band before we test it
     const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
     if (! show) { toolbar->setVisible (false); return; }
 
@@ -282,6 +283,8 @@ void EqCurveDisplay::positionToolbar()
 }
 
 void EqCurveDisplay::resized() { positionToolbar(); }
+
+void EqCurveDisplay::clearSelection() { selectBand (-1); }
 
 void EqCurveDisplay::stepSelection (int dir)
 {
@@ -952,9 +955,11 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
                 addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // freq from X, default gain
         }
         placing = false; placeMoved = false; repaint();
+        positionToolbar();
         return;
     }
     endDragGesture();
+    positionToolbar();   // after a node drag ends, the toolbar may re-snap to the node (not during)
 }
 
 bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)

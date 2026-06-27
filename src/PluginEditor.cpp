@@ -124,7 +124,7 @@ void TabbyEqEditor::resetAll()
     for (auto* p : proc.getParameters())          // every band param + output back to its default
         p->setValueNotifyingHost (p->getDefaultValue());
     proc.setSoloBand (-1);                         // clear any solo
-    strip.setBand (-1);                            // clear the inspector selection
+    display.clearSelection();                       // deselect + hide the floating toolbar
 }
 
 void TabbyEqEditor::paint (juce::Graphics& g)
