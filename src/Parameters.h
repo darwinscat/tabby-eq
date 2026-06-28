@@ -24,7 +24,4 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 // APVTS "type" choice index -> teq::FilterType (choice order: Bell/LowShelf/HighShelf/HP/LP/BP).
 teq::FilterType filterTypeFromChoice (int idx) noexcept;
 
-// APVTS "route" choice index -> teq::Route (choice order: Stereo/Left/Right/Mid/Side).
-teq::Route routeFromChoice (int idx) noexcept;
-
 } // namespace tabby

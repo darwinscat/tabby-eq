@@ -565,16 +565,6 @@ void EqCurveDisplay::paint (juce::Graphics& g)
                 g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
             }
 
-            if (paramCache[b].route != teq::Route::Stereo)   // tiny M/S/L/R badge above-right of the node
-            {
-                const auto rt = paramCache[b].route;
-                const char* s = rt == teq::Route::Left ? "L" : rt == teq::Route::Right ? "R"
-                              : rt == teq::Route::Mid  ? "M" : "S";
-                const juce::Rectangle<float> badge (pos.x + 2.0f, pos.y - kNodeR - 11.0f, 12.0f, 11.0f);
-                g.setColour (tabby::palette::orange().withAlpha (paramCache[b].bypass ? 0.5f : 0.95f));
-                g.setFont (juce::Font (juce::FontOptions (9.5f).withStyle ("Bold")));
-                g.drawText (s, badge, juce::Justification::centred);
-            }
         }
 
     // --- selection highlight + live value bubble --------------------------

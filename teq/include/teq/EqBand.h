@@ -227,44 +227,11 @@ public:
             return x;
         };
 
-        // Per-band stereo routing is only meaningful for a 2-channel signal; mono and
-        // surround/ambisonic layouts always run the plain per-channel path. M/S folds the *delta* of
-        // the filtered Mid (or Side) back into L/R, so an M/S band composes in series with Stereo and
-        // L/R bands without any global M/S encode/decode.
-        if (nc == 2 && p.route != Route::Stereo)
+        // Stereo / mono / surround: the Mid/main lane runs per channel (M/S is handled above).
+        for (int c = 0; c < nc; ++c)
         {
-            float* L = channels[0];
-            float* R = channels[1];
-            switch (p.route)
-            {
-                case Route::Left:  for (int n = 0; n < numSamples; ++n) L[n] = filt (0, L[n]); break;
-                case Route::Right: for (int n = 0; n < numSamples; ++n) R[n] = filt (1, R[n]); break;
-                case Route::Mid:
-                    for (int n = 0; n < numSamples; ++n)
-                    {
-                        const float m = 0.5f * (L[n] + R[n]);
-                        const float d = filt (0, m) - m;     // L=M+S, R=M-S  => both shift by dMid
-                        L[n] += d; R[n] += d;
-                    }
-                    break;
-                case Route::Side:
-                    for (int n = 0; n < numSamples; ++n)
-                    {
-                        const float s = 0.5f * (L[n] - R[n]);
-                        const float d = filt (0, s) - s;     // L=M+S, R=M-S  => opposite shift by dSide
-                        L[n] += d; R[n] -= d;
-                    }
-                    break;
-                case Route::Stereo: break;   // unreachable here — Stereo runs the else-branch
-            }
-        }
-        else
-        {
-            for (int c = 0; c < nc; ++c)
-            {
-                float* d = channels[c];
-                for (int n = 0; n < numSamples; ++n) d[n] = filt (c, d[n]);
-            }
+            float* d = channels[c];
+            for (int n = 0; n < numSamples; ++n) d[n] = filt (c, d[n]);
         }
 
         flushState();   // per-block denormal guard
@@ -300,13 +267,11 @@ private:
 
         // A topology switch (section count changed, swept<->static, route, OR Stereo<->M/S) changes
         // WHICH filters run — clear all state so a re-activated section never resumes a stale tail.
-        if (d.n != designN || dS.n != designNside || p.swept != lastSwept
-            || p.route != lastRoute || p.ms != lastMs) reset();
+        if (d.n != designN || dS.n != designNside || p.swept != lastSwept || p.ms != lastMs) reset();
 
         designN     = d.n;
         designNside = dS.n;
         lastSwept = p.swept;
-        lastRoute = p.route;
         lastMs    = p.ms;
 
         for (int s = 0; s < d.n; ++s) coeffs[s] = d.sec[s];
@@ -335,7 +300,6 @@ private:
     bool   wasActive = false;
     bool   lastSwept = false;
     bool   lastMs = false;
-    Route  lastRoute = Route::Stereo;
 
     Smoother freqS, qS, gainS, sFreqS, sQS, sGainS;
     Biquad   bq[kMaxSections][kMaxChannels];

@@ -30,12 +30,6 @@ enum class FilterType
     Tilt         // spectral tilt about f0: lows -gainDb, highs +gainDb
 };
 
-// Per-band stereo routing. Only meaningful for 2-channel (stereo) audio — mono and
-// surround/ambisonic layouts ignore it (always Stereo). M/S is computed locally per band (filter
-// the derived M or S, fold the delta back into L/R) so it composes with Stereo and L/R bands in
-// series — no global M/S encode/decode pass.
-enum class Route { Stereo, Left, Right, Mid, Side };
-
 // One band's full specification. The plugin adapter maps APVTS params into this; the engine
 // owns no parameter system of its own (stays framework-agnostic).
 struct BandParams
@@ -48,7 +42,6 @@ struct BandParams
     int        slope  = 12;       // HP/LP only: 12 (uses Q) or 24 dB/oct (Butterworth, Q ignored)
     bool       swept  = false;    // true → zero-delay SVF (smooth fast fc sweeps for search mode)
     bool       bypass = false;    // band kept but muted (ghost) — distinct from on=false (removed)
-    Route      route  = Route::Stereo;   // DEPRECATED (removed in M/S phase 1b) — kept so the plugin builds
 
     // M/S dual-mode: the flat fields above are the Mid/main lane; these are the independent Side lane.
     // Only used when ms==true on a 2-channel signal (mono/surround ignore it -> Mid lane only).
@@ -67,7 +60,7 @@ struct BandParams
     {
         auto bits = [] (double d) noexcept { return std::bit_cast<std::uint64_t> (d); };
         return on == o.on && type == o.type && slope == o.slope && swept == o.swept && bypass == o.bypass
-            && route == o.route && ms == o.ms && sOn == o.sOn && sType == o.sType && sSlope == o.sSlope && sBypass == o.sBypass
+            && ms == o.ms && sOn == o.sOn && sType == o.sType && sSlope == o.sSlope && sBypass == o.sBypass
             && bits (freq) == bits (o.freq) && bits (Q) == bits (o.Q) && bits (gainDb) == bits (o.gainDb)
             && bits (sFreq) == bits (o.sFreq) && bits (sQ) == bits (o.sQ) && bits (sGainDb) == bits (o.sGainDb);
     }

@@ -87,7 +87,8 @@ private:
 
     struct BandPtrs
     {
-        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{}, *bypass{}, *route{};
+        std::atomic<float>* on{}, *type{}, *freq{}, *q{}, *gain{}, *slope{}, *swept{}, *bypass{};
+        std::atomic<float>* ms{}, *sOn{}, *sType{}, *sFreq{}, *sQ{}, *sGain{}, *sSlope{}, *sBypass{};   // M/S Side lane
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;
@@ -101,7 +102,7 @@ private:
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
 
-    static constexpr int kStateVersion = 1;
+    static constexpr int kStateVersion = 2;   // v2: route removed, M/S Side lane added (additive)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqAudioProcessor)
 };

@@ -32,7 +32,14 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.slope = apvts.getRawParameterValue (tabby::bandId (b, "slope"));
         p.swept = apvts.getRawParameterValue (tabby::bandId (b, "swept"));
         p.bypass = apvts.getRawParameterValue (tabby::bandId (b, "bypass"));
-        p.route  = apvts.getRawParameterValue (tabby::bandId (b, "route"));
+        p.ms     = apvts.getRawParameterValue (tabby::bandId (b, "ms"));
+        p.sOn    = apvts.getRawParameterValue (tabby::bandId (b, "sOn"));
+        p.sType  = apvts.getRawParameterValue (tabby::bandId (b, "sType"));
+        p.sFreq  = apvts.getRawParameterValue (tabby::bandId (b, "sFreq"));
+        p.sQ     = apvts.getRawParameterValue (tabby::bandId (b, "sQ"));
+        p.sGain  = apvts.getRawParameterValue (tabby::bandId (b, "sGain"));
+        p.sSlope = apvts.getRawParameterValue (tabby::bandId (b, "sSlope"));
+        p.sBypass= apvts.getRawParameterValue (tabby::bandId (b, "sBypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
 }
@@ -168,7 +175,15 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, (int) p.slope->load())];
     bp.swept  = p.swept->load() > 0.5f;
     bp.bypass = p.bypass->load() > 0.5f;
-    bp.route  = tabby::routeFromChoice ((int) p.route->load());
+
+    bp.ms      = p.ms->load()  > 0.5f;
+    bp.sOn     = p.sOn->load() > 0.5f;
+    bp.sType   = tabby::filterTypeFromChoice ((int) p.sType->load());
+    bp.sFreq   = (double) p.sFreq->load();
+    bp.sQ      = (double) p.sQ->load();
+    bp.sGainDb = (double) p.sGain->load();
+    bp.sSlope  = kSlopeDb[juce::jlimit (0, 6, (int) p.sSlope->load())];
+    bp.sBypass = p.sBypass->load() > 0.5f;
     return bp;
 }
 

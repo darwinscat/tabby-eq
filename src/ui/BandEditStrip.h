@@ -104,7 +104,6 @@ private:
     void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
-    void showRouteMenu();                    // popup Stereo/L/R/M/S -> sets the route param
 
     TabbyEqAudioProcessor& proc;
     int curBand = -1;
@@ -113,7 +112,6 @@ private:
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left
     juce::TextButton   soloButton { "S" };
     TypeIconButton     typeButton;               // icon-only; opens the type menu
-    juce::TextButton   routeButton;
     ChevronButton      prevButton { -1 };   // lightweight outline <
     ChevronButton      nextButton { +1 };   // lightweight outline >
     juce::ComboBox     slopeBox;

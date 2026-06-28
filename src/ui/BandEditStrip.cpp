@@ -8,20 +8,11 @@
 namespace
 {
     const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
-    const char* kRouteNames[5] = { "Stereo", "Left", "Right", "Mid", "Side" };
-    const char* kRouteShort[5] = { "ST", "L", "R", "M", "S" };   // compact label on the button
 
     int typeIndexOf (TabbyEqAudioProcessor& proc, int band)
     {
         if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "type"))))
             return juce::jlimit (0, 8, prm->getIndex());
-        return 0;
-    }
-
-    int routeIndexOf (TabbyEqAudioProcessor& proc, int band)
-    {
-        if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "route"))))
-            return juce::jlimit (0, 4, prm->getIndex());
         return 0;
     }
 }
@@ -50,11 +41,6 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     // a plain ComboBox can't render per-item images, so we drive the menu ourselves.
     typeButton.onClick = [this] { showTypeMenu(); };
     addAndMakeVisible (typeButton);
-
-    // Route: Stereo / L / R / Mid / Side — a compact button opening a menu (stereo-only; honest param).
-    routeButton.setColour (juce::TextButton::buttonColourId, tabby::palette::panel().brighter (0.18f));
-    routeButton.onClick = [this] { showRouteMenu(); };
-    addAndMakeVisible (routeButton);
 
     prevButton.onClick = [this] { if (onStep) onStep (-1); };   // editor maps these to display.stepSelection
     nextButton.onClick = [this] { if (onStep) onStep (+1); };
@@ -102,14 +88,9 @@ void BandEditStrip::setBand (int band)
     const bool has = curBand >= 0;
 
     title.setText (has ? juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &routeButton, &prevButton, &nextButton, &slopeBox, &freq, &q, &gain };
+    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &prevButton, &nextButton, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
     typeButton.setType (tabby::filterTypeFromChoice (has ? typeIndexOf (proc, curBand) : 0));
-
-    const int rIdx = has ? routeIndexOf (proc, curBand) : 0;
-    routeButton.setButtonText (has ? kRouteShort[rIdx] : juce::String ("—"));
-    routeButton.setColour (juce::TextButton::textColourOffId,
-                           (has && rIdx != 0) ? tabby::palette::orange() : tabby::palette::text());
 
     rebind();   // (re)creates the bypass attachment, which drives the power button's lit state
     updateForType();
@@ -167,28 +148,6 @@ void BandEditStrip::showTypeMenu()
                      });
 }
 
-void BandEditStrip::showRouteMenu()
-{
-    if (curBand < 0) return;
-    const int cur = routeIndexOf (proc, curBand);
-
-    juce::PopupMenu m;
-    for (int i = 0; i < 5; ++i) m.addItem (i + 1, kRouteNames[i], true, i == cur);
-
-    juce::Component::SafePointer<BandEditStrip> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (routeButton),
-                     [safe] (int r)
-                     {
-                         if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
-                         if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "route")))
-                             prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
-                         safe->routeButton.setButtonText (kRouteShort[r - 1]);
-                         safe->routeButton.setColour (juce::TextButton::textColourOffId,
-                                                      r - 1 != 0 ? tabby::palette::orange() : tabby::palette::text());
-                         safe->routeButton.repaint();
-                     });
-}
-
 void BandEditStrip::updateForType()
 {
     if (curBand < 0) { slopeBox.setVisible (false); return; }
@@ -230,8 +189,7 @@ void BandEditStrip::resized()
     typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
     top.removeFromLeft (8);
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
-    top.removeFromLeft (6);
-    routeButton.setBounds (top.removeFromLeft (36).withSizeKeepingCentre (36, 22));
+    // (route button removed — M/S mode toggle lands here in phase 2)
 
     // bottom row (one line), adapts to the type:
     //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
