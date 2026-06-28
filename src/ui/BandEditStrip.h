@@ -104,14 +104,23 @@ private:
     void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
+    juce::String laneId (const juce::String& base) const;   // Mid/Side-aware param id for the current lane
+    int  laneTypeIndex() const;                             // the current lane's filter-type index
+    void setLane (bool side);                               // switch the toolbar to Mid (false) / Side (true)
+    void toggleMs();                                        // flip the band's M/S mode (seeds Side from Mid on enable)
+    void copyMidToSide();                                   // seed the Side lane from the Mid lane
 
     TabbyEqAudioProcessor& proc;
-    int curBand = -1;
+    int  curBand = -1;
+    bool curMs = false;          // selected band is in M/S mode
+    bool editingSide = false;    // the toolbar edits the Side lane (vs the Mid/main lane)
 
     juce::Label        title;
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left
     juce::TextButton   soloButton { "S" };
     TypeIconButton     typeButton;               // icon-only; opens the type menu
+    juce::TextButton   modeButton;               // ST <-> M/S toggle
+    juce::TextButton   midTab { "M" }, sideTab { "S" };   // lane tabs (visible only in M/S)
     ChevronButton      prevButton { -1 };   // lightweight outline <
     ChevronButton      nextButton { +1 };   // lightweight outline >
     juce::ComboBox     slopeBox;

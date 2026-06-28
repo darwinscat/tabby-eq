@@ -8,13 +8,6 @@
 namespace
 {
     const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
-
-    int typeIndexOf (TabbyEqAudioProcessor& proc, int band)
-    {
-        if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (band, "type"))))
-            return juce::jlimit (0, 8, prm->getIndex());
-        return 0;
-    }
 }
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
@@ -41,6 +34,18 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     // a plain ComboBox can't render per-item images, so we drive the menu ourselves.
     typeButton.onClick = [this] { showTypeMenu(); };
     addAndMakeVisible (typeButton);
+
+    modeButton.onClick = [this] { toggleMs(); };                // ST <-> M/S
+    modeButton.setColour (juce::TextButton::buttonColourId, tabby::palette::panel().brighter (0.18f));
+    addAndMakeVisible (modeButton);
+
+    midTab.setClickingTogglesState (true);  sideTab.setClickingTogglesState (true);
+    midTab.setColour  (juce::TextButton::buttonOnColourId, tabby::palette::violet());
+    sideTab.setColour (juce::TextButton::buttonOnColourId, tabby::palette::orange());
+    midTab.onClick  = [this] { setLane (false); };
+    sideTab.onClick = [this] { setLane (true); };
+    addChildComponent (midTab);                                 // shown only in M/S
+    addChildComponent (sideTab);
 
     prevButton.onClick = [this] { if (onStep) onStep (-1); };   // editor maps these to display.stepSelection
     nextButton.onClick = [this] { if (onStep) onStep (+1); };
@@ -86,16 +91,81 @@ void BandEditStrip::setBand (int band)
 {
     curBand = band;
     const bool has = curBand >= 0;
+    curMs = has && proc.apvts.getRawParameterValue (tabby::bandId (curBand, "ms"))->load() > 0.5f;
+    if (! curMs) editingSide = false;
 
     title.setText (has ? juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
-    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &prevButton, &nextButton, &slopeBox, &freq, &q, &gain };
+    juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &prevButton, &nextButton,
+                                    &modeButton, &midTab, &sideTab, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
-    typeButton.setType (tabby::filterTypeFromChoice (has ? typeIndexOf (proc, curBand) : 0));
 
-    rebind();   // (re)creates the bypass attachment, which drives the power button's lit state
+    modeButton.setButtonText (curMs ? "M/S" : "ST");
+    modeButton.setColour (juce::TextButton::textColourOffId, curMs ? tabby::palette::orange() : tabby::palette::text());
+    midTab.setVisible (curMs);   sideTab.setVisible (curMs);
+    prevButton.setVisible (! curMs);  nextButton.setVisible (! curMs);  title.setVisible (! curMs);
+    midTab.setToggleState (! editingSide, juce::dontSendNotification);
+    sideTab.setToggleState (editingSide, juce::dontSendNotification);
+
+    typeButton.setType (tabby::filterTypeFromChoice (laneTypeIndex()));
+
+    rebind();   // (re)creates the lane attachments + bypass attachment (drives the power button)
     updateForType();
     soloButton.setToggleState (has && proc.getSoloBand() == curBand, juce::dontSendNotification);
+    resized();   // top-row layout depends on M/S
     repaint();
+}
+
+juce::String BandEditStrip::laneId (const juce::String& base) const
+{
+    if (curMs && editingSide)   // Side lane: "freq" -> "sFreq", "q" -> "sQ", "type" -> "sType", ...
+        return tabby::bandId (curBand, "s" + base.substring (0, 1).toUpperCase() + base.substring (1));
+    return tabby::bandId (curBand, base);
+}
+
+int BandEditStrip::laneTypeIndex() const
+{
+    if (curBand < 0) return 0;
+    if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (laneId ("type"))))
+        return juce::jlimit (0, 8, prm->getIndex());
+    return 0;
+}
+
+void BandEditStrip::setLane (bool side)
+{
+    editingSide = side;
+    midTab.setToggleState (! side, juce::dontSendNotification);
+    sideTab.setToggleState (side, juce::dontSendNotification);
+    typeButton.setType (tabby::filterTypeFromChoice (laneTypeIndex()));
+    rebind();
+    updateForType();
+    repaint();
+}
+
+void BandEditStrip::copyMidToSide()   // seed Side from Mid so enabling M/S "splits" the band into two equals
+{
+    if (curBand < 0) return;
+    auto copy = [this] (const char* mid, const char* side)
+    {
+        auto* m = proc.apvts.getParameter (tabby::bandId (curBand, mid));
+        auto* s = proc.apvts.getParameter (tabby::bandId (curBand, side));
+        if (m != nullptr && s != nullptr) s->setValueNotifyingHost (m->getValue());   // normalised (same ranges)
+    };
+    copy ("type", "sType"); copy ("freq", "sFreq"); copy ("q", "sQ");
+    copy ("gain", "sGain"); copy ("slope", "sSlope");
+    if (auto* s = proc.apvts.getParameter (tabby::bandId (curBand, "sOn")))     s->setValueNotifyingHost (1.0f);
+    if (auto* s = proc.apvts.getParameter (tabby::bandId (curBand, "sBypass"))) s->setValueNotifyingHost (0.0f);
+}
+
+void BandEditStrip::toggleMs()
+{
+    if (curBand < 0) return;
+    auto* msPrm = proc.apvts.getParameter (tabby::bandId (curBand, "ms"));
+    if (msPrm == nullptr) return;
+    const bool newMs = ! (msPrm->getValue() > 0.5f);
+    if (newMs) copyMidToSide();                            // split into identical Mid + Side
+    msPrm->setValueNotifyingHost (newMs ? 1.0f : 0.0f);
+    if (! newMs) editingSide = false;
+    setBand (curBand);                                     // refresh mode / tabs / lane / layout
 }
 
 void BandEditStrip::rebind()
@@ -104,15 +174,14 @@ void BandEditStrip::rebind()
     slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset();
     if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); return; }
 
-    auto id = [this] (juce::StringRef s) { return tabby::bandId (curBand, s); };
-    slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, id ("slope"), slopeBox);
-    freqAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("freq"),  freq);
-    qAtt     = std::make_unique<SliderAtt> (proc.apvts, id ("q"),     q);
-    gainAtt  = std::make_unique<SliderAtt> (proc.apvts, id ("gain"),  gain);
+    slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, laneId ("slope"), slopeBox);   // Mid or Side lane
+    freqAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("freq"),  freq);
+    qAtt     = std::make_unique<SliderAtt> (proc.apvts, laneId ("q"),     q);
+    gainAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("gain"),  gain);
 
-    // Power button mirrors the bypass param — single source of truth (node double-click + button both
-    // write it; this keeps the button's lit state in sync however it's toggled).
-    if (auto* bp = proc.apvts.getParameter (id ("bypass")))
+    // Power button mirrors the lane's bypass param — single source of truth (node double-click + button
+    // both write it; this keeps the button's lit state in sync however it's toggled).
+    if (auto* bp = proc.apvts.getParameter (laneId ("bypass")))
     {
         bypassAtt = std::make_unique<juce::ParameterAttachment> (*bp,
             [this] (float v) { onButton.setToggleState (v < 0.5f, juce::dontSendNotification); onButton.repaint(); });
@@ -123,7 +192,7 @@ void BandEditStrip::rebind()
 void BandEditStrip::showTypeMenu()
 {
     if (curBand < 0) return;
-    const int cur = typeIndexOf (proc, curBand);
+    const int cur = laneTypeIndex();
 
     juce::PopupMenu m;
     for (int i = 0; i < 9; ++i)
@@ -141,7 +210,7 @@ void BandEditStrip::showTypeMenu()
                      [safe] (int r)
                      {
                          if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
-                         if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "type")))
+                         if (auto* prm = safe->proc.apvts.getParameter (safe->laneId ("type")))
                              prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
                          safe->typeButton.setType (tabby::filterTypeFromChoice (r - 1));
                          safe->updateForType();
@@ -152,7 +221,7 @@ void BandEditStrip::updateForType()
 {
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
-    const auto t       = tabby::filterTypeFromChoice (typeIndexOf (proc, curBand));
+    const auto t       = tabby::filterTypeFromChoice (laneTypeIndex());
     const bool isCut   = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass);
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
@@ -182,14 +251,24 @@ void BandEditStrip::resized()
     r.removeFromTop (8);
     onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
     top.removeFromLeft (6);
-    prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
-    title.setBounds (top.removeFromLeft (18));
-    nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
+    if (curMs)   // M/S: Mid | Side lane tabs take the nav slot
+    {
+        midTab.setBounds  (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+        top.removeFromLeft (2);
+        sideTab.setBounds (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+    }
+    else         // Stereo: < index > navigation
+    {
+        prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
+        title.setBounds (top.removeFromLeft (18));
+        nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
+    }
     top.removeFromLeft (8);
     typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
     top.removeFromLeft (8);
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
-    // (route button removed — M/S mode toggle lands here in phase 2)
+    top.removeFromLeft (6);
+    modeButton.setBounds (top.removeFromLeft (34).withSizeKeepingCentre (34, 22));    // ST <-> M/S
 
     // bottom row (one line), adapts to the type:
     //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
