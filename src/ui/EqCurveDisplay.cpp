@@ -733,7 +733,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     if (auditioning)
         drawListenVisual (g, (double) audFreq, (double) audQ, "LISTEN");
     else if (solo >= 0 && solo < tabby::kNumBands && paramCache[(size_t) solo].on)
-        drawListenVisual (g, paramCache[(size_t) solo].freq, paramCache[(size_t) solo].Q, "SOLO");
+        drawListenVisual (g, paramCache[(size_t) solo].freq, (double) audQSetting, "SOLO");   // width from the Listen-Q config
 
     // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
     if (placing)
