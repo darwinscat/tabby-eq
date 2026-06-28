@@ -37,10 +37,14 @@ public:
     // Ref-counted so concurrent editors don't disable each other's analyzer.
     void setAnalyzerActive (bool shouldRun) noexcept
     {
-        const int delta = shouldRun ? 1 : -1;
-        engine.setSpectrumActive ((analyzerRefs.fetch_add (delta, std::memory_order_relaxed) + delta) > 0);
+        analyzerRefs.fetch_add (shouldRun ? 1 : -1, std::memory_order_relaxed);   // taps are fed from processBlock (domain-aware)
     }
     bool pullSpectrum (bool pre, float* dst) noexcept { return (pre ? engine.inputTap() : engine.outputTap()).tryPull (dst); }
+
+    // Analyzer domain: which signal the spectrum shows — 0 Stereo (ch0) / 1 Mid (L+R)/2 / 2 Side (L-R)/2.
+    void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
+    int   getSpectrumDomain() const noexcept { return spectrumDomain.load (std::memory_order_relaxed); }
+    float getCorrelation()   const noexcept { return correlation.load (std::memory_order_relaxed); }   // L/R phase correlation -1..+1
     teq::BandParams readBand (int b) const noexcept;   // BandParams from the APVTS atomics
 
     void setSoloBand (int b) noexcept { soloBand.store (b, std::memory_order_relaxed); }   // -1 = no solo
@@ -120,6 +124,10 @@ private:
 
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
+
+    std::atomic<int>   spectrumDomain { 0 };   // analyzer domain: 0 Stereo (ch0) / 1 Mid / 2 Side
+    std::atomic<float> correlation { 1.0f };   // L/R phase correlation (-1..+1) for the meter
+    float corrState = 1.0f;                    // audio-thread smoothing state for the correlation meter
 
     static constexpr int kStateVersion = 2;   // v2: route removed, M/S Side lane added (additive)
 

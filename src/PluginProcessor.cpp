@@ -106,12 +106,36 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         accMax (inPeak, inPk);
         if (inPk >= 1.0f) inClip.store (true, std::memory_order_relaxed);
     }
-    auto meterOutput = [this, &buffer, n, meter]() noexcept
+    auto meterOutput = [this, &buffer, n, nc, meter]() noexcept
     {
         if (! meter) return;
         const float pk = buffer.getMagnitude (0, n);
         accMax (outPeak, pk);
         if (pk >= 1.0f) outClip.store (true, std::memory_order_relaxed);
+
+        float corr = 1.0f;                                                  // L/R phase correlation (mono => 1)
+        if (nc >= 2)
+        {
+            const float* L = buffer.getReadPointer (0);
+            const float* R = buffer.getReadPointer (1);
+            double sLR = 0.0, sLL = 0.0, sRR = 0.0;
+            for (int s = 0; s < n; ++s) { sLR += (double) L[s] * R[s]; sLL += (double) L[s] * L[s]; sRR += (double) R[s] * R[s]; }
+            corr = (sLL > 1e-12 && sRR > 1e-12) ? (float) (sLR / std::sqrt (sLL * sRR)) : 0.0f;
+        }
+        corrState = 0.85f * corrState + 0.15f * corr;                       // light smoothing for a steady meter
+        correlation.store (corrState, std::memory_order_relaxed);
+    };
+
+    // Feed the analyzer FIFOs the chosen domain (Stereo ch0 / Mid / Side) — replaces the engine's
+    // old internal ch0 push, so the analyzer can show the M/S content.
+    auto pushDomain = [this, &buffer, n, nc] (teq::SpectrumTap& tap) noexcept
+    {
+        const int dom = spectrumDomain.load (std::memory_order_relaxed);
+        const float* L = buffer.getReadPointer (0);
+        const float* R = nc > 1 ? buffer.getReadPointer (1) : L;
+        if      (nc < 2 || dom == 0) for (int s = 0; s < n; ++s) tap.push (L[s]);
+        else if (dom == 1)           for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] + R[s]));
+        else                         for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] - R[s]));
     };
 
     // Drag-audition: a narrow band-pass at an arbitrary frequency (search-by-ear while dragging),
@@ -170,18 +194,20 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         // The linear FIR is rebuilt off the audio thread (see lpTick); here we only convolve and hand
         // the analyzer its pre/post samples (engine.process would normally do that).
         if (! lpRanPrev) lp.reset();   // clear stale convolver state when resuming after any gap
-        if (meter) { const float* in0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.inputTap().push (in0[s]); }
+        if (meter) pushDomain (engine.inputTap());
         lp.process (buffer, nc);
-        if (meter) { const float* out0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.outputTap().push (out0[s]); }
+        if (meter) pushDomain (engine.outputTap());
         lpRanNow = true;
     }
     else
     {
         // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
         // — the engine's contract. Smoothing + recompute-skip live inside the engine.
+        if (meter) pushDomain (engine.inputTap());
         for (int b = 0; b < tabby::kNumBands; ++b)
             engine.setBand (b, readBand (b));
         engine.process (buffer.getArrayOfWritePointers(), nc, n);
+        if (meter) pushDomain (engine.outputTap());
     }
     lpRanPrev = lpRanNow;
 

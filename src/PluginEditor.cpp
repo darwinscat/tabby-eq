@@ -33,6 +33,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
+    addAndMakeVisible (corrMeter);
     auto setupCap = [this] (juce::Label& l, const juce::String& t)
     {
         l.setText (t, juce::dontSendNotification);
@@ -90,6 +91,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
 
     msFreqLink = (bool) proc.apvts.state.getProperty ("msFreqLink", false);   // M/S Mid<->Side freq lock
+    proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
         proc.apvts.addParameterListener (tabby::bandId (b, "freq"),  this);
@@ -188,6 +190,12 @@ void TabbyEqEditor::showViewMenu()
     for (int i = 0; i < 4; ++i) lpMenu.addItem (50 + i, lpNames[i], true, lq == i);
     m.addSubMenu ("Linear-phase quality", lpMenu);
 
+    juce::PopupMenu domMenu;
+    const int dom = proc.getSpectrumDomain();
+    const char* domNames[] = { "Stereo", "Mid", "Side" };
+    for (int i = 0; i < 3; ++i) domMenu.addItem (60 + i, domNames[i], true, dom == i);
+    m.addSubMenu ("Analyzer domain", domMenu);
+
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
     {
@@ -207,6 +215,7 @@ void TabbyEqEditor::showViewMenu()
         if (r >= 50 && r <= 53) { if (auto* p = safe->proc.apvts.getParameter ("lpQuality"))
                                       p->setValueNotifyingHost (p->convertTo0to1 ((float) (r - 50)));
                                   safe->updatePhaseLabel(); }
+        if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
     });
 }
 
@@ -235,12 +244,13 @@ void TabbyEqEditor::resized()
 {
     auto r = getLocalBounds();
     auto top = r.removeFromTop (30);
-    title.setBounds (top.removeFromLeft (160).reduced (8, 4));
+    title.setBounds (top.removeFromLeft (150).reduced (8, 4));
     prePost.setBounds (top.removeFromRight (74).reduced (6, 3));
     phaseButton.setBounds (top.removeFromRight (82).reduced (4, 3));
     viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
     fullButton.setBounds (top.removeFromRight (50).reduced (4, 3));
+    corrMeter.setBounds (top.removeFromLeft (108).reduced (8, 2));   // remaining middle-left of the top bar
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
     //  it used to occupy is reserved for the upcoming Helper.)

@@ -9,6 +9,7 @@
 #include "ui/EqCurveDisplay.h"
 #include "ui/BandEditStrip.h"
 #include "ui/LevelMeter.h"
+#include "ui/CorrelationMeter.h"
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
@@ -40,6 +41,7 @@ private:
     BandEditStrip  strip;
     LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
     LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
+    CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
     juce::Label    inCap, outCap;
     juce::Label    title;
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
