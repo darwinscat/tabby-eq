@@ -161,6 +161,65 @@ void runMatchedBiquadTests()
         expectTrue (mMax < rMax, "matched max error (dB) < RBJ max error (dB)");
     }
 
+    group ("resonant shelf (Q): plateau exact at any Q; corner == analog Q^2(A-1)^2+A; high Q overshoots");
+    {
+        const double f0 = 1000.0;
+        for (double gDb : { 6.0, 12.0, -6.0, -12.0 })
+        {
+            const double A = std::pow (10.0, gDb / 20.0);
+            for (double Q : { 0.5, 0.707, 2.0, 6.0 })
+            {
+                const auto lo = matched::lowShelfQDb  (f0, fs, gDb, Q);
+                const auto hi = matched::highShelfQDb (f0, fs, gDb, Q);
+                const std::string at = " (g=" + std::to_string ((int) gDb) + " Q=" + std::to_string (Q) + ")";
+
+                // plateau is exact at DC / Nyquist regardless of Q
+                expectNear (lo.magnitudeDb (0.0),  gDb, 0.05, "low shelf DC == gain"      + at);
+                expectNear (lo.magnitudeDb (kPi),  0.0, 0.05, "low shelf Nyquist == 0 dB" + at);
+                expectNear (hi.magnitudeDb (kPi),  gDb, 0.10, "high shelf Nyquist == gain"+ at);
+                expectNear (hi.magnitudeDb (0.0),  0.0, 0.05, "high shelf DC == 0 dB"     + at);
+                expectTrue (lo.isStable() && hi.isStable(), "resonant shelf stable" + at);
+
+                // corner magnitude follows the analog prototype |H(w0)|^2 = Q^2 (A-1)^2 + A
+                const double Ab = A >= 1.0 ? A : 1.0 / A;                       // boost-equivalent gain
+                const double HcDb = (gDb >= 0.0 ? 1.0 : -1.0) * db (std::sqrt (Q * Q * (Ab - 1.0) * (Ab - 1.0) + Ab));
+                expectNear (lo.magnitudeDb (w (f0)), HcDb, 0.20, "low shelf corner == analog"  + at);
+                expectNear (hi.magnitudeDb (w (f0)), HcDb, 0.20, "high shelf corner == analog" + at);
+            }
+        }
+
+        // high Q overshoots past the plateau; low Q stays under it (boost case)
+        const auto loHiQ = matched::lowShelfQDb (f0, fs, 6.0, 6.0);
+        const auto loLoQ = matched::lowShelfQDb (f0, fs, 6.0, 0.5);
+        expectTrue (loHiQ.magnitudeDb (w (f0)) > 6.5,  "high-Q low shelf overshoots above the plateau");
+        expectTrue (loLoQ.magnitudeDb (w (f0)) < 6.0,  "low-Q low shelf stays below the plateau");
+
+        // high-Q cut dips below the plateau (mirror of the boost overshoot)
+        const auto cutHiQ = matched::lowShelfQDb (f0, fs, -6.0, 6.0);
+        expectTrue (cutHiQ.magnitudeDb (w (f0)) < -6.5, "high-Q low shelf cut dips below the plateau");
+
+        // cut is the exact mirror of the boost at the same Q (away from the Nyquist edge case)
+        const auto up = matched::lowShelfQDb (f0, fs,  12.0, 3.0);
+        const auto dn = matched::lowShelfQDb (f0, fs, -12.0, 3.0);
+        double maxAsym = 0.0;
+        for (double frac = 0.002; frac <= 0.49; frac += 0.004)
+            maxAsym = std::max (maxAsym, std::fabs (up.magnitudeDb (2.0 * kPi * frac) + dn.magnitudeDb (2.0 * kPi * frac)));
+        std::printf ("      resonant shelf max |cut + boost|: %.6f dB\n", maxAsym);
+        expectTrue (maxAsym < 1e-4, "resonant shelf cut == -boost (true mirror)");
+    }
+
+    group ("resonant shelf: stable across freq / Q / gain grid (incl. near Nyquist)");
+    {
+        for (double f0 : { 40.0, 200.0, 1000.0, 8000.0, 16000.0, 20000.0 })
+            for (double Q : { 0.4, 0.707, 2.0, 6.0, 12.0 })
+                for (double gDb : { -15.0, -6.0, 6.0, 15.0 })
+                {
+                    const std::string at = " (f0=" + std::to_string ((int) f0) + " Q=" + std::to_string (Q) + " g=" + std::to_string ((int) gDb) + ")";
+                    expectTrue (matched::lowShelfQDb  (f0, fs, gDb, Q).isStable(), "low shelf Q unstable"  + at);
+                    expectTrue (matched::highShelfQDb (f0, fs, gDb, Q).isStable(), "high shelf Q unstable" + at);
+                }
+    }
+
     group ("stability across a freq / Q / gain grid");
     {
         for (double f0 : { 40.0, 200.0, 1000.0, 8000.0, 18000.0, 21000.0 })

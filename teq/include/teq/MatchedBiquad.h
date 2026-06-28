@@ -311,6 +311,54 @@ namespace matched
 
     inline BiquadCoeffs highShelfDb (double f0, double fs, double gainDb) noexcept { return highShelf (f0, fs, std::pow (10.0, gainDb / 20.0)); }
     inline BiquadCoeffs lowShelfDb  (double f0, double fs, double gainDb) noexcept { return lowShelf  (f0, fs, std::pow (10.0, gainDb / 20.0)); }
+
+    //==========================================================================
+    // Resonant low/high shelf with a quality factor Q (the "expensive EQ" shelf). The poles are the
+    // matched (w0, Q) pair shared with the bell / lowpass / highpass family; the numerator is fit so
+    // the magnitude is EXACT at DC, Nyquist and the corner. The analog prototype has poles at (w0, Q)
+    // and zeros at (w0*sqrt(A), Q), giving |H(w0)|^2 = Q^2 (A-1)^2 + A: a low Q is a gentle
+    // (Butterworth-ish) shelf, a high Q overshoots (boost) / dips (cut) at the transition, like
+    // Pro-Q / Neutron. Q ~ 0.707 reproduces a clean gentle shelf. Matched at Nyquist => high shelves
+    // don't cramp. `high`=false -> low shelf (gain at DC); true -> high shelf (gain at Nyquist).
+    inline BiquadCoeffs shelf (double f0, double fs, double gainLin, double Q, bool high) noexcept
+    {
+        // Cut = reciprocal of the mirror boost -> an exact mirror image (the resonance dip mirrors
+        // the bump), the same trick the matched bell uses. If that inversion is unstable (a few
+        // high-shelf cuts whose mirror-boost numerator goes non-minimum-phase right at Nyquist), fall
+        // through to the direct design below, which is ALWAYS pole-stable (matched poles) and gives a
+        // gentle dip at the very edge — where edge-of-band resonance is inaudible anyway.
+        if (gainLin < 1.0 && gainLin > 0.0)
+        {
+            const BiquadCoeffs b = shelf (f0, fs, 1.0 / gainLin, Q, high);
+            const double inv = 1.0 / b.b0;
+            const BiquadCoeffs cut { inv, b.a1 * inv, b.a2 * inv, b.b1 * inv, b.b2 * inv };
+            if (cut.isStable()) return cut;
+        }
+
+        BiquadCoeffs c;
+        const double w0 = 2.0 * kPi * f0 / fs;
+        detail::matchedPoles (w0, Q, c.a1, c.a2);                         // matched poles -> always pole-stable
+
+        const double s = std::sin (w0 * 0.5);
+        const double phi1 = s * s, phi0 = 1.0 - phi1, phi2 = 4.0 * phi0 * phi1;
+        const double t0 = 1.0 + c.a1 + c.a2, t1 = 1.0 - c.a1 + c.a2;
+        const double A0 = t0 * t0, A1 = t1 * t1, A2 = -4.0 * c.a2;
+
+        const double A   = gainLin, A2g = A * A;
+        const double B0  = high ? A0       : A2g * A0;                    // |H(DC)|^2  = (high ? 1 : A)^2
+        const double B1  = high ? A2g * A1 : A1;                          // |H(Nyq)|^2 = (high ? A : 1)^2
+        const double Hc2 = Q * Q * (A - 1.0) * (A - 1.0) + A;             // analog |H(w0)|^2
+        const double denW0 = A0 * phi0 + A1 * phi1 + A2 * phi2;
+        const double B2  = (Hc2 * denW0 - B0 * phi0 - B1 * phi1) / phi2;
+
+        detail::solveNumerator (B0, B1, B2, c);
+        return c;
+    }
+
+    inline BiquadCoeffs lowShelfQ    (double f0, double fs, double gainLin, double Q) noexcept { return shelf (f0, fs, gainLin, Q, false); }
+    inline BiquadCoeffs highShelfQ   (double f0, double fs, double gainLin, double Q) noexcept { return shelf (f0, fs, gainLin, Q, true); }
+    inline BiquadCoeffs lowShelfQDb  (double f0, double fs, double gainDb,  double Q) noexcept { return lowShelfQ  (f0, fs, std::pow (10.0, gainDb / 20.0), Q); }
+    inline BiquadCoeffs highShelfQDb (double f0, double fs, double gainDb,  double Q) noexcept { return highShelfQ (f0, fs, std::pow (10.0, gainDb / 20.0), Q); }
 }
 
 //==============================================================================

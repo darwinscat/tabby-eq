@@ -33,8 +33,8 @@ optional accelerator on top, riding the same real, automatable parameters a huma
 - Types: bell, low/high shelf, HP, LP, BP **+ notch, all-pass, tilt**.
 - Variable HP/LP slopes **6 / 12 / 24 / 36 / 48** (72/96 later) — stack matched sections.
 - Per-band **on, solo/listen**.
-- **M/S · L/R per band** (standard; lowest priority — may slip past first cut).
-- In/out metering. Output trim (done).
+- **M/S · L/R per band** (delta-fold in L/R; stereo-only) — done.
+- In/out metering + output trim — done.
 
 **Control / UX**
 - **Selected-band edit strip** — type / freq / Q / gain / slope, numeric + keyboard entry; live
@@ -122,12 +122,20 @@ peak-hold + 4.5 dB/oct pink tilt + peak-detail; Neutron/FabFilter-ish) · Q-whis
 log-linear-calibrated, side-clamped) · "+"-on-curve add + node hover-halo · notch / all-pass / tilt ·
 variable HP/LP slopes 6–96 dB/oct (Butterworth cascade) · per-band solo (band-listen) · premium
 vignette + 0 dB glow · analyzer pre/post toggle · HP/LP whisker steps the discrete slope ·
-filter-type shape icons. (227 engine checks; all four Mac formats build + AU passes auval.)
+filter-type shape icons · **per-band bypass + ghost node** (used-vs-bypassed flag; bypassed nodes
+stay clickable, not deleted) · per-band colours + ghost curves · long-press-to-solo · View toggles ·
+**IN/OUT level meters** (peak-hold + sticky clip, violet→orange, click to reset) + vertical output
+fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-only; node M/S/L/R badge) ·
+**resonant shelf-Q** (matched, Pro-Q-style overshoot/dip; exact mirror ±G; stable to Nyquist) ·
+**add-band UX** (3×2 grid defaults, ghost preview, press-drag-to-place, Alt drag-audition w/ spotlight
+or bell + Listen Q) · **floating per-band toolbar** (Neutron-style: power-enable, ‹ › prev/next,
+icon-only type, solo, route, freq/Q/gain inline, right-click delete; semi-transparent, tracks the
+node; the bottom is now **reserved for the Helper**). (591 engine checks; all four Mac formats build
++ AU passes auval.)
 
 **Deferred — need a decision / live feedback:**
-- **Node on/off + ghost** — needs a band "used vs bypassed" flag (distinct from `on=false` = free
-  slot), part of the reserved band-provenance schema, so we don't ghost all 24 empty slots.
-- **Floating point-toolbar** (Neutron-style) — a mini panel by the node holding ALL point info +
-  control (type-icon + on/off + solo + close + dropdown + freq/gain/Q/note). The bottom strip then
-  goes away and the bottom is **reserved for the Helper**. Big UI move — do with live feedback.
-  *(Current bottom strip + the type-shape icon are interim, to be folded into this toolbar.)*
+- **Per-band Stereo↔M/S dual-mode** (next) — one node with two modes: `ST` (as today) and `M/S`,
+  where Mid and Side each get their OWN type/freq/Q/gain (and later dynamics), edited via two tabs
+  on the floating toolbar. Supersedes the current per-band Left/Right/Mid/Side *routing* selector
+  (keep routing too). Needs a schema decision (a band carries a Mid sub-band + a Side sub-band).
+- **Multi-select / modifier-drag** of nodes — iterate.

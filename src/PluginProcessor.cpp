@@ -4,6 +4,17 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+namespace
+{
+    // Lock-free running-max accumulate for the meters: the audio thread bumps the peak, the UI
+    // read-resets it (exchange to 0). No locks, bounded by (near-zero) contention.
+    inline void accMax (std::atomic<float>& a, float v) noexcept
+    {
+        float prev = a.load (std::memory_order_relaxed);
+        while (v > prev && ! a.compare_exchange_weak (prev, v, std::memory_order_relaxed)) {}
+    }
+}
+
 TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -21,6 +32,14 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.slope = apvts.getRawParameterValue (tabby::bandId (b, "slope"));
         p.swept = apvts.getRawParameterValue (tabby::bandId (b, "swept"));
         p.bypass = apvts.getRawParameterValue (tabby::bandId (b, "bypass"));
+        p.ms     = apvts.getRawParameterValue (tabby::bandId (b, "ms"));
+        p.sOn    = apvts.getRawParameterValue (tabby::bandId (b, "sOn"));
+        p.sType  = apvts.getRawParameterValue (tabby::bandId (b, "sType"));
+        p.sFreq  = apvts.getRawParameterValue (tabby::bandId (b, "sFreq"));
+        p.sQ     = apvts.getRawParameterValue (tabby::bandId (b, "sQ"));
+        p.sGain  = apvts.getRawParameterValue (tabby::bandId (b, "sGain"));
+        p.sSlope = apvts.getRawParameterValue (tabby::bandId (b, "sSlope"));
+        p.sBypass= apvts.getRawParameterValue (tabby::bandId (b, "sBypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
 }
@@ -60,6 +79,42 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // Up-mix a mono input into stereo (the only non-matched layout we accept) => identical L/R.
     for (int c = juce::jmax (1, numIn); c < nc; ++c) buffer.copyFrom (c, 0, buffer, 0, 0, n);
 
+    // IN/OUT level metering — only while a UI is attached. Accumulate the block peak; clip is sticky
+    // (until the user clicks the meter). meterOutput() is called just before each return path.
+    const bool meter = analyzerRefs.load (std::memory_order_relaxed) > 0;
+    if (meter)
+    {
+        const float inPk = buffer.getMagnitude (0, n);
+        accMax (inPeak, inPk);
+        if (inPk >= 1.0f) inClip.store (true, std::memory_order_relaxed);
+    }
+    auto meterOutput = [this, &buffer, n, meter]() noexcept
+    {
+        if (! meter) return;
+        const float pk = buffer.getMagnitude (0, n);
+        accMax (outPeak, pk);
+        if (pk >= 1.0f) outClip.store (true, std::memory_order_relaxed);
+    };
+
+    // Drag-audition: a narrow band-pass at an arbitrary frequency (search-by-ear while dragging),
+    // independent of the band list. Takes precedence over the normal path and per-band solo.
+    if (auditionOn.load (std::memory_order_relaxed))
+    {
+        soloFilter.setParams (teq::FilterType::BandPass,
+                              juce::jlimit (20.0, 20000.0, (double) auditionFreq.load (std::memory_order_relaxed)),
+                              juce::jlimit (0.5, 18.0,     (double) auditionQ.load   (std::memory_order_relaxed)), 0.0);
+        for (int c = 0; c < nc; ++c)
+        {
+            float* d = buffer.getWritePointer (c);
+            for (int s = 0; s < n; ++s) d[s] = soloFilter.processSample (c, d[s]);
+        }
+        soloFilter.flushDenormals();
+        outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+        outputGainSmoothed.applyGain (buffer, n);
+        meterOutput();
+        return;
+    }
+
     // Solo (band-listen): replace the output with a band-pass of the input at the soloed band's
     // freq/Q, so you hear only that region. Skips the normal EQ.
     const int solo = soloBand.load (std::memory_order_relaxed);
@@ -75,6 +130,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         soloFilter.flushDenormals();
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
         outputGainSmoothed.applyGain (buffer, n);
+        meterOutput();
         return;
     }
 
@@ -87,6 +143,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
     outputGainSmoothed.applyGain (buffer, n);   // de-zippered output trim
+    meterOutput();
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -118,6 +175,15 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, (int) p.slope->load())];
     bp.swept  = p.swept->load() > 0.5f;
     bp.bypass = p.bypass->load() > 0.5f;
+
+    bp.ms      = p.ms->load()  > 0.5f;
+    bp.sOn     = p.sOn->load() > 0.5f;
+    bp.sType   = tabby::filterTypeFromChoice ((int) p.sType->load());
+    bp.sFreq   = (double) p.sFreq->load();
+    bp.sQ      = (double) p.sQ->load();
+    bp.sGainDb = (double) p.sGain->load();
+    bp.sSlope  = kSlopeDb[juce::jlimit (0, 6, (int) p.sSlope->load())];
+    bp.sBypass = p.sBypass->load() > 0.5f;
     return bp;
 }
 

@@ -35,18 +35,47 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
 
     NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);   // matches the canvas range
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "freq"), 1 }, n + "Freq",
-                                                        freqRange, 1000.0f, AudioParameterFloatAttributes().withLabel ("Hz")));
+                                                        freqRange, 1000.0f,
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                            [] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; })));
 
     NormalisableRange<float> qRange (0.05f, 40.0f); qRange.setSkewForCentre (1.0f);
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f));
+    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f,
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                            [] (float v, int) { return juce::String (v, 1); })));
 
     layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "gain"), 1 }, n + "Gain",
-                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));   // matches the canvas ±24
+                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,   // matches the canvas ±24
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                            [] (float v, int) { return juce::String (v, 1) + " dB"; })));
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "slope"), 1 }, n + "Slope",
                                                         StringArray { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1));
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "swept"), 1 }, n + "Swept", false));
     layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "bypass"), 1 }, n + "Bypass", false));
+
+    // --- M/S dual-mode: mode flag + independent Side lane (Mid/main lane = the params above) ---
+    const StringArray typeItems { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+    const StringArray slopeItems { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
+    auto intHz = [] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; };
+    auto one   = [] (float v, int) { return juce::String (v, 1); };
+    auto oneDb = [] (float v, int) { return juce::String (v, 1) + " dB"; };
+
+    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "ms"),     1 }, n + "M/S", false));
+    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "sOn"),    1 }, n + "Side On", true));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "sType"),  1 }, n + "Side Type", typeItems, 0));
+
+    NormalisableRange<float> sFreqRange (20.0f, 20000.0f); sFreqRange.setSkewForCentre (1000.0f);
+    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sFreq"),  1 }, n + "Side Freq",
+                                                        sFreqRange, 1000.0f, AudioParameterFloatAttributes().withStringFromValueFunction (intHz)));
+    NormalisableRange<float> sQRange (0.05f, 40.0f); sQRange.setSkewForCentre (1.0f);
+    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sQ"),     1 }, n + "Side Q",
+                                                        sQRange, 1.0f, AudioParameterFloatAttributes().withStringFromValueFunction (one)));
+    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sGain"),  1 }, n + "Side Gain",
+                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction (oneDb)));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "sSlope"), 1 }, n + "Side Slope", slopeItems, 1));
+    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "sBypass"), 1 }, n + "Side Bypass", false));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
