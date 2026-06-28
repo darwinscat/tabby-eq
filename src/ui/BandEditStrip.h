@@ -109,8 +109,9 @@ private:
     juce::String laneId (const juce::String& base) const;   // Mid/Side-aware param id for the current lane
     int  laneTypeIndex() const;                             // the current lane's filter-type index
     void setLane (bool side);                               // switch the toolbar to Mid (false) / Side (true)
-    void toggleMs();                                        // flip the band's M/S mode (seeds Side from Mid on enable)
+    void toggleMs();                                        // flip the band's M/S mode (seeds Side on FIRST split)
     void copyMidToSide();                                   // seed the Side lane from the Mid lane
+    bool sideIsFresh() const;                               // Side lane still at factory defaults (never configured)
 
     TabbyEqAudioProcessor& proc;
     int  curBand = -1;

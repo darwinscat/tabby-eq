@@ -77,9 +77,41 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionQ      ((float) (double) proc.apvts.state.getProperty ("auditionQ", 6.0));
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
 
+    msFreqLink = (bool) proc.apvts.state.getProperty ("msFreqLink", false);   // M/S Mid<->Side freq lock
+    for (int b = 0; b < tabby::kNumBands; ++b)
+    {
+        proc.apvts.addParameterListener (tabby::bandId (b, "freq"),  this);
+        proc.apvts.addParameterListener (tabby::bandId (b, "sFreq"), this);
+    }
+
     setResizable (true, true);
     setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);
+}
+
+TabbyEqEditor::~TabbyEqEditor()
+{
+    for (int b = 0; b < tabby::kNumBands; ++b)
+    {
+        proc.apvts.removeParameterListener (tabby::bandId (b, "freq"),  this);
+        proc.apvts.removeParameterListener (tabby::bandId (b, "sFreq"), this);
+    }
+}
+
+void TabbyEqEditor::parameterChanged (const juce::String& id, float value)   // M/S freq-link mirror
+{
+    if (! msFreqLink || mirroring) return;
+    const bool isSide = id.endsWith ("_sFreq");
+    const bool isMid  = ! isSide && id.endsWith ("_freq");
+    if (! isSide && ! isMid) return;
+    const int b = id.substring (4).upToFirstOccurrenceOf ("_", false, false).getIntValue();
+    if (b < 0 || b >= tabby::kNumBands) return;
+    if (proc.apvts.getRawParameterValue (tabby::bandId (b, "ms"))->load() < 0.5f) return;   // only while split
+    if (auto* sib = proc.apvts.getParameter (tabby::bandId (b, isSide ? "freq" : "sFreq")))
+    {
+        const juce::ScopedValueSetter<bool> guard (mirroring, true);
+        sib->setValueNotifyingHost (sib->convertTo0to1 (value));
+    }
 }
 
 void TabbyEqEditor::showViewMenu()
@@ -108,6 +140,7 @@ void TabbyEqEditor::showViewMenu()
     for (int i = 0; i < 4; ++i)
         audMenu.addItem (30 + i, "Q " + juce::String (audQv[i]), true, juce::roundToInt (display.auditionQ()) == audQv[i]);
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
+    m.addItem (40, "M/S: link Mid/Side freq", true, msFreqLink);
 
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
@@ -123,6 +156,7 @@ void TabbyEqEditor::showViewMenu()
         if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
         if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
+        if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr); }
     });
 }
 

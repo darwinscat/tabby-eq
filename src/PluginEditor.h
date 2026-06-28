@@ -13,11 +13,12 @@
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
 // The semantic layer (source/role pickers, trait knobs, search->treat) lands on top next.
-class TabbyEqEditor final : public juce::AudioProcessorEditor
+class TabbyEqEditor final : public juce::AudioProcessorEditor,
+                            private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     explicit TabbyEqEditor (TabbyEqAudioProcessor& p);
-    ~TabbyEqEditor() override = default;
+    ~TabbyEqEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -26,6 +27,10 @@ private:
     void showViewMenu();
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)
     void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only
+    void parameterChanged (const juce::String& id, float newValue) override;   // M/S freq-link mirror
+
+    bool msFreqLink = false;  // when on, an M/S band's Mid & Side share one frequency
+    bool mirroring  = false;  // re-entry guard for the freq-link mirror
 
     TabbyEqAudioProcessor& proc;
 

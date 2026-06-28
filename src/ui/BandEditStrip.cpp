@@ -168,10 +168,19 @@ void BandEditStrip::toggleMs()
     auto* msPrm = proc.apvts.getParameter (tabby::bandId (curBand, "ms"));
     if (msPrm == nullptr) return;
     const bool newMs = ! (msPrm->getValue() > 0.5f);
-    if (newMs) copyMidToSide();                            // split into identical Mid + Side
-    msPrm->setValueNotifyingHost (newMs ? 1.0f : 0.0f);
+    if (newMs && sideIsFresh()) copyMidToSide();           // seed Side from Mid only on the FIRST split;
+    msPrm->setValueNotifyingHost (newMs ? 1.0f : 0.0f);    // afterwards Side persists across ST<->M/S
     if (! newMs) editingSide = false;
     setBand (curBand);                                     // refresh mode / tabs / lane / layout
+}
+
+bool BandEditStrip::sideIsFresh() const   // Side lane untouched (factory defaults) -> safe to seed from Mid
+{
+    if (curBand < 0) return false;
+    auto raw = [this] (const char* id) { return proc.apvts.getRawParameterValue (tabby::bandId (curBand, id))->load(); };
+    return std::abs (raw ("sFreq") - 1000.0f) < 0.5f && std::abs (raw ("sGain")) < 0.01f
+        && std::abs (raw ("sQ") - 1.0f) < 0.001f && (int) raw ("sType") == 0 && (int) raw ("sSlope") == 1
+        && raw ("sBypass") < 0.5f && raw ("sOn") > 0.5f;
 }
 
 void BandEditStrip::rebind()
