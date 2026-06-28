@@ -94,6 +94,13 @@ private:
     bool lpPrepared = false;
     int  lastQuality = -1;
     bool lastLinear  = false;
+
+    // Click-free Natural<->Linear crossfade (audio thread): processes with `activeLinear` (which lags
+    // the phaseMode param), fades out, flips at a block boundary, fades the new path back in.
+    bool  activeLinear = false;
+    int   xState = 0;             // 0 = stable, 1 = fading out, 2 = fading in
+    float xGain = 1.0f, xStep = 1.0f;
+    bool  lpRanPrev = false;      // did the convolver run last block? (else reset it on resume)
     struct LpUpdater : juce::Timer { TabbyEqAudioProcessor& p; explicit LpUpdater (TabbyEqAudioProcessor& pp) : p (pp) {}
                                      void timerCallback() override { p.lpTick(); } } lpUpdater { *this };
 

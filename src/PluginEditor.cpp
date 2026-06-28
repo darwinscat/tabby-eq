@@ -138,12 +138,20 @@ void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto
 void TabbyEqEditor::updatePhaseLabel()
 {
     const bool lin = proc.apvts.getRawParameterValue ("phaseMode")->load() > 0.5f;
-    if (! lin) { phaseButton.setButtonText ("Natural"); return; }
+    if (! lin)
+    {
+        phaseButton.setButtonText ("Natural");
+        phaseButton.removeColour (juce::TextButton::buttonColourId);
+        phaseButton.repaint();
+        return;
+    }
     static constexpr int sizes[] = { 4096, 16384, 65536, 131072 };
     const int q = juce::jlimit (0, 3, (int) proc.apvts.getRawParameterValue ("lpQuality")->load());
     const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
     const double ms = (double) sizes[q] / 2.0 / sr * 1000.0;
     phaseButton.setButtonText ("Lin " + juce::String (ms, ms < 100.0 ? 1 : 0) + " ms");
+    phaseButton.setColour (juce::TextButton::buttonColourId, tabby::palette::violet().withAlpha (0.55f));   // latency engaged
+    phaseButton.repaint();
 }
 
 void TabbyEqEditor::showViewMenu()
