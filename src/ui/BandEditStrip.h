@@ -88,6 +88,8 @@ public:
     void setBand (int band);                 // -1 = nothing selected (controls disabled)
     std::function<void(int)> onStep;         // < / > pressed: step the selection by +/-1 (set by the editor)
     std::function<void()>    onEdited;       // a value-bar drag ended — editor re-places the floating toolbar
+    std::function<void(bool)> onLaneChanged; // Mid/Side tab clicked — editor highlights that node on the canvas
+    void setActiveLane (bool side);          // set the editing lane WITHOUT firing onLaneChanged (external sync)
 
     void paint (juce::Graphics&) override;
     void resized() override;

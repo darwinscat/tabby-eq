@@ -15,7 +15,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (display);
 
     display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
-    display.onBandSelected = [this] (int b) { strip.setBand (b); };   // node selection drives the toolbar
+    display.onBandSelected = [this] (int b, bool side) { strip.setBand (b); strip.setActiveLane (side); };   // node+lane -> toolbar
+    strip.onLaneChanged    = [this] (bool side) { display.setSelectedSide (side); };   // Mid/Side tab -> highlight node
     strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step to the prev / next band
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
 

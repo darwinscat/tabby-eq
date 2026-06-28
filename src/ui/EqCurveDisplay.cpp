@@ -38,6 +38,13 @@ namespace
     bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
+    // Mid/main vs Side param id: "freq" -> "sFreq", "q" -> "sQ", "gain" -> "sGain", "type" -> "sType", ...
+    juce::String laneParamId (int b, bool side, const juce::String& base)
+    {
+        if (side) return tabby::bandId (b, "s" + base.substring (0, 1).toUpperCase() + base.substring (1));
+        return tabby::bandId (b, base);
+    }
+
     // HP/LP whisker maps to the DISCRETE slope list (steeper = narrower handle) instead of Q.
     constexpr int kSlopeDb[7] = { 6, 12, 24, 36, 48, 72, 96 };
     int    slopeIndexFromDb (int db) noexcept { for (int i = 0; i < 7; ++i) if (kSlopeDb[i] == db) return i; return 1; }
@@ -133,39 +140,65 @@ void EqCurveDisplay::refreshDesigns()
     {
         paramCache[b]  = proc.readBand (b);
         designCache[b] = paramCache[b].on ? teq::designBand (paramCache[b], fsCache) : teq::BandDesign {};
+        designCacheSide[b] = (paramCache[b].on && paramCache[b].ms) ? teq::designBand (sideView (b), fsCache) : teq::BandDesign {};
     }
 }
 
-double EqCurveDisplay::compositeDb (double f) const noexcept
+teq::BandParams EqCurveDisplay::sideView (int b) const noexcept   // the Side lane as a plain BandParams
+{
+    teq::BandParams v = paramCache[(size_t) b];
+    v.type = v.sType; v.freq = v.sFreq; v.Q = v.sQ; v.gainDb = v.sGainDb; v.slope = v.sSlope;
+    v.on = v.sOn; v.bypass = v.sBypass; v.swept = false; v.ms = false;
+    return v;
+}
+
+double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 {
     const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
     std::complex<double> h { 1.0, 0.0 };
     for (int b = 0; b < tabby::kNumBands; ++b)
-        if (paramCache[b].on && ! paramCache[b].bypass)
-            for (int s = 0; s < designCache[b].n; ++s)
-                h *= teq::evalCoeffs (designCache[b].sec[s], w);
+    {
+        if (! paramCache[b].on) continue;
+        if (paramCache[b].ms && side)   // Side composite: an M/S band contributes its Side lane
+        {
+            if (paramCache[b].sOn && ! paramCache[b].sBypass)
+                for (int s = 0; s < designCacheSide[b].n; ++s) h *= teq::evalCoeffs (designCacheSide[b].sec[s], w);
+        }
+        else                            // Mid composite, or a Stereo band (which affects both M and S)
+        {
+            if (! paramCache[b].bypass)
+                for (int s = 0; s < designCache[b].n; ++s) h *= teq::evalCoeffs (designCache[b].sec[s], w);
+        }
+    }
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
 }
 
-juce::Point<float> EqCurveDisplay::nodePos (int b) const noexcept
+juce::Point<float> EqCurveDisplay::nodePos (int b, bool side) const noexcept
 {
     // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor); notch/all-pass are
     // surgical / phase-only so they sit on the 0 dB line; HP/LP/BP ride the composite at the corner.
-    const auto t = paramCache[b].type;
+    const auto& bp = paramCache[(size_t) b];
+    const bool   S = bp.ms && side;
+    const auto   t = S ? bp.sType : bp.type;
+    const double f = S ? bp.sFreq : bp.freq;
+    const double g = S ? bp.sGainDb : bp.gainDb;
     double db;
-    if (hasGain (t))                                                       db = paramCache[b].gainDb;
+    if (hasGain (t))                                                       db = g;
     else if (t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
-    else                                                                   db = compositeDb (paramCache[b].freq);
-    return { freqToX (paramCache[b].freq), dbToY (db) };
+    else                                                                   db = compositeDb (f, S);
+    return { freqToX (f), dbToY (db) };
 }
 
-std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (int b) const noexcept
+std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (int b, bool side) const noexcept
 {
-    const auto pos = nodePos (b);
-    const double f0 = paramCache[(size_t) b].freq;
-    const auto   t  = paramCache[(size_t) b].type;
-    const double bw = isCut (t) ? slopeBwForIndex (slopeIndexFromDb (paramCache[(size_t) b].slope))
-                                : whiskerBwForQ (paramCache[(size_t) b].Q);   // half-bandwidth (octaves)
+    const auto& bp = paramCache[(size_t) b];
+    const bool   S = bp.ms && side;
+    const auto  pos = nodePos (b, side);
+    const double f0 = S ? bp.sFreq : bp.freq;
+    const auto   t  = S ? bp.sType : bp.type;
+    const int    sl = S ? bp.sSlope : bp.slope;
+    const double qv = S ? bp.sQ : bp.Q;
+    const double bw = isCut (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
     const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
@@ -177,22 +210,28 @@ juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
     return typeColour (paramCache[(size_t) b].type);
 }
 
-double EqCurveDisplay::bandDb (int b, double f) const noexcept
+double EqCurveDisplay::bandDb (int b, double f, bool side) const noexcept
 {
+    const auto& d = (paramCache[(size_t) b].ms && side) ? designCacheSide[(size_t) b] : designCache[(size_t) b];
     const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
     std::complex<double> h { 1.0, 0.0 };
-    for (int s = 0; s < designCache[(size_t) b].n; ++s) h *= teq::evalCoeffs (designCache[(size_t) b].sec[s], w);
+    for (int s = 0; s < d.n; ++s) h *= teq::evalCoeffs (d.sec[s], w);
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
 }
 
-int EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
+EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
 {
-    int best = -1; float bestD = (kNodeR + 5.0f) * (kNodeR + 5.0f);
+    Hit best; float bestD = (kNodeR + 5.0f) * (kNodeR + 5.0f);
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
         {
-            const float d = p.getDistanceSquaredFrom (nodePos (b));
-            if (d < bestD) { bestD = d; best = b; }
+            const float dm = p.getDistanceSquaredFrom (nodePos (b, false));
+            if (dm < bestD) { bestD = dm; best = { b, false }; }
+            if (paramCache[b].ms)
+            {
+                const float ds = p.getDistanceSquaredFrom (nodePos (b, true));
+                if (ds < bestD) { bestD = ds; best = { b, true }; }
+            }
         }
     return best;
 }
@@ -228,32 +267,42 @@ void EqCurveDisplay::endDragGesture()
     {
         if (draggingQ)
         {
-            if (auto* prm = proc.apvts.getParameter (tabby::bandId (draggingBand, whiskerSlope ? "slope" : "q")))
+            if (auto* prm = proc.apvts.getParameter (laneParamId (draggingBand, draggingSide, whiskerSlope ? "slope" : "q")))
                 prm->endChangeGesture();
         }
         else
         {
-            if (auto* fp = proc.apvts.getParameter (tabby::bandId (draggingBand, "freq"))) fp->endChangeGesture();
+            if (auto* fp = proc.apvts.getParameter (laneParamId (draggingBand, draggingSide, "freq"))) fp->endChangeGesture();
             if (draggingGain)
-                if (auto* gp = proc.apvts.getParameter (tabby::bandId (draggingBand, "gain"))) gp->endChangeGesture();
+                if (auto* gp = proc.apvts.getParameter (laneParamId (draggingBand, draggingSide, "gain"))) gp->endChangeGesture();
         }
     }
     if (momentarySolo) { proc.setSoloBand (prevSoloBand); momentarySolo = false; }   // release momentary solo
     pressBand    = -1;
     pressMoved   = false;
     draggingBand = -1;
+    draggingSide = false;
     draggingGain = false;
     draggingQ    = false;
     qDragSide    = 0;
     whiskerSlope = false;
 }
 
-void EqCurveDisplay::selectBand (int newSel)
+void EqCurveDisplay::selectBand (int newSel, bool side)
 {
-    if (newSel == selBand) return;
+    if (newSel == selBand && side == selSide) return;
     selBand = newSel;
-    if (onBandSelected) onBandSelected (selBand);   // updates the toolbar's controls first
-    positionToolbar();                               // then place it near the new node
+    selSide = (newSel >= 0) && side;
+    if (onBandSelected) onBandSelected (selBand, selSide);   // updates the toolbar's controls + lane first
+    positionToolbar();                                       // then place it near the new node
+}
+
+void EqCurveDisplay::setSelectedSide (bool side)             // the toolbar switched Mid/Side lane
+{
+    if (side == selSide) return;
+    selSide = side;
+    positionToolbar();
+    repaint();
 }
 
 void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
@@ -462,24 +511,31 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     {
         constexpr int pts = 240;
         const float y0 = dbToY (0.0);
-        for (int b = 0; b < tabby::kNumBands; ++b)
-            if (paramCache[b].on && ! paramCache[b].bypass && (solo < 0 || solo == b))
+        auto drawLane = [&] (int b, bool side)
+        {
+            const bool laneByp = side ? (paramCache[b].sBypass || ! paramCache[b].sOn) : paramCache[b].bypass;
+            if (laneByp) return;
+            juce::Path bc, bf;
+            bf.startNewSubPath (0.0f, y0);
+            for (int i = 0; i <= pts; ++i)
             {
-                juce::Path bc, bf;
-                bf.startNewSubPath (0.0f, y0);
-                for (int i = 0; i <= pts; ++i)
-                {
-                    const float x = (float) i / (float) pts * w;
-                    const float y = dbToY (bandDb (b, xToFreq (x)));
-                    if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
-                    bf.lineTo (x, y);
-                }
-                bf.lineTo (w, y0); bf.closeSubPath();
+                const float x = (float) i / (float) pts * w;
+                const float y = dbToY (bandDb (b, xToFreq (x), side));
+                if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
+                bf.lineTo (x, y);
+            }
+            bf.lineTo (w, y0); bf.closeSubPath();
 
-                const bool hot = (solo == b) || (solo < 0 && b == selBand);   // soloed or selected -> emphasised
-                const auto col = bandColour (b);
-                if (perBandFill) { g.setColour (col.withAlpha (hot ? 0.12f : 0.05f)); g.fillPath (bf); }
-                g.setColour (col.withAlpha (hot ? 0.70f : 0.32f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.4f : 0.9f));
+            const bool hot = (solo == b) || (solo < 0 && b == selBand && side == selSide);
+            const auto col = bandColour (b);
+            if (perBandFill) { g.setColour (col.withAlpha (hot ? 0.12f : 0.05f)); g.fillPath (bf); }
+            g.setColour (col.withAlpha (hot ? 0.70f : 0.32f)); g.strokePath (bc, juce::PathStrokeType (hot ? 1.4f : 0.9f));
+        };
+        for (int b = 0; b < tabby::kNumBands; ++b)
+            if (paramCache[b].on && (solo < 0 || solo == b))
+            {
+                drawLane (b, false);
+                if (paramCache[b].ms) drawLane (b, true);
             }
     }
 
@@ -528,57 +584,86 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
         g.setColour (dim ? orng.withAlpha (0.30f) : orng);
         g.strokePath (line, juce::PathStrokeType (1.8f));
+
+        // Side composite (when any band is M/S): a second curve in light violet. The orange line above
+        // is then the Mid composite; together they show what L/R become.
+        bool anyMs = false;
+        for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on && paramCache[b].ms) { anyMs = true; break; }
+        if (anyMs)
+        {
+            juce::Path sline; bool st = false;
+            for (int i = 0; i <= pts; ++i)
+            {
+                const float x = (float) i / (float) pts * w;
+                const float y = dbToY (compositeDb (xToFreq (x), true));
+                if (! st) { sline.startNewSubPath (x, y); st = true; } else sline.lineTo (x, y);
+            }
+            g.setColour (tabby::palette::violetLo().withAlpha (dim ? 0.40f : 0.95f));
+            g.strokePath (sline, juce::PathStrokeType (1.6f));
+        }
     }
 
     // --- hover halo on the node under the cursor --------------------------
     if (hoverPos.x >= 0.0f && draggingBand < 0)
     {
-        const int hb = nodeAt (hoverPos);
-        if (hb >= 0)
+        const Hit hb = nodeAt (hoverPos);
+        if (hb.band >= 0)
         {
-            const auto hp = nodePos (hb);
-            g.setColour (bandColour (hb).withAlpha (0.22f));
+            const auto hp = nodePos (hb.band, hb.side);
+            g.setColour (bandColour (hb.band).withAlpha (0.22f));
             g.fillEllipse (hp.x - kNodeR - 7, hp.y - kNodeR - 7, (kNodeR + 7) * 2, (kNodeR + 7) * 2);
         }
     }
 
-    // --- nodes ------------------------------------------------------------
+    // --- nodes (Mid/main always; Side too for M/S bands) ------------------
+    auto drawNode = [&] (int b, bool side)
+    {
+        const auto pos = nodePos (b, side);
+        const auto col = bandColour (b);
+        const auto numR = juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2);
+        const bool byp = side ? (paramCache[b].sBypass || ! paramCache[b].sOn) : paramCache[b].bypass;
+        if (byp)   // ghost: dim hollow ring — still hit-tested, so it's clickable back on
+        {
+            g.setColour (col.withAlpha (0.45f));
+            g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.5f);
+            g.setColour (juce::Colours::white.withAlpha (0.45f)); g.setFont (10.0f);
+            g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
+        }
+        else
+        {
+            g.setColour (col.withAlpha (0.25f)); g.fillEllipse (pos.x - kNodeR - 2, pos.y - kNodeR - 2, (kNodeR + 2) * 2, (kNodeR + 2) * 2);
+            g.setColour (col);                   g.fillEllipse (pos.x - kNodeR,     pos.y - kNodeR,     kNodeR * 2,       kNodeR * 2);
+            g.setColour (juce::Colours::black.withAlpha (0.5f)); g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.0f);
+            g.setColour (juce::Colours::white); g.setFont (10.0f);
+            g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
+        }
+        if (side)   // Side badge: an orange ring marks the Side node
+        {
+            g.setColour (tabby::palette::orange().withAlpha (0.95f));
+            g.drawEllipse (pos.x - kNodeR - 3.0f, pos.y - kNodeR - 3.0f, (kNodeR + 3.0f) * 2, (kNodeR + 3.0f) * 2, 1.6f);
+        }
+    };
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
         {
-            const auto pos = nodePos (b);
-            const auto col = bandColour (b);
-            const auto numR = juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2);
-            if (paramCache[b].bypass)   // ghost: dim hollow ring — still hit-tested, so it's clickable back on
-            {
-                g.setColour (col.withAlpha (0.45f));
-                g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.5f);
-                g.setColour (juce::Colours::white.withAlpha (0.45f)); g.setFont (10.0f);
-                g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
-            }
-            else
-            {
-                g.setColour (col.withAlpha (0.25f)); g.fillEllipse (pos.x - kNodeR - 2, pos.y - kNodeR - 2, (kNodeR + 2) * 2, (kNodeR + 2) * 2);
-                g.setColour (col);                   g.fillEllipse (pos.x - kNodeR,     pos.y - kNodeR,     kNodeR * 2,       kNodeR * 2);
-                g.setColour (juce::Colours::black.withAlpha (0.5f)); g.drawEllipse (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2, 1.0f);
-                g.setColour (juce::Colours::white); g.setFont (10.0f);
-                g.drawText (juce::String (b + 1), numR, juce::Justification::centred);
-            }
-
+            drawNode (b, false);
+            if (paramCache[b].ms) drawNode (b, true);
         }
 
-    // --- selection highlight + live value bubble --------------------------
-    const int rb = draggingBand >= 0 ? draggingBand : selBand;
+    // --- selection highlight (the focused lane's node) --------------------
+    const int  rb    = draggingBand >= 0 ? draggingBand : selBand;
+    const bool rside = draggingBand >= 0 ? draggingSide : selSide;
     if (rb >= 0 && rb < tabby::kNumBands && paramCache[(size_t) rb].on)
     {
-        const auto pos = nodePos (rb);
+        const auto pos = nodePos (rb, rside);
         g.setColour (juce::Colours::white.withAlpha (0.85f));
         g.drawEllipse (pos.x - kNodeR - 3, pos.y - kNodeR - 3, (kNodeR + 3) * 2, (kNodeR + 3) * 2, 1.5f);
 
         // Whiskers (Neutron-style): drag an end handle to set bandwidth/Q (HP/LP -> discrete slope)
-        if (whiskerRelevant (paramCache[(size_t) rb].type))
+        const auto laneType = (paramCache[(size_t) rb].ms && rside) ? paramCache[(size_t) rb].sType : paramCache[(size_t) rb].type;
+        if (whiskerRelevant (laneType))
         {
-            const auto wk  = whiskerEnds (rb);
+            const auto wk  = whiskerEnds (rb, rside);
             const auto col = bandColour (rb);
             g.setColour (col.withAlpha (0.85f));
             g.drawLine (wk.first.x, pos.y, wk.second.x, pos.y, 1.5f);
@@ -793,7 +878,9 @@ void EqCurveDisplay::smartAdd (juce::Point<float> at)
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 {
     refreshDesigns();
-    const int b = nodeAt (e.position);
+    const Hit  hit  = nodeAt (e.position);
+    const int  b    = hit.band;
+    const bool side = hit.side;
 
     if (e.mods.isPopupMenu())
     {
@@ -809,15 +896,15 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
                 it.itemID = i + 1;
                 it.text   = names[i];
                 it.setImage (tabby::shapes::icon (tabby::filterTypeFromChoice (i), tabby::palette::violetLo()));
-                it.setTicked (paramCache[b].type == tabby::filterTypeFromChoice (i));
+                it.setTicked ((side ? paramCache[b].sType : paramCache[b].type) == tabby::filterTypeFromChoice (i));
                 m.addItem (it);
             }
             m.addSeparator();
             m.addItem (100, "Remove band");
-            m.showMenuAsync (juce::PopupMenu::Options(), [safe, b] (int r) {
+            m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, side] (int r) {
                 if (safe == nullptr || r == 0) return;
-                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);
-                else          safe->setParamGestured (tabby::bandId (b, "type"), r - 1);
+                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);   // remove the whole band
+                else          safe->setParamGestured (laneParamId (b, side, "type"), r - 1);   // set this lane's type
             });
         }
         else          // empty: add a band here, if a slot is free
@@ -862,36 +949,42 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    // A drag on the selected band's Q-whisker handle sets Q (Neutron-style), keeping the selection.
-    if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && whiskerRelevant (paramCache[(size_t) selBand].type))
+    // A drag on the selected lane's Q-whisker handle sets Q (Neutron-style), keeping the selection.
+    const auto selType = (selBand < 0) ? teq::FilterType::Bell
+                       : ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
+                                                                       : paramCache[(size_t) selBand].type);
+    if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && whiskerRelevant (selType))
     {
-        const auto wk = whiskerEnds (selBand);
+        const auto wk = whiskerEnds (selBand, selSide);
         const bool onRight = e.position.getDistanceFrom (wk.second) < kNodeR + 4.0f;
         const bool onLeft  = e.position.getDistanceFrom (wk.first)  < kNodeR + 4.0f;
         if (onLeft || onRight)
         {
-            draggingBand = selBand; draggingQ = true; qDragSide = onRight ? 1 : -1;
-            whiskerSlope = isCut (paramCache[(size_t) selBand].type);
-            if (auto* prm = proc.apvts.getParameter (tabby::bandId (selBand, whiskerSlope ? "slope" : "q")))
+            draggingBand = selBand; draggingSide = selSide; draggingQ = true; qDragSide = onRight ? 1 : -1;
+            whiskerSlope = isCut (selType);
+            if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selSide, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
-            lastDragFreq = (float) paramCache[(size_t) selBand].freq;
+            lastDragFreq = (float) ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sFreq
+                                                                                 : paramCache[(size_t) selBand].freq);
             grabKeyboardFocus();
             if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
             return;
         }
     }
 
-    // select the clicked node (or clear on empty) so the edit strip follows, then start dragging
-    selectBand (b);
-    draggingBand = b;
+    // select the clicked node/lane (or clear on empty) so the toolbar follows, then start dragging
+    selectBand (b, side);
+    draggingBand = b; draggingSide = side;
     if (b >= 0)
     {
+        const bool S  = paramCache[b].ms && side;
+        const auto lt = S ? paramCache[b].sType : paramCache[b].type;
         pressBand = b; pressPos = e.position; pressMs = juce::Time::getMillisecondCounter(); pressMoved = false;
-        if (auto* fp = proc.apvts.getParameter (tabby::bandId (b, "freq"))) fp->beginChangeGesture();
-        draggingGain = hasGain (paramCache[b].type);
+        if (auto* fp = proc.apvts.getParameter (laneParamId (b, side, "freq"))) fp->beginChangeGesture();
+        draggingGain = hasGain (lt);
         if (draggingGain)
-            if (auto* gp = proc.apvts.getParameter (tabby::bandId (b, "gain"))) gp->beginChangeGesture();
-        lastDragFreq = (float) paramCache[b].freq;
+            if (auto* gp = proc.apvts.getParameter (laneParamId (b, side, "gain"))) gp->beginChangeGesture();
+        lastDragFreq = (float) (S ? paramCache[b].sFreq : paramCache[b].freq);
         grabKeyboardFocus();
         if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
     }
@@ -913,26 +1006,27 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     if (draggingBand < 0) return;
     if (pressBand >= 0 && e.position.getDistanceFrom (pressPos) > 4.0f) pressMoved = true;   // a real drag cancels long-press
     const bool lockY = e.mods.isAltDown() && audLockGain;                                     // Alt+lock -> sweep freq only
-    lastDragFreq = (float) (draggingQ ? paramCache[(size_t) draggingBand].freq : xToFreq (e.position.x));
+    const bool S = paramCache[(size_t) draggingBand].ms && draggingSide;                      // which lane is being dragged
+    const double laneF0 = S ? paramCache[(size_t) draggingBand].sFreq : paramCache[(size_t) draggingBand].freq;
+    lastDragFreq = (float) (draggingQ ? laneF0 : xToFreq (e.position.x));
     driveAudition (e.mods.isAltDown(), lastDragFreq, audQSetting);                            // Alt = narrow band-listen
     if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
     {
-        const double f0 = paramCache[(size_t) draggingBand].freq;
         const double fx = xToFreq (e.position.x);
         // Clamp the grabbed handle to its own side of the node (no jumping across), then map the
         // half-bandwidth to Q with the calibrated curve (hits 40 / 0.1 at the ends).
-        const double bw = (qDragSide > 0) ? std::log2 (juce::jmax (f0, fx) / f0)
-                                          : std::log2 (f0 / juce::jmin (f0, fx));
+        const double bw = (qDragSide > 0) ? std::log2 (juce::jmax (laneF0, fx) / laneF0)
+                                          : std::log2 (laneF0 / juce::jmin (laneF0, fx));
         if (whiskerSlope)   // HP/LP -> snap to the discrete slope list
-            setParam (tabby::bandId (draggingBand, "slope"), (double) slopeIndexForBw (bw));
+            setParam (laneParamId (draggingBand, draggingSide, "slope"), (double) slopeIndexForBw (bw));
         else                // others -> continuous Q (calibrated, hits 40 / 0.1 at the ends)
-            setParam (tabby::bandId (draggingBand, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
+            setParam (laneParamId (draggingBand, draggingSide, "q"), juce::jlimit (0.1, 40.0, whiskerQForBw (bw)));
         positionToolbar();   // follow the node while dragging it by mouse
         return;
     }
-    setParam (tabby::bandId (draggingBand, "freq"), xToFreq (e.position.x));
+    setParam (laneParamId (draggingBand, draggingSide, "freq"), xToFreq (e.position.x));
     if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
-        setParam (tabby::bandId (draggingBand, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
+        setParam (laneParamId (draggingBand, draggingSide, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
     positionToolbar();   // follow the node while dragging it by mouse (cursor is on the node, not the bar)
 }
 
@@ -983,17 +1077,23 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         }
 
         refreshDesigns();
-        const auto& p = paramCache[(size_t) selBand];
+        const auto& p  = paramCache[(size_t) selBand];
+        const bool   S  = p.ms && selSide;                       // act on the focused lane
+        const auto   lt = S ? p.sType   : p.type;
+        const double lf = S ? p.sFreq   : p.freq;
+        const double lg = S ? p.sGainDb : p.gainDb;
+        const double lq = S ? p.sQ      : p.Q;
+        const int    ls = S ? p.sSlope  : p.slope;
 
         if (! alt)
         {
             const double fStep = std::exp2 (1.0 / 24.0);                                // freq nudge: a quarter-tone
-            if (code == juce::KeyPress::leftKey)  { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq / fStep)); positionToolbar(); return true; }
-            if (code == juce::KeyPress::rightKey) { setParamGestured (tabby::bandId (selBand, "freq"), juce::jlimit (kFreqMin, kFreqMax, p.freq * fStep)); positionToolbar(); return true; }
-            if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (p.type))
+            if (code == juce::KeyPress::leftKey)  { setParamGestured (laneParamId (selBand, selSide, "freq"), juce::jlimit (kFreqMin, kFreqMax, lf / fStep)); positionToolbar(); return true; }
+            if (code == juce::KeyPress::rightKey) { setParamGestured (laneParamId (selBand, selSide, "freq"), juce::jlimit (kFreqMin, kFreqMax, lf * fStep)); positionToolbar(); return true; }
+            if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (lt))
             {
-                setParamGestured (tabby::bandId (selBand, "gain"),
-                                  juce::jlimit (-kGainRange, kGainRange, p.gainDb + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                setParamGestured (laneParamId (selBand, selSide, "gain"),
+                                  juce::jlimit (-kGainRange, kGainRange, lg + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
                 positionToolbar();
                 return true;                                                            // gain +/- 0.5 dB
             }
@@ -1003,10 +1103,10 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
-                if (isCut (p.type))                                                     // HP/LP -> step the slope (octaves)
-                    setParamGestured (tabby::bandId (selBand, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) p.slope) + d));
+                if (isCut (lt))                                                         // HP/LP -> step the slope (octaves)
+                    setParamGestured (laneParamId (selBand, selSide, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) ls) + d));
                 else                                                                    // others -> Q +/- 0.1
-                    setParamGestured (tabby::bandId (selBand, "q"), juce::jlimit (0.05, 40.0, p.Q + 0.1 * d));
+                    setParamGestured (laneParamId (selBand, selSide, "q"), juce::jlimit (0.05, 40.0, lq + 0.1 * d));
                 positionToolbar();
                 return true;
             }
@@ -1030,13 +1130,15 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
     if (addLine == AddLine::Off)                          return { -1.0f, -1.0f };
     if (hoverPos.x < 0.0f || draggingBand >= 0 || placing) return { -1.0f, -1.0f };
-    if (nodeAt (hoverPos) >= 0)                           return { -1.0f, -1.0f };   // on a node -> no "+"
+    if (nodeAt (hoverPos).band >= 0)                     return { -1.0f, -1.0f };   // on a node -> no "+"
 
-    // don't surface "+" over the selected band's whisker bar (so you can grab a handle)
-    if (selBand >= 0 && paramCache[(size_t) selBand].on && whiskerRelevant (paramCache[(size_t) selBand].type))
+    // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)
+    const auto selType = (selBand >= 0 && paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
+                       : (selBand >= 0 ? paramCache[(size_t) selBand].type : teq::FilterType::Bell);
+    if (selBand >= 0 && paramCache[(size_t) selBand].on && whiskerRelevant (selType))
     {
-        const auto wk = whiskerEnds (selBand);
-        const float ny = nodePos (selBand).y;
+        const auto wk = whiskerEnds (selBand, selSide);
+        const float ny = nodePos (selBand, selSide).y;
         if (std::abs (hoverPos.y - ny) < 12.0f && hoverPos.x > wk.first.x - 8.0f && hoverPos.x < wk.second.x + 8.0f)
             return { -1.0f, -1.0f };
     }
@@ -1059,11 +1161,13 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
     refreshDesigns();
-    const int b = nodeAt (e.position);
-    if (b >= 0)                                                   // on a node -> toggle bypass (ghost on/off)
+    const Hit hit = nodeAt (e.position);
+    if (hit.band >= 0)                                            // on a node -> toggle that lane's bypass (ghost)
     {
-        setParamGestured (tabby::bandId (b, "bypass"), paramCache[(size_t) b].bypass ? 0.0 : 1.0);
-        selectBand (b);
+        const bool byp = (paramCache[(size_t) hit.band].ms && hit.side) ? paramCache[(size_t) hit.band].sBypass
+                                                                        : paramCache[(size_t) hit.band].bypass;
+        setParamGestured (laneParamId (hit.band, hit.side, "bypass"), byp ? 0.0 : 1.0);
+        selectBand (hit.band, hit.side);
     }
     else
         smartAdd (e.position);                                   // empty -> add (edge -> HP/LP, else Bell)
@@ -1072,11 +1176,11 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 void EqCurveDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
     refreshDesigns();
-    const int b = draggingBand >= 0 ? draggingBand : nodeAt (e.position);
-    if (b < 0) return;
-    auto* qp = proc.apvts.getParameter (tabby::bandId (b, "q"));
+    const Hit hit = draggingBand >= 0 ? Hit { draggingBand, draggingSide } : nodeAt (e.position);
+    if (hit.band < 0) return;
+    auto* qp = proc.apvts.getParameter (laneParamId (hit.band, hit.side, "q"));
     if (qp == nullptr) return;
     const double cur    = qp->convertFrom0to1 (qp->getValue());   // live value (not the timer cache)
     const double factor = wheel.deltaY > 0.0f ? 1.15 : 1.0 / 1.15;
-    setParamGestured (tabby::bandId (b, "q"), juce::jlimit (0.05, 40.0, cur * factor));
+    setParamGestured (laneParamId (hit.band, hit.side, "q"), juce::jlimit (0.05, 40.0, cur * factor));
 }

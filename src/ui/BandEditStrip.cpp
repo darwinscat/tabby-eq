@@ -130,7 +130,7 @@ int BandEditStrip::laneTypeIndex() const
     return 0;
 }
 
-void BandEditStrip::setLane (bool side)
+void BandEditStrip::setActiveLane (bool side)
 {
     editingSide = side;
     midTab.setToggleState (! side, juce::dontSendNotification);
@@ -139,6 +139,12 @@ void BandEditStrip::setLane (bool side)
     rebind();
     updateForType();
     repaint();
+}
+
+void BandEditStrip::setLane (bool side)   // tab click: switch lane AND tell the canvas to follow
+{
+    setActiveLane (side);
+    if (onLaneChanged) onLaneChanged (side);
 }
 
 void BandEditStrip::copyMidToSide()   // seed Side from Mid so enabling M/S "splits" the band into two equals

@@ -31,6 +31,7 @@ public:
     void stepSelection (int dir);   // select the prev/next active band (frequency order, wraps)
     void clearSelection();          // deselect (hides the floating toolbar)
     void refreshToolbar();          // re-place the toolbar at the selected node (after a window edit)
+    void setSelectedSide (bool side);   // the toolbar switched the Mid/Side lane -> highlight that node
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;
@@ -43,7 +44,7 @@ public:
     void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
     // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
-    std::function<void(int)> onBandSelected;
+    std::function<void(int, bool)> onBandSelected;   // (band, side-lane); -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
     int  selectedBand() const noexcept { return selBand; }
     void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
@@ -74,14 +75,17 @@ private:
     double yToDb   (float y)   const noexcept;
     float  specDbToY (double db) const noexcept;   // spectrum dBFS scale
 
-    void   refreshDesigns();                       // pull the 12 bands into the cache + design them
-    double compositeDb (double f) const noexcept;  // total response (dB) from the cache
-    juce::Point<float> nodePos (int band) const noexcept;
-    std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b) const noexcept;   // Q-handle positions
+    struct Hit { int band = -1; bool side = false; };   // a node hit: which band + which lane (M/S)
+
+    void   refreshDesigns();                       // pull the bands into the cache + design both lanes
+    teq::BandParams sideView (int b) const noexcept;        // the band's Side lane as a BandParams (main fields)
+    double compositeDb (double f, bool side = false) const noexcept;   // Mid (side=false) or Side composite
+    juce::Point<float> nodePos (int band, bool side = false) const noexcept;
+    std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b, bool side = false) const noexcept;
     juce::Colour bandColour (int b) const noexcept;    // per-band (or per-type) colour
-    double       bandDb (int b, double f) const noexcept;   // one band's response (dB) for its faint curve
+    double       bandDb (int b, double f, bool side = false) const noexcept;   // one lane's response (dB)
     juce::Point<float> addButtonAt() const noexcept;   // the "+" on the curve under the cursor, or {-1,-1}
-    int    nodeAt (juce::Point<float> p) const noexcept;   // band index under p, or -1
+    Hit    nodeAt (juce::Point<float> p) const noexcept;   // band + lane under p (band = -1 if none)
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
     void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
@@ -96,7 +100,7 @@ private:
     void    drawAddPreview (juce::Graphics&, const AddSpec&, juce::Point<float> at, bool dragging) const;
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
-    void   selectBand (int newSel);                  // update selection + fire onBandSelected
+    void   selectBand (int newSel, bool side = false);   // update selection + fire onBandSelected
     void   positionToolbar();                        // float the toolbar near the selected node
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
@@ -112,10 +116,12 @@ private:
 
     // per-paint cache of the band designs (shared by curve / nodes / hit-test)
     teq::BandParams paramCache[tabby::kNumBands];
-    teq::BandDesign designCache[tabby::kNumBands];
+    teq::BandDesign designCache[tabby::kNumBands];       // Mid/main lane design
+    teq::BandDesign designCacheSide[tabby::kNumBands];   // Side lane design (M/S bands only)
     double fsCache = 44100.0;
 
     int  draggingBand = -1;
+    bool draggingSide = false;   // the node being dragged is the Side lane
     bool draggingGain = false;
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
@@ -128,6 +134,7 @@ private:
     int  prevSoloBand  = -1;
     juce::Point<float> pressPos;
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
+    bool selSide      = false;   // selected lane (false = Mid/main, true = Side) for M/S bands
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
     bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
