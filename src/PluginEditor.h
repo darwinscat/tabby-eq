@@ -28,6 +28,7 @@ private:
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)
     void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only
     void parameterChanged (const juce::String& id, float newValue) override;   // M/S freq-link mirror
+    void alignLinkedFreqs();   // snap Side freq -> Mid freq on every split band (when link is switched on)
 
     bool msFreqLink = false;  // when on, an M/S band's Mid & Side share one frequency
     bool mirroring  = false;  // re-entry guard for the freq-link mirror

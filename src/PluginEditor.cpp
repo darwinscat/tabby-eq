@@ -114,6 +114,15 @@ void TabbyEqEditor::parameterChanged (const juce::String& id, float value)   // 
     }
 }
 
+void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto its Side
+{
+    for (int b = 0; b < tabby::kNumBands; ++b)
+        if (proc.apvts.getRawParameterValue (tabby::bandId (b, "ms"))->load() >= 0.5f)
+            if (auto* mid = proc.apvts.getParameter (tabby::bandId (b, "freq")))
+                if (auto* side = proc.apvts.getParameter (tabby::bandId (b, "sFreq")))
+                    side->setValueNotifyingHost (mid->getValue());
+}
+
 void TabbyEqEditor::showViewMenu()
 {
     juce::PopupMenu m;
@@ -156,7 +165,8 @@ void TabbyEqEditor::showViewMenu()
         if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
         if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
-        if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr); }
+        if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
+                       if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
     });
 }
 
