@@ -9,7 +9,7 @@ TabbyEQ is AGPL-3.0-or-later. Bundled / fetched third-party components and their
 
 ## Algorithms (method, not code)
 
-- **Matched second-order digital filters** — the coefficient design in `src/core/MatchedBiquad.h`
+- **Matched second-order digital filters** — the coefficient design in `teq/include/teq/MatchedBiquad.h`
   implements the closed-form method from **Martin Vicanek, "Matched Second Order Digital
   Filters" (2016)** and its companion "Matched Two-Pole Digital Shelving Filters". The formulas
   are a published mathematical method (cited inline in the header); no third-party source code

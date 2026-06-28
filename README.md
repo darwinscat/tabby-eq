@@ -34,7 +34,7 @@ cmake --build build --target teq_tests -j   # run the engine tests
 ```
 
 Design and the trait data live in [`docs/CONCEPT.md`](docs/CONCEPT.md) and
-[`vocab/`](vocab/).
+[`docs/VOCABULARY.md`](docs/VOCABULARY.md).
 
 ## License
 

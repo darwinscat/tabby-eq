@@ -42,9 +42,10 @@ cmake_install.cmake
 notarize-credentials*
 .env
 
-# Local AI-assistant brain — kept private/local, not shipped in the public repo
+# Local AI-assistant brain + MCP config — kept private/local, never shipped (holds API keys)
 CLAUDE.md
 .claude/
+.mcp.json
 
 # Poweramp NAM captures — the amp-stage CODE is public/AGPL, but the .nam model files stay
 # LOCAL (your own build embeds them). The open-source plugin ships without bundled third-party
