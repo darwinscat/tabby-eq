@@ -116,7 +116,11 @@ public:
         freqS.prepare (fs, smoothMs);
         qS.prepare    (fs, smoothMs);
         gainS.prepare (fs, smoothMs);
+        sFreqS.prepare (fs, smoothMs);
+        sQS.prepare    (fs, smoothMs);
+        sGainS.prepare (fs, smoothMs);
         freqS.snap (p.freq); qS.snap (p.Q); gainS.snap (p.gainDb);
+        sFreqS.snap (p.sFreq); sQS.snap (p.sQ); sGainS.snap (p.sGainDb);
         svf.prepare (fs, ch);
         updateCoeffs();
         recomputePending = false;
@@ -141,21 +145,26 @@ public:
     {
         auto finiteOr = [] (double x, double fb) noexcept { return std::isfinite (x) ? x : fb; };
         BandParams np = npIn;
-        np.freq   = std::clamp (finiteOr (np.freq, 1000.0), 10.0, 0.49 * fs);
-        np.Q      = std::clamp (finiteOr (np.Q, 1.0), 0.05, 40.0);
-        np.gainDb = std::clamp (finiteOr (np.gainDb, 0.0), -30.0, 30.0);
+        np.freq    = std::clamp (finiteOr (np.freq, 1000.0), 10.0, 0.49 * fs);
+        np.Q       = std::clamp (finiteOr (np.Q, 1.0), 0.05, 40.0);
+        np.gainDb  = std::clamp (finiteOr (np.gainDb, 0.0), -30.0, 30.0);
+        np.sFreq   = std::clamp (finiteOr (np.sFreq, 1000.0), 10.0, 0.49 * fs);
+        np.sQ      = std::clamp (finiteOr (np.sQ, 1.0), 0.05, 40.0);
+        np.sGainDb = std::clamp (finiteOr (np.sGainDb, 0.0), -30.0, 30.0);
 
         if (! initialized)
         {
             p = np;
-            freqS.snap (p.freq); qS.snap (p.Q); gainS.snap (p.gainDb);
+            freqS.snap (p.freq);   qS.snap (p.Q);   gainS.snap (p.gainDb);
+            sFreqS.snap (p.sFreq); sQS.snap (p.sQ); sGainS.snap (p.sGainDb);
             initialized = true;
             recomputePending = true;
         }
         else if (! (np == p))
         {
             p = np;
-            freqS.setTarget (p.freq); qS.setTarget (p.Q); gainS.setTarget (p.gainDb);
+            freqS.setTarget (p.freq);   qS.setTarget (p.Q);   gainS.setTarget (p.gainDb);
+            sFreqS.setTarget (p.sFreq); sQS.setTarget (p.sQ); sGainS.setTarget (p.sGainDb);
             recomputePending = true;
         }
     }
@@ -165,7 +174,9 @@ public:
     // Audio thread. In-place. RT-safe (no alloc / lock / IO).
     void processBlock (float* const* channels, int numChannels, int numSamples) noexcept
     {
-        const bool active = p.on && ! p.bypass;
+        const bool midActive  = p.on && ! p.bypass;                       // Mid/main lane
+        const bool sideActive = p.on && p.ms && p.sOn && ! p.sBypass;     // Side lane (M/S only)
+        const bool active     = midActive || sideActive;                  // a bypassed Mid still lets Side run
         if (! active || numSamples <= 0)
         {
             if (! active && wasActive) { reset(); wasActive = false; }   // clear the tail so re-enabling doesn't pop
@@ -173,16 +184,40 @@ public:
         }
         wasActive = true;
 
-        freqS.advance (numSamples);
-        qS.advance    (numSamples);
-        gainS.advance (numSamples);
+        freqS.advance (numSamples);  qS.advance (numSamples);  gainS.advance (numSamples);
+        sFreqS.advance (numSamples); sQS.advance (numSamples); sGainS.advance (numSamples);
 
         // Recompute only when something actually moves — a static, settled band skips the
         // per-block tan/exp/sin/sqrt entirely.
-        const bool moving = ! (freqS.settled() && qS.settled() && gainS.settled());
+        const bool moving = ! (freqS.settled() && qS.settled() && gainS.settled()
+                            && sFreqS.settled() && sQS.settled() && sGainS.settled());
         if (recomputePending || moving) { updateCoeffs(); recomputePending = moving; }
 
         const int nc = numChannels < ch ? numChannels : ch;
+
+        // M/S dual-design (2-ch only): exact local encode -> filter Mid (col 0) / Side (col 1) -> decode.
+        // Matched filters only (no swept in M/S). Composes in series — the next band sees L/R again.
+        if (p.ms && nc == 2)
+        {
+            float* L = channels[0];
+            float* R = channels[1];
+            for (int n = 0; n < numSamples; ++n)
+            {
+                const float m = 0.5f * (L[n] + R[n]);
+                const float s = 0.5f * (L[n] - R[n]);
+                float dM = 0.0f, dS = 0.0f;
+                if (midActive)  { float x = m; for (int k = 0; k < designN;     ++k) x = bq[k][0].processSample (x); dM = x - m; }
+                if (sideActive) { float y = s; for (int k = 0; k < designNside; ++k) y = bq[k][1].processSample (y); dS = y - s; }
+                L[n] += dM + dS;   // L=M+S, R=M-S: fold deltas back. An idle lane (d=0) leaves its axis bit-exact.
+                R[n] += dM - dS;
+            }
+            flushState();
+            return;
+        }
+
+        // Non-M/S path runs the Mid/main lane only. If the Mid lane is off (e.g. M/S band on mono with
+        // Mid bypassed) there is nothing to do here.
+        if (! midActive) { flushState(); return; }
 
         // One sample through this band's filter chain on a given per-channel state column.
         auto filt = [this] (int col, float x) noexcept
@@ -253,42 +288,59 @@ private:
 
         const BandDesign d = designBand (sp, fs);
 
-        // A topology switch (section count changed, or swept<->static) changes WHICH filters run —
-        // clear all state so a re-activated section never resumes a stale tail (a click). Rare event;
-        // costs nothing on steady state. Matters for TabbyEQ: search->treat toggles `swept`.
-        if (d.n != designN || p.swept != lastSwept || p.route != lastRoute) reset();
+        // Side lane (M/S only): design from a side-view of the params (s* fields into the design slots).
+        BandDesign dS; dS.n = 0;
+        if (p.ms)
+        {
+            BandParams ssp = p;
+            ssp.type = p.sType; ssp.slope = p.sSlope; ssp.swept = false;
+            ssp.freq = sFreqS.value(); ssp.Q = sQS.value(); ssp.gainDb = sGainS.value();
+            dS = designBand (ssp, fs);
+        }
 
-        designN   = d.n;
+        // A topology switch (section count changed, swept<->static, route, OR Stereo<->M/S) changes
+        // WHICH filters run — clear all state so a re-activated section never resumes a stale tail.
+        if (d.n != designN || dS.n != designNside || p.swept != lastSwept
+            || p.route != lastRoute || p.ms != lastMs) reset();
+
+        designN     = d.n;
+        designNside = dS.n;
         lastSwept = p.swept;
         lastRoute = p.route;
-        for (int s = 0; s < d.n; ++s) coeffs[s] = d.sec[s];
+        lastMs    = p.ms;
 
+        for (int s = 0; s < d.n; ++s) coeffs[s] = d.sec[s];
         for (int c = 0; c < ch; ++c)
             for (int s = 0; s < d.n; ++s) bq[s][c].setCoeffs (coeffs[s]);
+
+        for (int s = 0; s < dS.n; ++s) { coeffsSide[s] = dS.sec[s]; bq[s][1].setCoeffs (coeffsSide[s]); }   // Side -> col 1
+
         if (p.swept) svf.setParams (p.type, sp.freq, sp.Q, sp.gainDb);   // swept = single SVF stage (12 dB/oct)
     }
 
     void flushState() noexcept
     {
-        if (p.swept) svf.flushDenormals();
-        else for (int c = 0; c < ch; ++c)
-            for (int s = 0; s < designN; ++s) bq[s][c].flushDenormals();
+        if (p.swept) { svf.flushDenormals(); return; }
+        for (int c = 0; c < ch; ++c)                                   // covers Mid (col 0) + Side (col 1)
+            for (int s = 0; s < kMaxSections; ++s) bq[s][c].flushDenormals();
     }
 
     BandParams p;
     double fs = 44100.0;
     int    ch = 2;
     int    designN = 1;
+    int    designNside = 0;
     bool   recomputePending = true;
     bool   initialized = false;
     bool   wasActive = false;
     bool   lastSwept = false;
+    bool   lastMs = false;
     Route  lastRoute = Route::Stereo;
 
-    Smoother freqS, qS, gainS;
+    Smoother freqS, qS, gainS, sFreqS, sQS, sGainS;
     Biquad   bq[kMaxSections][kMaxChannels];
     Svf      svf;
-    BiquadCoeffs coeffs[kMaxSections];
+    BiquadCoeffs coeffs[kMaxSections], coeffsSide[kMaxSections];
 };
 
 } // namespace teq

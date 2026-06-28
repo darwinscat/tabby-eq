@@ -48,7 +48,18 @@ struct BandParams
     int        slope  = 12;       // HP/LP only: 12 (uses Q) or 24 dB/oct (Butterworth, Q ignored)
     bool       swept  = false;    // true → zero-delay SVF (smooth fast fc sweeps for search mode)
     bool       bypass = false;    // band kept but muted (ghost) — distinct from on=false (removed)
-    Route      route  = Route::Stereo;   // stereo routing (2-ch only): Stereo / Left / Right / Mid / Side
+    Route      route  = Route::Stereo;   // DEPRECATED (removed in M/S phase 1b) — kept so the plugin builds
+
+    // M/S dual-mode: the flat fields above are the Mid/main lane; these are the independent Side lane.
+    // Only used when ms==true on a 2-channel signal (mono/surround ignore it -> Mid lane only).
+    bool       ms      = false;          // false = Stereo (one lane on L/R), true = Mid/Side (two lanes)
+    bool       sOn     = true;           // Side lane enabled
+    FilterType sType   = FilterType::Bell;
+    double     sFreq   = 1000.0;
+    double     sQ      = 1.0;
+    double     sGainDb = 0.0;
+    int        sSlope  = 12;
+    bool       sBypass = false;
 
     // Exact change-detection. The doubles are compared by bit pattern (not `==`) so the engine's
     // recompute-skip stays exact without tripping -Wfloat-equal in strict-warning builds.
@@ -56,8 +67,9 @@ struct BandParams
     {
         auto bits = [] (double d) noexcept { return std::bit_cast<std::uint64_t> (d); };
         return on == o.on && type == o.type && slope == o.slope && swept == o.swept && bypass == o.bypass
-            && route == o.route
-            && bits (freq) == bits (o.freq) && bits (Q) == bits (o.Q) && bits (gainDb) == bits (o.gainDb);
+            && route == o.route && ms == o.ms && sOn == o.sOn && sType == o.sType && sSlope == o.sSlope && sBypass == o.sBypass
+            && bits (freq) == bits (o.freq) && bits (Q) == bits (o.Q) && bits (gainDb) == bits (o.gainDb)
+            && bits (sFreq) == bits (o.sFreq) && bits (sQ) == bits (o.sQ) && bits (sGainDb) == bits (o.sGainDb);
     }
 };
 

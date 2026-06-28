@@ -493,4 +493,81 @@ void runEqEngineTests()
             expectNear (deltaSum, 0.0, 1e-6, "Side route: opposite change to L and R");
         }
     }
+
+    group ("EqBand M/S dual-mode: independent Mid & Side lanes; the idle axis is preserved");
+    {
+        const int block = 256;
+        // steady-state gain (dB) in the Mid (side=false) or Side (side=true) domain at frequency f.
+        // Drive a pure-Mid (L=R) or pure-Side (L=-R) sine so the other domain is exactly zero.
+        auto msProbe = [&] (EqBand& band, bool side, double f)
+        {
+            const double amp = 0.25, dp = 2.0 * kPi * f / fs;
+            std::vector<float> L ((size_t) block), R ((size_t) block);
+            double phase = 0.0;
+            auto fill = [&] { for (int n = 0; n < block; ++n) {
+                                  const float v = (float) (amp * std::sin (phase));
+                                  phase += dp; if (phase > 2.0 * kPi) phase -= 2.0 * kPi;
+                                  L[(size_t) n] = v; R[(size_t) n] = side ? -v : v; } };
+            for (int b = 0; b < 400; ++b) { fill(); float* ch[2] = { L.data(), R.data() }; band.processBlock (ch, 2, block); }
+            fill();
+            std::vector<double> inDom ((size_t) block);
+            for (int n = 0; n < block; ++n) inDom[(size_t) n] = side ? 0.5 * (L[(size_t) n] - R[(size_t) n]) : 0.5 * (L[(size_t) n] + R[(size_t) n]);
+            { float* ch[2] = { L.data(), R.data() }; band.processBlock (ch, 2, block); }
+            double ir = 0.0, orr = 0.0;
+            for (int n = 0; n < block; ++n) { const double dm = side ? 0.5 * (L[(size_t) n] - R[(size_t) n]) : 0.5 * (L[(size_t) n] + R[(size_t) n]);
+                                              ir += inDom[(size_t) n] * inDom[(size_t) n]; orr += dm * dm; }
+            return 10.0 * std::log10 (orr / std::max (1e-30, ir));
+        };
+
+        { EqBand b; b.prepare (fs, 2);                                  // Mid +12 @1k, Side flat
+          BandParams p; p.on = true; p.ms = true;
+          p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 2.0; p.gainDb = 12.0;
+          p.sOn = true; p.sType = FilterType::Bell; p.sFreq = 1000.0; p.sQ = 2.0; p.sGainDb = 0.0;
+          b.setParams (p);
+          expectNear (msProbe (b, false, 1000.0), 12.0, 0.5, "Mid lane +12 dB at 1k");
+          expectNear (msProbe (b, true,  1000.0),  0.0, 0.1, "Side lane flat at 1k"); }
+
+        { EqBand b; b.prepare (fs, 2);                                  // Side -9 @3k, Mid flat
+          BandParams p; p.on = true; p.ms = true;
+          p.type = FilterType::Bell; p.freq = 3000.0; p.Q = 2.0; p.gainDb = 0.0;
+          p.sOn = true; p.sType = FilterType::Bell; p.sFreq = 3000.0; p.sQ = 2.0; p.sGainDb = -9.0;
+          b.setParams (p);
+          expectNear (msProbe (b, true,  3000.0), -9.0, 0.5, "Side lane -9 dB at 3k");
+          expectNear (msProbe (b, false, 3000.0),  0.0, 0.1, "Mid lane flat at 3k"); }
+
+        { EqBand b; b.prepare (fs, 2);                                  // independent freq: Mid +6 @500, Side -6 @5k
+          BandParams p; p.on = true; p.ms = true;
+          p.type = FilterType::Bell; p.freq = 500.0;  p.Q = 2.0; p.gainDb =  6.0;
+          p.sOn = true; p.sType = FilterType::Bell; p.sFreq = 5000.0; p.sQ = 2.0; p.sGainDb = -6.0;
+          b.setParams (p);
+          expectNear (msProbe (b, false, 500.0),   6.0, 0.5, "Mid +6 at its own freq");
+          expectNear (msProbe (b, true,  5000.0), -6.0, 0.5, "Side -6 at its own freq");
+          expectNear (msProbe (b, false, 5000.0),  0.0, 0.5, "Mid flat at the Side freq");
+          expectNear (msProbe (b, true,  500.0),   0.0, 0.5, "Side flat at the Mid freq"); }
+
+        { EqBand b; b.prepare (fs, 2);                                  // Side disabled -> Side axis bit-exact
+          BandParams p; p.on = true; p.ms = true; p.sOn = false;
+          p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 2.0; p.gainDb = 12.0;
+          b.setParams (p);
+          const int n = 200; std::vector<float> L ((size_t) n), R ((size_t) n), S0 ((size_t) n);
+          for (int i = 0; i < n; ++i) { L[(size_t) i] = (float) (0.20 * std::sin (2.0 * kPi * 700.0 * i / fs));
+                                        R[(size_t) i] = (float) (0.15 * std::sin (2.0 * kPi * 700.0 * i / fs + 0.7));
+                                        S0[(size_t) i] = 0.5f * (L[(size_t) i] - R[(size_t) i]); }
+          float* ch[2] = { L.data(), R.data() }; b.processBlock (ch, 2, n);
+          double sErr = 0.0; for (int i = 0; i < n; ++i) sErr = std::max (sErr, (double) std::fabs (0.5f * (L[(size_t) i] - R[(size_t) i]) - S0[(size_t) i]));
+          expectNear (sErr, 0.0, 1e-5, "Side disabled: Side axis (L-R) preserved to float precision"); }
+
+        { EqBand b; b.prepare (fs, 2);                                  // Mid bypassed + Side active
+          BandParams p; p.on = true; p.ms = true; p.bypass = true;
+          p.sOn = true; p.sType = FilterType::Bell; p.sFreq = 2000.0; p.sQ = 2.0; p.sGainDb = 12.0;
+          b.setParams (p);
+          expectNear (msProbe (b, true,  2000.0), 12.0, 0.6, "Side processes while Mid is bypassed");
+          expectNear (msProbe (b, false, 2000.0),  0.0, 0.1, "Mid axis preserved while bypassed"); }
+
+        { EqBand b; b.prepare (fs, 1);                                  // mono + M/S -> Mid lane on the mono channel
+          BandParams p; p.on = true; p.ms = true; p.type = FilterType::Bell; p.freq = 1000.0; p.Q = 2.0; p.gainDb = 6.0;
+          b.setParams (p);
+          const double g = sineGainDb ([&] (float* const* ch, int nc, int n) { b.processBlock (ch, nc, n); }, 1000.0, fs);
+          expectNear (g, 6.0, 0.5, "mono + M/S: Mid lane applies to the mono channel"); }
+    }
 }
