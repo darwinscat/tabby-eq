@@ -1,14 +1,15 @@
 cmake_minimum_required(VERSION 3.22)
-project(teq LANGUAGES CXX)
+project(teq VERSION 0.1.0 LANGUAGES CXX)
 
 # ----------------------------------------------------------------------------
 # teq — reusable, framework-agnostic matched-EQ DSP core.
 #
 # Header-only INTERFACE library. JUCE-free. Drop the `teq/` folder into any project:
 #   add_subdirectory(path/to/teq)
-#   target_link_libraries(myplugin PRIVATE teq_core)   # then #include <teq/EqEngine.h>
+#   target_link_libraries(myplugin PRIVATE teq::core)   # then #include <teq/EqEngine.h>
 # ----------------------------------------------------------------------------
 add_library(teq_core INTERFACE)
+add_library(teq::core ALIAS teq_core)   # namespaced alias for consumers (typo -> configure error)
 target_include_directories(teq_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(teq_core INTERFACE cxx_std_20)
 

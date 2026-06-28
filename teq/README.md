@@ -18,10 +18,26 @@ agnostic — it processes raw float buffers and owns no parameter system.
 
 ## Use it
 
+Link the namespaced target `teq::core` (a typo then fails at configure time, not at link):
+
 ```cmake
-add_subdirectory(path/to/teq)            # or FetchContent
-target_link_libraries(myplugin PRIVATE teq_core)
+# Local — a vendored copy or sibling checkout:
+add_subdirectory(path/to/teq)
+target_link_libraries(app PRIVATE teq::core)
 ```
+```cmake
+# Public repo — pin by tag. SOURCE_SUBDIR configures only teq/, never the JUCE-pulling root:
+include(FetchContent)
+FetchContent_Declare(teq
+    GIT_REPOSITORY <repo-url>
+    GIT_TAG        v0.1.0
+    SOURCE_SUBDIR  teq)
+FetchContent_MakeAvailable(teq)
+target_link_libraries(app PRIVATE teq::core)
+```
+
+Entry point: `#include <teq/EqEngine.h>` (pulls in `BandParams` / `EqBand` transitively).
+
 ```cpp
 #include <teq/EqEngine.h>
 

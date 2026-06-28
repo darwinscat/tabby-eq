@@ -87,7 +87,7 @@ target_compile_definitions(TabbyEQ PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(TabbyEQ PRIVATE
-    teq_core                            # the framework-agnostic EQ engine
+    teq::core                           # the framework-agnostic EQ engine
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
     juce::juce_dsp                      # FFT for the spectrum analyser
     juce::juce_recommended_config_flags
