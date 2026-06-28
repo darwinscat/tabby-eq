@@ -98,6 +98,7 @@ private:
     struct AddSpec { int typeIndex = 0; int slopeIndex = -1; double gainDb = 2.0; bool hasGainCtrl = true; };
     AddSpec predictAdd (juce::Point<float> at) const noexcept;
     void    drawAddPreview (juce::Graphics&, const AddSpec&, juce::Point<float> at, bool dragging) const;
+    void    drawListenVisual (juce::Graphics&, double freqHz, double q, const juce::String& label) const;   // bell/spotlight + beam, shared by audition & solo
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
     void   selectBand (int newSel, bool side = false);   // update selection + fire onBandSelected
