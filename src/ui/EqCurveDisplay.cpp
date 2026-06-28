@@ -726,6 +726,23 @@ void EqCurveDisplay::paint (juce::Graphics& g)
                     juce::Justification::centredLeft);
     }
 
+    // --- solo (incl. long-press momentary): a centre line at the soloed band's frequency, so this
+    //     "listen" gesture shows the same beam the drag-audition does. ---
+    if (! auditioning && solo >= 0 && solo < tabby::kNumBands && paramCache[(size_t) solo].on)
+    {
+        const float  xc = nodePos (solo).x;
+        const double f0 = paramCache[(size_t) solo].freq;
+        const auto   orng = tabby::palette::orange();
+        g.setColour (orng.withAlpha (0.85f));
+        g.drawLine (xc, 0.0f, xc, h, 1.5f);
+        const juce::String fl = f0 >= 1000.0 ? juce::String (f0 / 1000.0, 2) + " kHz"
+                                             : juce::String (juce::roundToInt (f0)) + " Hz";
+        g.setColour (tabby::palette::text());
+        g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+        g.drawText ("SOLO  " + fl, juce::Rectangle<float> (juce::jmin (xc + 6.0f, w - 116.0f), 4.0f, 116.0f, 14.0f),
+                    juce::Justification::centredLeft);
+    }
+
     // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
     if (placing)
     {
