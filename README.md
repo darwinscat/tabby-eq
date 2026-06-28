@@ -1,5 +1,8 @@
 # TabbyEQ
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![CI](https://github.com/darwinscat/tabby-eq/actions/workflows/ci.yml/badge.svg)](https://github.com/darwinscat/tabby-eq/actions/workflows/ci.yml)
+
 **A production EQ you drive by intent.** It's a full, honest parametric EQ — real
 frequency / Q / gain, **always visible and editable** — with a **semantic helper** on top: pick
 a **source** (male/female voice, electric guitar clean/dist, acoustic, bass) and name the
