@@ -453,6 +453,57 @@ void EqCurveDisplay::timerCallback()
     repaint();
 }
 
+// Shared "listen" overlay: a tall narrow bell OR a spotlight (per the View option), plus the orange
+// centre beam + label at f0. Used by both drag-audition and solo so the two gestures look identical.
+void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc, const juce::String& label) const
+{
+    const float  w = (float) getWidth(), h = (float) getHeight();
+    const double f0 = juce::jlimit (kFreqMin, kFreqMax, f0c);
+    const float  xc = freqToX (f0);
+    const auto   orng = tabby::palette::orange();
+
+    if (audVisual == AudVisual::Bell)
+    {
+        teq::BandParams bp;
+        bp.on = true; bp.type = teq::FilterType::Bell; bp.freq = f0;
+        bp.Q = juce::jmax (0.5, qc); bp.gainDb = 20.0;                       // a tall narrow bell = what you hear
+        const float y0 = dbToY (0.0);
+        juce::Path line, fill; bool started = false;
+        for (float x = 0.0f; x <= w; x += 3.0f)
+        {
+            const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
+            const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+            const float  y  = dbToY (db);
+            if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
+            else           { line.lineTo (x, y); fill.lineTo (x, y); }
+        }
+        fill.lineTo (w, y0); fill.closeSubPath();
+        g.setColour (orng.withAlpha (0.14f)); g.fillPath (fill);
+        g.setColour (orng.withAlpha (0.90f)); g.strokePath (line, juce::PathStrokeType (1.6f));
+    }
+    else   // Spotlight: dim everything outside the narrow listen band
+    {
+        const double inv = 1.0 / (2.0 * juce::jmax (0.5, qc));               // -3 dB band-pass edges (octave-ish)
+        const double k   = std::sqrt (1.0 + inv * inv);
+        const float  xLo = freqToX (f0 * (k - inv));
+        const float  xHi = freqToX (f0 * (k + inv));
+        g.setColour (juce::Colours::black.withAlpha (0.5f));
+        g.fillRect (0.0f, 0.0f, juce::jmax (0.0f, xLo), h);
+        g.fillRect (xHi, 0.0f, juce::jmax (0.0f, w - xHi), h);
+        g.setColour (orng.withAlpha (0.10f));
+        g.fillRect (xLo, 0.0f, juce::jmax (0.0f, xHi - xLo), h);
+    }
+
+    g.setColour (orng.withAlpha (0.85f));                                    // centre beam + label (both modes)
+    g.drawLine (xc, 0.0f, xc, h, 1.5f);
+    const juce::String fl = f0 >= 1000.0 ? juce::String (f0 / 1000.0, 2) + " kHz"
+                                         : juce::String (juce::roundToInt (f0)) + " Hz";
+    g.setColour (tabby::palette::text());
+    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    g.drawText (label + "  " + fl, juce::Rectangle<float> (juce::jmin (xc + 6.0f, w - 116.0f), 4.0f, 116.0f, 14.0f),
+                juce::Justification::centredLeft);
+}
+
 //==============================================================================
 void EqCurveDisplay::paint (juce::Graphics& g)
 {
@@ -677,54 +728,12 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         // (the live value bubble is gone — the floating toolbar shows freq/Q/gain now)
     }
 
-    // --- drag-audition visualisation: spotlight band OR a narrow bell, per the View option ---
+    // --- "listen" visualisation (shared): bell or spotlight per the View option + the beam.
+    //     Drag-audition takes precedence; otherwise a soloed band (incl. long-press momentary). ---
     if (auditioning)
-    {
-        const double f0   = juce::jlimit (kFreqMin, kFreqMax, (double) audFreq);
-        const float  xc   = freqToX (f0);
-        const auto   orng = tabby::palette::orange();
-
-        if (audVisual == AudVisual::Bell)
-        {
-            teq::BandParams bp;
-            bp.on = true; bp.type = teq::FilterType::Bell; bp.freq = f0;
-            bp.Q = juce::jmax (0.5, (double) audQ); bp.gainDb = 20.0;            // a tall narrow bell = what you hear
-            const float y0 = dbToY (0.0);
-            juce::Path line, fill; bool started = false;
-            for (float x = 0.0f; x <= w; x += 3.0f)
-            {
-                const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
-                const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
-                const float  y  = dbToY (db);
-                if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
-                else           { line.lineTo (x, y); fill.lineTo (x, y); }
-            }
-            fill.lineTo (w, y0); fill.closeSubPath();
-            g.setColour (orng.withAlpha (0.14f)); g.fillPath (fill);
-            g.setColour (orng.withAlpha (0.90f)); g.strokePath (line, juce::PathStrokeType (1.6f));
-        }
-        else   // Spotlight: dim everything outside the narrow listen band
-        {
-            const double inv = 1.0 / (2.0 * juce::jmax (0.5, (double) audQ));    // -3 dB band-pass edges (octave-ish)
-            const double k   = std::sqrt (1.0 + inv * inv);
-            const float  xLo = freqToX (f0 * (k - inv));
-            const float  xHi = freqToX (f0 * (k + inv));
-            g.setColour (juce::Colours::black.withAlpha (0.5f));
-            g.fillRect (0.0f, 0.0f, juce::jmax (0.0f, xLo), h);
-            g.fillRect (xHi, 0.0f, juce::jmax (0.0f, w - xHi), h);
-            g.setColour (orng.withAlpha (0.10f));
-            g.fillRect (xLo, 0.0f, juce::jmax (0.0f, xHi - xLo), h);
-        }
-
-        g.setColour (orng.withAlpha (0.85f));                                    // centre line + label (both modes)
-        g.drawLine (xc, 0.0f, xc, h, 1.5f);
-        const juce::String fl = f0 >= 1000.0 ? juce::String (f0 / 1000.0, 2) + " kHz"
-                                             : juce::String (juce::roundToInt (f0)) + " Hz";
-        g.setColour (tabby::palette::text());
-        g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
-        g.drawText ("LISTEN  " + fl, juce::Rectangle<float> (juce::jmin (xc + 6.0f, w - 116.0f), 4.0f, 116.0f, 14.0f),
-                    juce::Justification::centredLeft);
-    }
+        drawListenVisual (g, (double) audFreq, (double) audQ, "LISTEN");
+    else if (solo >= 0 && solo < tabby::kNumBands && paramCache[(size_t) solo].on)
+        drawListenVisual (g, paramCache[(size_t) solo].freq, (double) audQSetting, "SOLO");   // width from the Listen-Q config
 
     // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
     if (placing)
