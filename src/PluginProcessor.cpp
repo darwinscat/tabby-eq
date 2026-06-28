@@ -42,6 +42,9 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.sBypass= apvts.getRawParameterValue (tabby::bandId (b, "sBypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
+    phaseMode  = apvts.getRawParameterValue ("phaseMode");
+    lpQuality  = apvts.getRawParameterValue ("lpQuality");
+    lpUpdater.startTimerHz (30);   // coalesces param edits into background FIR rebuilds
 }
 
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
@@ -50,6 +53,17 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
+
+    // Linear-phase path: build the initial FIR from the current params so it's ready immediately.
+    lpPrepared = false;
+    std::array<teq::BandParams, tabby::kNumBands> snap;
+    for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
+    lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels(),
+                (int) lpQuality->load(), snap.data(), tabby::kNumBands);
+    lastQuality = (int) lpQuality->load();
+    lastLinear  = phaseMode->load() > 0.5f;
+    setLatencySamples (lastLinear ? lp.latencySamples() : 0);
+    lpPrepared = true;
 }
 
 // Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
@@ -134,16 +148,47 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         return;
     }
 
-    // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
-    // — the engine's contract. Smoothing + recompute-skip live inside the engine.
-    for (int b = 0; b < tabby::kNumBands; ++b)
-        engine.setBand (b, readBand (b));
-
-    engine.process (buffer.getArrayOfWritePointers(), nc, n);
+    // Main EQ path — Linear (FIR convolution) or Natural (matched IIR). The linear FIR is rebuilt off
+    // the audio thread (see lpTick); here we only convolve and hand the analyzer its pre/post samples
+    // (engine.process would normally do that, but it isn't called in the linear path).
+    if (phaseMode->load (std::memory_order_relaxed) > 0.5f)
+    {
+        if (meter) { const float* in0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.inputTap().push (in0[s]); }
+        lp.process (buffer, nc);
+        if (meter) { const float* out0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.outputTap().push (out0[s]); }
+    }
+    else
+    {
+        // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
+        // — the engine's contract. Smoothing + recompute-skip live inside the engine.
+        for (int b = 0; b < tabby::kNumBands; ++b)
+            engine.setBand (b, readBand (b));
+        engine.process (buffer.getArrayOfWritePointers(), nc, n);
+    }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
     outputGainSmoothed.applyGain (buffer, n);   // de-zippered output trim
     meterOutput();
+}
+
+// Message-thread (30 Hz): push the current params to the linear-phase builder and react to mode /
+// quality changes (rebuild the FIR, re-report latency for the host's plugin-delay compensation).
+void TabbyEqAudioProcessor::lpTick()
+{
+    if (! lpPrepared) return;
+
+    const int  q   = (int) lpQuality->load();
+    const bool lin = phaseMode->load() > 0.5f;
+
+    if (q != lastQuality)   { lastQuality = q; lp.setQuality (q); if (lin) setLatencySamples (lp.latencySamples()); }
+    if (lin != lastLinear)  { lastLinear = lin; setLatencySamples (lin ? lp.latencySamples() : 0); }
+
+    if (lin)
+    {
+        std::array<teq::BandParams, tabby::kNumBands> snap;
+        for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
+        lp.updateSnapshot (snap.data(), tabby::kNumBands);
+    }
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)

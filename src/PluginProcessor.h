@@ -7,6 +7,7 @@
 #include <teq/EqEngine.h>
 
 #include "Parameters.h"
+#include "LinearPhase.h"
 
 #include <array>
 
@@ -24,7 +25,7 @@ public:
     ~TabbyEqAudioProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override { lpPrepared = false; lp.releaseResources(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -83,7 +84,18 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
+    void lpTick();   // message-thread: feed the linear-phase builder + track mode/quality changes
+
     teq::EqEngine engine;
+
+    LinearPhaseEq lp;                                              // linear-phase convolution path
+    std::atomic<float>* phaseMode = nullptr;                      // 0 = Natural (IIR), 1 = Linear (FIR)
+    std::atomic<float>* lpQuality = nullptr;                      // 0..3 -> FIR length
+    bool lpPrepared = false;
+    int  lastQuality = -1;
+    bool lastLinear  = false;
+    struct LpUpdater : juce::Timer { TabbyEqAudioProcessor& p; explicit LpUpdater (TabbyEqAudioProcessor& pp) : p (pp) {}
+                                     void timerCallback() override { p.lpTick(); } } lpUpdater { *this };
 
     struct BandPtrs
     {

@@ -54,6 +54,18 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     };
     addAndMakeVisible (prePost);
 
+    phaseButton.onClick = [this]
+    {
+        if (auto* pp = proc.apvts.getParameter ("phaseMode"))
+            pp->setValueNotifyingHost (pp->getValue() > 0.5f ? 0.0f : 1.0f);   // toggle Natural <-> Linear
+    };
+    addAndMakeVisible (phaseButton);
+    if (auto* pm = proc.apvts.getParameter ("phaseMode"))
+    {
+        phaseAtt = std::make_unique<juce::ParameterAttachment> (*pm, [this] (float) { updatePhaseLabel(); });
+        phaseAtt->sendInitialUpdate();
+    }
+
     viewButton.setButtonText ("View");
     viewButton.onClick = [this] { showViewMenu(); };
     addAndMakeVisible (viewButton);
@@ -123,6 +135,17 @@ void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto
                     side->setValueNotifyingHost (mid->getValue());
 }
 
+void TabbyEqEditor::updatePhaseLabel()
+{
+    const bool lin = proc.apvts.getRawParameterValue ("phaseMode")->load() > 0.5f;
+    if (! lin) { phaseButton.setButtonText ("Natural"); return; }
+    static constexpr int sizes[] = { 4096, 16384, 65536, 131072 };
+    const int q = juce::jlimit (0, 3, (int) proc.apvts.getRawParameterValue ("lpQuality")->load());
+    const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+    const double ms = (double) sizes[q] / 2.0 / sr * 1000.0;
+    phaseButton.setButtonText ("Lin " + juce::String (ms, ms < 100.0 ? 1 : 0) + " ms");
+}
+
 void TabbyEqEditor::showViewMenu()
 {
     juce::PopupMenu m;
@@ -151,6 +174,12 @@ void TabbyEqEditor::showViewMenu()
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
     m.addItem (40, "M/S: link Mid/Side freq", true, msFreqLink);
 
+    juce::PopupMenu lpMenu;
+    const int lq = juce::jlimit (0, 3, (int) proc.apvts.getRawParameterValue ("lpQuality")->load());
+    const char* lpNames[] = { "Low", "Medium", "High", "Max" };
+    for (int i = 0; i < 4; ++i) lpMenu.addItem (50 + i, lpNames[i], true, lq == i);
+    m.addSubMenu ("Linear-phase quality", lpMenu);
+
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
     {
@@ -167,6 +196,9 @@ void TabbyEqEditor::showViewMenu()
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
         if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
                        if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
+        if (r >= 50 && r <= 53) { if (auto* p = safe->proc.apvts.getParameter ("lpQuality"))
+                                      p->setValueNotifyingHost (p->convertTo0to1 ((float) (r - 50)));
+                                  safe->updatePhaseLabel(); }
     });
 }
 
@@ -197,6 +229,7 @@ void TabbyEqEditor::resized()
     auto top = r.removeFromTop (30);
     title.setBounds (top.removeFromLeft (160).reduced (8, 4));
     prePost.setBounds (top.removeFromRight (74).reduced (6, 3));
+    phaseButton.setBounds (top.removeFromRight (82).reduced (4, 3));
     viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
     fullButton.setBounds (top.removeFromRight (50).reduced (4, 3));

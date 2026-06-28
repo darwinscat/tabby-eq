@@ -29,6 +29,7 @@ private:
     void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only
     void parameterChanged (const juce::String& id, float newValue) override;   // M/S freq-link mirror
     void alignLinkedFreqs();   // snap Side freq -> Mid freq on every split band (when link is switched on)
+    void updatePhaseLabel();   // refresh the Phase button text (Natural / Linear + latency)
 
     bool msFreqLink = false;  // when on, an M/S band's Mid & Side share one frequency
     bool mirroring  = false;  // re-entry guard for the freq-link mirror
@@ -43,6 +44,8 @@ private:
     juce::Label    title;
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
     juce::TextButton prePost;
+    juce::TextButton phaseButton;                                       // Natural <-> Linear phase mode
+    std::unique_ptr<juce::ParameterAttachment> phaseAtt;               // mirrors phaseMode -> button text
     juce::TextButton viewButton;
     juce::TextButton resetButton;
     juce::TextButton fullButton;
