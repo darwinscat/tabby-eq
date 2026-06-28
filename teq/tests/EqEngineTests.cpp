@@ -13,6 +13,7 @@
 #include <teq/Smoother.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -499,5 +500,81 @@ void runEqEngineTests()
           b.setParams (p);
           const double g = sineGainDb ([&] (float* const* ch, int nc, int n) { b.processBlock (ch, nc, n); }, 1000.0, fs);
           expectNear (g, 6.0, 0.5, "mono + M/S: Mid lane applies to the mono channel"); }
+    }
+
+    group ("compositeResponse / magnitudeGridFor: per-axis composite for linear-phase FIRs");
+    {
+        std::array<BandParams, EqEngine::kMaxBands> arr {};   // all bands off -> a flat bank
+        const int kN = EqEngine::kMaxBands;
+
+        // flat bank: both stereo axes are unity (0 dB) everywhere; the magnitude grid is all ~1.0
+        {
+            std::vector<float> gr (2049);
+            EqEngine::magnitudeGridFor (arr.data(), kN, fs, gr.data(), (int) gr.size(), false);
+            double maxDev = 0.0; for (float v : gr) maxDev = std::max (maxDev, std::fabs ((double) v - 1.0));
+            expectNear (maxDev, 0.0, 1e-6, "flat bank: Mid grid is unity at every bin");
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 1000.0, fs, true), 0.0, 1e-9, "flat bank: Side axis flat");
+        }
+
+        // a non-M/S band contributes the SAME response to both stereo axes
+        {
+            arr = {}; arr[0].on = true; arr[0].type = FilterType::Bell; arr[0].freq = 1000.0; arr[0].Q = 1.5; arr[0].gainDb = 6.0;
+            for (double f : { 200.0, 1000.0, 5000.0 })
+                expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, f, fs, true),
+                            EqEngine::magnitudeDbFor (arr.data(), kN, f, fs, false), 1e-9, "stereo band: Side axis == Mid axis");
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 1000.0, fs), 6.0, 0.2, "plain overload == Mid axis (+6 at 1k)");
+        }
+
+        // an M/S band: the Mid axis is EXACTLY the Mid lane alone, the Side axis EXACTLY the Side lane
+        // alone (each lane is invisible to the other axis — proven against single-lane reference banks,
+        // which dodges the fragile "flat at the other freq" assertion: a bell's skirt is never truly 0).
+        {
+            arr = {}; arr[0].on = true; arr[0].ms = true;
+            arr[0].type = FilterType::Bell; arr[0].freq = 1000.0; arr[0].Q = 2.0; arr[0].gainDb = 12.0;
+            arr[0].sOn = true; arr[0].sType = FilterType::Bell; arr[0].sFreq = 3000.0; arr[0].sQ = 2.0; arr[0].sGainDb = -9.0;
+
+            std::array<BandParams, EqEngine::kMaxBands> midOnly {}, sideOnly {};
+            midOnly[0]  = arr[0];            midOnly[0].ms  = false;   // Mid lane as a plain stereo band
+            sideOnly[0] = sideView (arr[0]); sideOnly[0].ms = false;   // Side lane promoted to a plain band
+
+            double mErr = 0.0, sErr = 0.0;
+            for (double f : { 80.0, 300.0, 1000.0, 3000.0, 9000.0, 18000.0 })
+            {
+                mErr = std::max (mErr, std::fabs (EqEngine::magnitudeDbFor (arr.data(), kN, f, fs, false)
+                                                - EqEngine::magnitudeDbFor (midOnly.data(), kN, f, fs)));
+                sErr = std::max (sErr, std::fabs (EqEngine::magnitudeDbFor (arr.data(), kN, f, fs, true)
+                                                - EqEngine::magnitudeDbFor (sideOnly.data(), kN, f, fs)));
+            }
+            expectNear (mErr, 0.0, 1e-9, "Mid axis is exactly the Mid lane alone");
+            expectNear (sErr, 0.0, 1e-9, "Side axis is exactly the Side lane alone");
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 1000.0, fs, false), 12.0, 0.2, "Mid axis +12 at its own freq");
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 3000.0, fs, true),  -9.0, 0.2, "Side axis -9 at its own freq");
+        }
+
+        // an M/S band with the Side lane disabled: the Side axis stays flat, the Mid still boosts
+        {
+            arr = {}; arr[0].on = true; arr[0].ms = true; arr[0].sOn = false;
+            arr[0].type = FilterType::Bell; arr[0].freq = 1000.0; arr[0].Q = 2.0; arr[0].gainDb = 12.0;
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 1000.0, fs, true),  0.0, 1e-9, "Side lane off: Side axis flat");
+            expectNear (EqEngine::magnitudeDbFor (arr.data(), kN, 1000.0, fs, false), 12.0, 0.2, "Side lane off: Mid axis still +12");
+        }
+
+        // the grid agrees with the pointwise readout at its own bin frequencies, finite at the edges
+        {
+            arr = {}; arr[0].on = true; arr[0].type = FilterType::Bell; arr[0].freq = 1000.0; arr[0].Q = 1.0; arr[0].gainDb = -8.0;
+            const int N = 4096, n = N / 2 + 1;
+            std::vector<float> gr ((size_t) n);
+            EqEngine::magnitudeGridFor (arr.data(), kN, fs, gr.data(), n, false);
+            double maxErr = 0.0;
+            for (int k : { 1, 85, 512, n - 1 })
+            {
+                const double f    = 0.5 * fs * (double) k / (double) (n - 1);
+                const double want = EqEngine::magnitudeDbFor (arr.data(), kN, f, fs, false);
+                const double got  = 20.0 * std::log10 (std::max (1e-9, (double) gr[(size_t) k]));
+                maxErr = std::max (maxErr, std::fabs (got - want));
+            }
+            expectNear (maxErr, 0.0, 1e-3, "grid bins match the pointwise magnitudeDbFor");
+            expectTrue (std::isfinite (gr[0]) && std::isfinite (gr[(size_t) (n - 1)]), "grid finite at DC and Nyquist");
+        }
     }
 }
