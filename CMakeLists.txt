@@ -18,9 +18,15 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS build archs" FORCE)
 endif()
 
-# --- The reusable EQ DSP core + its JUCE-free self-tests.
-set(TEQ_BUILD_TESTS ON)
-add_subdirectory(teq)
+# --- The reusable EQ DSP core — now consumed from felitronics-core (teq:: is the transitional compat
+# shim, so src/ is unchanged). The local teq/ is kept for history but NO LONGER built; the source of
+# truth is felitronics-core. Local dev consumes the sibling checkout; switch to GIT_REPOSITORY+tag later.
+include(FetchContent)
+set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "felitronics-core source (local dev)")
+set(FELITRONICS_BUILD_TESTS ON)   # keep the JUCE-free core self-tests in this repo's `ctest`
+enable_testing()                  # so this repo's ctest discovers felitronics-core's suites (top-level)
+FetchContent_Declare(felitronics_core SOURCE_DIR "${TABBYEQ_FCORE_DIR}")
+FetchContent_MakeAvailable(felitronics_core)
 
 # The plugin pulls JUCE — gate it so CI (and anyone who only wants the core) builds the
 # JUCE-free teq engine + tests without fetching JUCE. `-DTABBYEQ_BUILD_PLUGIN=OFF` for that.
