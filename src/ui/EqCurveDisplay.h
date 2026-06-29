@@ -7,6 +7,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <teq/EqBand.h>
 #include <teq/SpectrumTap.h>
+#include <felitronics/core/Fft.h>
 
 #include "PluginProcessor.h"
 
@@ -107,10 +108,11 @@ private:
 
     TabbyEqAudioProcessor& proc;
 
-    // analyzer
-    juce::dsp::FFT fft { teq::kSpectrumFftOrder };
+    // analyzer (core::Fft seam — JUCE-free; layout [DC, Nyquist, re1,im1, …])
+    felitronics::core::fft::DefaultRealFft fft;
     std::array<float, teq::kSpectrumFftSize>     window {};
     std::array<float, teq::kSpectrumFftSize * 2> fftBuf {};
+    std::array<float, teq::kSpectrumFftSize>     spec {};
     std::array<float, teq::kSpectrumFftSize / 2 + 1> specDb {};
     std::array<float, teq::kSpectrumFftSize / 2 + 1> specPeak {};   // slow-decay peak-hold
 
