@@ -5,6 +5,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <teq/EqEngine.h>
+#include <teq/Smoother.h>
 
 #include "Parameters.h"
 #include "LinearPhase.h"
@@ -115,7 +116,7 @@ private:
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;
-    juce::LinearSmoothedValue<float> outputGainSmoothed { 1.0f };   // de-zippered output trim
+    teq::LinearSmoother outputGainSmoothed { 1.0f };                // de-zippered output trim (core, JUCE-free)
     std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
     teq::Svf         soloFilter;                                    // band-listen band-pass (solo)
     std::atomic<int> soloBand { -1 };                               // soloed band index, or -1

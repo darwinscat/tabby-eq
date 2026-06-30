@@ -13,6 +13,18 @@ namespace
         float prev = a.load (std::memory_order_relaxed);
         while (v > prev && ! a.compare_exchange_weak (prev, v, std::memory_order_relaxed)) {}
     }
+
+    // Multi-channel de-zippered gain — the JUCE-free equivalent of juce::LinearSmoothedValue::applyGain
+    // (AudioBuffer overload): one ramp step per sample, applied to every channel (bit-exact same numerics).
+    inline void applyGainRamp (teq::LinearSmoother& sm, juce::AudioBuffer<float>& buf, int n) noexcept
+    {
+        const int nch = buf.getNumChannels();
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = sm.getNextValue();
+            for (int ch = 0; ch < nch; ++ch) buf.getWritePointer (ch)[i] *= g;
+        }
+    }
 }
 
 TabbyEqAudioProcessor::TabbyEqAudioProcessor()
@@ -152,7 +164,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
         soloFilter.flushDenormals();
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-        outputGainSmoothed.applyGain (buffer, n);
+        applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
         lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
@@ -172,7 +184,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
         soloFilter.flushDenormals();
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-        outputGainSmoothed.applyGain (buffer, n);
+        applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
         lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
@@ -223,7 +235,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-    outputGainSmoothed.applyGain (buffer, n);   // de-zippered output trim
+    applyGainRamp (outputGainSmoothed, buffer, n);   // de-zippered output trim
     meterOutput();
 }
 

@@ -88,6 +88,8 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     for (int i = 0; i < (int) window.size(); ++i)
         window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (window.size() - 1));
 
+    fft.prepare (teq::kSpectrumFftSize);     // core::Fft seam — plan/alloc here (UI thread), not in the timer
+
     specDb.fill (-120.0f);
     specPeak.fill (-120.0f);
     proc.setAnalyzerActive (true);
@@ -385,13 +387,16 @@ void EqCurveDisplay::pushSpectrum()
     starveTicks = 0;
 
     for (int i = 0; i < teq::kSpectrumFftSize; ++i) fftBuf[(size_t) i] *= window[(size_t) i];
-    std::fill (fftBuf.begin() + teq::kSpectrumFftSize, fftBuf.end(), 0.0f);
-    fft.performFrequencyOnlyForwardTransform (fftBuf.data());
+    fft.forward (fftBuf.data(), spec.data());                    // real[N] -> spectrum [DC, Nyquist, re1,im1, …]
 
     const double norm = (double) teq::kSpectrumFftSize * 0.25;   // Hann single-bin compensation
+    const int    N    = teq::kSpectrumFftSize;
     for (int i = 0; i < (int) specDb.size(); ++i)
     {
-        const double db = juce::Decibels::gainToDecibels ((double) fftBuf[(size_t) i] / norm, -120.0);
+        const float re  = (i == 0) ? spec[0] : (i == N / 2) ? spec[1] : spec[(size_t) (2 * i)];
+        const float im  = (i == 0 || i == N / 2) ? 0.0f : spec[(size_t) (2 * i + 1)];
+        const float mag = std::sqrt (re * re + im * im);         // |bin| of the unnormalized forward (== JUCE)
+        const double db = juce::Decibels::gainToDecibels ((double) mag / norm, -120.0);
         specDb[(size_t) i]  += 0.25f * ((float) db - specDb[(size_t) i]);   // smooth toward target
         specPeak[(size_t) i] = juce::jmax (specPeak[(size_t) i] - kPeakFallDb, specDb[(size_t) i]);
     }

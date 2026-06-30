@@ -94,8 +94,9 @@ target_compile_definitions(TabbyEQ PUBLIC
 
 target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
+    felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
-    juce::juce_dsp                      # FFT for the spectrum analyser
+    juce::juce_dsp                      # (legacy link; the FFT/convolution are now core — JUCE-dsp-free in src)
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
