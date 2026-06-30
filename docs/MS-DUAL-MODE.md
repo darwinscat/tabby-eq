@@ -120,7 +120,7 @@ bandN_sSlope   AudioParameterChoice "B{n} Side Slope" (7 items)        default 1
 - `readBand` (processor) fills `ms` + side fields; `BandEditStrip`/`EqCurveDisplay` lose all `route`
   references (badge, menu, `routeFromChoice`).
 
-## Tests (`teq/tests`)
+## Tests (felitronics-core `eq` suites)
 
 Replace the old per-band routing test with **M/S dual-mode**:
 - Stereo mode unchanged (existing tests still green).
@@ -133,7 +133,7 @@ Replace the old per-band routing test with **M/S dual-mode**:
 
 ## Phasing
 
-1. **1a — engine + DSP tests (teq only, JUCE-free).** Add `ms`+Side to `BandParams`, dual-design in
+1. **1a — engine + DSP tests (in felitronics-core, JUCE-free).** Add `ms`+Side to `BandParams`, dual-design in
    `EqBand`, new tests. Plugin still builds (ms defaults false; route path untouched). ← start here.
 2. **1b — schema + processor.** Add `bandN_ms` + side params, remove `bandN_route`; `readBand` fills
    them; delete the route delta-fold from `EqBand`; strip route from the UI. Plugin builds + auval.

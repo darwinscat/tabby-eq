@@ -23,14 +23,14 @@ Felitronics line, by **Darwin's Cat**. Ships **VST3 + AU + CLAP + Standalone**.
 
 ## Status
 
-Working plugin. The matched-Nyquist DSP core (JUCE-free, 204 tests) and a playable 12-band
+Working plugin. The matched-Nyquist DSP core (JUCE-free, now consumed from felitronics-core) and a playable 12-band
 plugin with a classic editor — log grid, live spectrum, draggable nodes, mono → 16-channel
 surround — build and pass `auval`. The **semantic helper layer** (source/trait pickers,
 search → treat) is what's next.
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release   # core is JUCE-free
-cmake --build build --target teq_tests -j   # run the engine tests
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DTABBYEQ_BUILD_PLUGIN=OFF   # core only, no JUCE
+cmake --build build -j && ctest --test-dir build   # build + run the engine tests
 ```
 
 Design and the trait data live in [`docs/CONCEPT.md`](docs/CONCEPT.md) and

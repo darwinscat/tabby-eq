@@ -3,10 +3,10 @@ cmake_minimum_required(VERSION 3.22)
 # ----------------------------------------------------------------------------
 # TabbyEQ — educational semantic EQ (C++/JUCE). Felitronics line, by Darwin's Cat.
 #
-# The DSP lives in `teq/` — a reusable, framework-agnostic, header-only matched-EQ core
-# (JUCE-free) with its own self-tests. The plugin (slice 2) is a thin JUCE adapter on top.
-# Building this repo today builds + runs the teq core tests (no JUCE fetch needed).
-# See docs/CONCEPT.md.
+# The DSP core is consumed from felitronics-core (FetchContent — see the hybrid block below); the
+# `teq::` namespace is a compatibility shim, so the plugin in src/ is a thin JUCE adapter on top,
+# unchanged by the move. `-DTABBYEQ_BUILD_PLUGIN=OFF` configures core-only (no JUCE fetch) and runs
+# its JUCE-free test suites via `ctest`. See docs/CONCEPT.md.
 # ----------------------------------------------------------------------------
 project(TabbyEQ VERSION 0.1.0 LANGUAGES C CXX)
 
