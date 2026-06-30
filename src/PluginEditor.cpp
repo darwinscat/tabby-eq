@@ -67,14 +67,12 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
         c->setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
     }
 
-    // Phase mode (Zero Latency / Natural Phase / Linear Phase). Natural Phase is reserved but not built
-    // yet, so its item is greyed. The attachment is then the single source of truth (param <-> combo) —
-    // which also kills the old button/label one-event lag.
+    // Phase mode (Zero Latency / Natural Phase / Linear Phase) — all three live now. The attachment is the
+    // single source of truth (param <-> combo), which also kills the old button/label one-event lag.
     addAndMakeVisible (phaseCombo);
     if (auto* pm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("phaseMode")))
     {
         phaseCombo.addItemList (pm->choices, 1);
-        phaseCombo.setItemEnabled (2, false);   // item id 2 = "Natural Phase" — coming soon (see ROADMAP)
         phaseAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "phaseMode", phaseCombo);
     }
     // Refresh the latency readout from the combo's OWN selection (always current) on its onChange — NOT
@@ -91,6 +89,17 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
         qualityAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "lpQuality", qualityCombo);
     }
     qualityCombo.onChange = [this] { updatePhaseUi(); };
+
+    // Natural-phase blend knob (0 linear … 1 minimum phase) — shown only in Natural mode, in the SAME
+    // top-bar slot as the quality combo (which is Linear-only).
+    phaseAmountSlider.setSliderStyle (juce::Slider::LinearBar);
+    phaseAmountSlider.setColour (juce::Slider::trackColourId,          tabby::palette::violet().withAlpha (0.55f));
+    phaseAmountSlider.setColour (juce::Slider::textBoxTextColourId,    tabby::palette::text());
+    phaseAmountSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    phaseAmountSlider.setTooltip ("Phase blend: linear (0) … minimum-phase (1)");
+    addAndMakeVisible (phaseAmountSlider);
+    phaseAmountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "phaseAmount", phaseAmountSlider);
+    phaseAmountSlider.onValueChange = [this] { updatePhaseUi(); };
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
@@ -169,21 +178,34 @@ void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto
 
 void TabbyEqEditor::updatePhaseUi()
 {
-    const bool linear = phaseCombo.getSelectedItemIndex() == 2;   // 0 Zero Latency / 1 Natural Phase / 2 Linear Phase
-    qualityCombo.setEnabled (linear);   // FIR quality only bites in Linear Phase
+    const int mode = phaseCombo.getSelectedItemIndex();   // 0 Zero Latency / 1 Natural Phase / 2 Linear Phase
+    qualityCombo.setVisible     (mode == 2);              // quality combo: Linear only
+    phaseAmountSlider.setVisible (mode == 1);             // blend knob: Natural only (same top-bar slot)
 
-    if (! linear)   // Zero Latency (or the reserved Natural Phase) — no added delay
+    if (mode <= 0)   // Zero Latency — no added delay
     {
         latencyLabel.setText ("0 ms", juce::dontSendNotification);
         latencyLabel.setColour (juce::Label::textColourId, tabby::palette::textDim());
         return;
     }
-    static constexpr int sizes[] = { 4096, 16384, 65536, 131072 };
-    const int q = juce::jlimit (0, 3, qualityCombo.getSelectedItemIndex());
+    // FIR mode — compute the reported latency directly from the UI state (avoids the param-atomic lag):
     const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
-    const double ms = (double) sizes[q] / 2.0 / sr * 1000.0;
+    double samples; juce::Colour col;
+    if (mode == 1)   // Natural: FIXED bulk delay = L/4 (L = 4096) — does NOT move with the blend knob. YELLOW.
+    {
+        samples = 4096.0 / 4.0;
+        col = juce::Colour (0xffe8c020);
+    }
+    else             // Linear: N/2. RED (heavy).
+    {
+        static constexpr int sizes[] = { 4096, 8192, 16384, 32768, 131072 };
+        const int q = juce::jlimit (0, 4, qualityCombo.getSelectedItemIndex());
+        samples = (double) sizes[q] / 2.0;
+        col = juce::Colour (0xffff5a5a);
+    }
+    const double ms = samples / sr * 1000.0;
     latencyLabel.setText (juce::String (ms, ms < 100.0 ? 1 : 0) + " ms", juce::dontSendNotification);
-    latencyLabel.setColour (juce::Label::textColourId, juce::Colour (0xffff5a5a));   // latency engaged — red
+    latencyLabel.setColour (juce::Label::textColourId, col);
 }
 
 void TabbyEqEditor::showViewMenu()
@@ -268,7 +290,9 @@ void TabbyEqEditor::resized()
     title.setBounds (top.removeFromLeft (150).reduced (8, 4));
     prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
     latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
-    qualityCombo.setBounds (top.removeFromRight (84).reduced (4, 4));   // FIR quality (greyed unless Linear)
+    const auto firSlot = top.removeFromRight (84).reduced (4, 4);      // shared slot: quality (Linear) / blend knob (Natural)
+    qualityCombo.setBounds (firSlot);
+    phaseAmountSlider.setBounds (firSlot);
     phaseCombo.setBounds (top.removeFromRight (110).reduced (4, 4));    // phase mode
     viewButton.setBounds (top.removeFromRight (52).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (52).reduced (4, 3));

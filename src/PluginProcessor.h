@@ -9,6 +9,7 @@
 
 #include "Parameters.h"
 #include "LinearPhase.h"
+#include "NaturalPhase.h"
 
 #include <array>
 
@@ -26,7 +27,7 @@ public:
     ~TabbyEqAudioProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
-    void releaseResources() override { lpPrepared = false; lp.releaseResources(); }
+    void releaseResources() override { lpPrepared = false; lp.releaseResources(); np.releaseResources(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -93,12 +94,16 @@ private:
 
     teq::EqEngine engine;
 
-    LinearPhaseEq lp;                                              // linear-phase convolution path
-    std::atomic<float>* phaseMode = nullptr;                      // 0 = Zero Latency (IIR), 1 = Natural Phase (reserved), 2 = Linear Phase (FIR)
-    std::atomic<float>* lpQuality = nullptr;                      // 0..3 -> FIR length
+    LinearPhaseEq lp;                                             // Linear-phase convolution path (exact zero-phase)
+    NaturalPhase  np;                                             // Natural-phase convolution path (mixed phase, blend k)
+    static constexpr int kNaturalQuality = 1;                    // Natural's fixed FIR length (L = 4096); the quality combo is Linear-only
+    std::atomic<float>* phaseMode   = nullptr;                    // 0 = Zero Latency (IIR) · 1 = Natural Phase (FIR) · 2 = Linear Phase (FIR)
+    std::atomic<float>* lpQuality   = nullptr;                    // 0..3 -> Linear FIR length
+    std::atomic<float>* phaseAmount = nullptr;                    // Natural blend k (0 linear … 1 minimum phase)
     bool lpPrepared = false;
     int  lastQuality = -1;
-    bool lastLinear  = false;
+    int  lastMode    = 0;                                         // 0/1/2 — track mode changes (re-report latency)
+    float lastK      = -1.0f;                                     // track k changes (re-prepare Natural)
 
     // Mode switching is a hard cut — seams on a deliberate, rare click are fine. (The cross-path
     // crossfade that used to live here is gone: its audio-thread state got corrupted by the

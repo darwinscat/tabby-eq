@@ -54,8 +54,9 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.sBypass= apvts.getRawParameterValue (tabby::bandId (b, "sBypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
-    phaseMode  = apvts.getRawParameterValue ("phaseMode");
-    lpQuality  = apvts.getRawParameterValue ("lpQuality");
+    phaseMode   = apvts.getRawParameterValue ("phaseMode");
+    lpQuality   = apvts.getRawParameterValue ("lpQuality");
+    phaseAmount = apvts.getRawParameterValue ("phaseAmount");
     lpUpdater.startTimerHz (30);   // coalesces param edits into background FIR rebuilds
 }
 
@@ -66,15 +67,17 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
 
-    // Linear-phase path: build the initial FIR from the current params so it's ready immediately.
+    // FIR paths: build BOTH initial FIRs from the current params so either mode is ready immediately.
     lpPrepared = false;
     std::array<teq::BandParams, tabby::kNumBands> snap;
     for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
-    lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels(),
-                (int) lpQuality->load(), snap.data(), tabby::kNumBands);
+    const int chans = getTotalNumOutputChannels();
+    lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, (int) lpQuality->load(), snap.data(), tabby::kNumBands);
+    np.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, kNaturalQuality, phaseAmount->load(), snap.data(), tabby::kNumBands);
     lastQuality = (int) lpQuality->load();
-    lastLinear  = phaseMode->load() > 1.5f;   // index 2 = Linear Phase (FIR); index 0/1 = matched IIR
-    setLatencySamples (lastLinear ? lp.latencySamples() : 0);
+    lastK       = phaseAmount->load();
+    lastMode    = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    setLatencySamples (lastMode == 2 ? lp.latencySamples() : lastMode == 1 ? np.latencySamples() : 0);
     lpPrepared = true;
 }
 
@@ -190,22 +193,21 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // smooths its coefficients, and the FIR path swaps its impulse click-free inside the convolver
     // (lpTick coalesces edits -> ConvolutionEngine crossfade). There is no cross-path blend here — that
     // fragile audio-thread state, reset under the host's latency-change re-prepare, was the silent-Natural bug.
-    const bool linear = phaseMode->load (std::memory_order_relaxed) > 1.5f;   // index 2 = Linear Phase (FIR)
-    if (linear)
+    const int mode = (int) (phaseMode->load (std::memory_order_relaxed) + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    if (mode >= 1)
     {
-        // The FIR is rebuilt off the audio thread (lpTick); here we only convolve and hand the analyzer
-        // its pre/post samples (engine.process would normally do that). We deliberately do NOT reset the
-        // convolver on resume: reset() rewinds it to the empty bank (active=0, state=Idle) and strands the
-        // IR that prepare() loaded into the inactive bank as a Pending crossfade — that was the "Linear is
-        // silent until you nudge a band" bug. Letting it run consumes the Pending fade and primes the IR.
+        // FIR path (Natural or Linear). The FIR is rebuilt off the audio thread (lpTick); here we only
+        // convolve + hand the analyzer its pre/post samples. We deliberately do NOT reset the convolver on
+        // resume (that stranded it on its empty bank — the core primes the IR itself).
         if (meter) pushDomain (engine.inputTap());
-        lp.process (buffer, nc);
+        if (mode == 2) lp.process (buffer, nc);
+        else           np.process (buffer, nc);
         if (meter) pushDomain (engine.outputTap());
     }
     else
     {
-        // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
-        // — the engine's contract. Smoothing + recompute-skip live inside the engine.
+        // Zero-Latency: feed each band's params to the engine HERE (audio thread) so setBand/process share
+        // a thread — the engine's contract. Smoothing + recompute-skip live inside the engine.
         if (meter) pushDomain (engine.inputTap());
         for (int b = 0; b < tabby::kNumBands; ++b)
             engine.setBand (b, readBand (b));
@@ -224,17 +226,22 @@ void TabbyEqAudioProcessor::lpTick()
 {
     if (! lpPrepared) return;
 
-    const int  q   = (int) lpQuality->load();
-    const bool lin = phaseMode->load() > 1.5f;   // index 2 = Linear Phase (FIR)
+    const int   q    = (int) lpQuality->load();
+    const int   mode = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    const float k    = phaseAmount->load();
 
-    if (q != lastQuality)   { lastQuality = q; lp.setQuality (q); if (lin) setLatencySamples (lp.latencySamples()); }
-    if (lin != lastLinear)  { lastLinear = lin; setLatencySamples (lin ? lp.latencySamples() : 0); }
+    auto reportLatency = [this] (int m) { setLatencySamples (m == 2 ? lp.latencySamples() : m == 1 ? np.latencySamples() : 0); };
 
-    if (lin)
+    if (q != lastQuality)               { lastQuality = q; lp.setQuality (q); if (mode == 2) reportLatency (mode); }
+    if (std::abs (k - lastK) > 1.0e-4f) { lastK = k;       np.setBlend (k); }   // Natural latency is fixed → no re-report
+    if (mode != lastMode)               { lastMode = mode; reportLatency (mode); }
+
+    if (mode >= 1)   // feed the active FIR builder (Natural or Linear)
     {
         std::array<teq::BandParams, tabby::kNumBands> snap;
         for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
-        lp.updateSnapshot (snap.data(), tabby::kNumBands);
+        if (mode == 2) lp.updateSnapshot (snap.data(), tabby::kNumBands);
+        else           np.updateSnapshot (snap.data(), tabby::kNumBands);
     }
 }
 

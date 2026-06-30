@@ -47,9 +47,11 @@ private:
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
     juce::TextButton prePost;
     juce::ComboBox   phaseCombo;                                        // Zero Latency / Natural Phase / Linear Phase
-    juce::ComboBox   qualityCombo;                                      // linear-phase FIR quality (Low..Max)
-    juce::Label      latencyLabel;                                      // reported latency — red while engaged
+    juce::ComboBox   qualityCombo;                                      // linear-phase FIR quality (Low..Max) — Linear only
+    juce::Slider     phaseAmountSlider;                                 // Natural blend k (0 linear … 1 min phase) — Natural only
+    juce::Label      latencyLabel;                                      // reported latency — yellow (Natural) / red (Linear)
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> phaseAtt, qualityAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   phaseAmountAtt;
     juce::TextButton viewButton;
     juce::TextButton resetButton;
     juce::TextButton fullButton;

@@ -96,7 +96,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "phaseMode", 1 }, "Phase",
                                                               juce::StringArray { "Zero Latency", "Natural Phase", "Linear Phase" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "lpQuality", 1 }, "Linear Quality",
-                                                              juce::StringArray { "Low", "Medium", "High", "Max" }, 1));   // default Medium
+                                                              juce::StringArray { "Low", "Medium", "High", "Very High", "Maximum" }, 1));   // default Medium — FabFilter-style ladder
+    // Natural-phase blend: 0 = linear (flat phase, more latency/pre-ring) … 1 = minimum phase (no pre-ring,
+    // ~0 latency, full phase shift). 0.5 = the mastering middle ground. Only bites in Natural Phase mode.
+    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "phaseAmount", 1 }, "Phase Amount",
+                                                             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f));
     return layout;
 }
 
