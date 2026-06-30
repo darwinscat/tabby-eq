@@ -73,8 +73,16 @@ optional accelerator on top, riding the same real, automatable parameters a huma
   boost to hold perceived energy); collision sparks on aggressive GR.
 
 ### Later (post-v1.x)
-Saturation / "warmers", linear-phase mode, external sidechain, surround channel masks,
+Saturation / "warmers", external sidechain, surround channel masks,
 A/B / undo / presets, LUFS / true-peak, spectrogram, EQ-match, cross-track collision.
+
+**TODO — "Natural Phase" (3rd phase mode).** The Phase combo already reserves three slots —
+`Zero Latency` (matched IIR, shipping) / `Natural Phase` (greyed, not built) / `Linear Phase`
+(FIR convolution, shipping via `felitronics::lineareq`). Natural Phase is the Pro-Q-style hybrid:
+follows the Zero-Latency magnitude but minimises phase shift, at light latency / more CPU — the
+mastering middle ground. It's `phaseMode` **index 1** (the disabled combo item); the DSP currently
+falls index 1 through to the IIR path, so enabling it later is additive (no schema/state shift).
+Belongs in `felitronics-core` as its own module (architecture consilium first).
 
 ## Freeze now (schema)
 

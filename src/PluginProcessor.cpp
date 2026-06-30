@@ -73,13 +73,9 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels(),
                 (int) lpQuality->load(), snap.data(), tabby::kNumBands);
     lastQuality = (int) lpQuality->load();
-    lastLinear  = phaseMode->load() > 0.5f;
+    lastLinear  = phaseMode->load() > 1.5f;   // index 2 = Linear Phase (FIR); index 0/1 = matched IIR
     setLatencySamples (lastLinear ? lp.latencySamples() : 0);
     lpPrepared = true;
-
-    activeLinear = lastLinear;   // crossfade machine starts settled on the saved mode
-    xState = 0; xGain = 1.0f; lpRanPrev = false;
-    xStep = 1.0f / (float) juce::jmax (1, (int) std::lround (0.010 * sampleRate));   // ~10 ms fade per side
 }
 
 // Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
@@ -166,7 +162,6 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
         applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
-        lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
     }
 
@@ -186,30 +181,26 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
         applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
-        lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
     }
 
-    // Main EQ path — Linear (FIR convolution) or Natural (matched IIR), with a click-free crossfade
-    // between the two. We process with `activeLinear` (which lags the param); once a switch has fully
-    // faded out we flip the mode at this block boundary and fade the new path back in. The latency
-    // jump (0 <-> N/2) is hidden inside the ~20 ms dip.
-    const bool target = phaseMode->load (std::memory_order_relaxed) > 0.5f;
-    if (xState == 1 && xGain <= 0.0f && target != activeLinear) activeLinear = target;   // flip on the silent boundary
-    if      (target != activeLinear) xState = 1;   // a switch is pending -> fade out
-    else if (xGain < 1.0f)           xState = 2;   // settle back up
-    else                             xState = 0;   // stable
-
-    bool lpRanNow = false;
-    if (activeLinear)
+    // Main EQ path. Switching modes (Zero-Latency IIR <-> Linear FIR) is a deliberate, rare click, so a
+    // hard cut with a seam is fine — and the reported latency itself changes (0 <-> N/2), so the host
+    // re-aligns anyway. What MUST stay artifact-free is editing a band WHILE in a mode: the IIR engine
+    // smooths its coefficients, and the FIR path swaps its impulse click-free inside the convolver
+    // (lpTick coalesces edits -> ConvolutionEngine crossfade). There is no cross-path blend here — that
+    // fragile audio-thread state, reset under the host's latency-change re-prepare, was the silent-Natural bug.
+    const bool linear = phaseMode->load (std::memory_order_relaxed) > 1.5f;   // index 2 = Linear Phase (FIR)
+    if (linear)
     {
-        // The linear FIR is rebuilt off the audio thread (see lpTick); here we only convolve and hand
-        // the analyzer its pre/post samples (engine.process would normally do that).
-        if (! lpRanPrev) lp.reset();   // clear stale convolver state when resuming after any gap
+        // The FIR is rebuilt off the audio thread (lpTick); here we only convolve and hand the analyzer
+        // its pre/post samples (engine.process would normally do that). We deliberately do NOT reset the
+        // convolver on resume: reset() rewinds it to the empty bank (active=0, state=Idle) and strands the
+        // IR that prepare() loaded into the inactive bank as a Pending crossfade — that was the "Linear is
+        // silent until you nudge a band" bug. Letting it run consumes the Pending fade and primes the IR.
         if (meter) pushDomain (engine.inputTap());
         lp.process (buffer, nc);
         if (meter) pushDomain (engine.outputTap());
-        lpRanNow = true;
     }
     else
     {
@@ -220,18 +211,6 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             engine.setBand (b, readBand (b));
         engine.process (buffer.getArrayOfWritePointers(), nc, n);
         if (meter) pushDomain (engine.outputTap());
-    }
-    lpRanPrev = lpRanNow;
-
-    // Crossfade envelope (stable -> a no-op at unity).
-    if (xState != 0)
-    {
-        for (int s = 0; s < n; ++s)
-        {
-            xGain = juce::jlimit (0.0f, 1.0f, xGain + (xState == 1 ? -xStep : xStep));
-            for (int c = 0; c < nc; ++c) buffer.getWritePointer (c)[s] *= xGain;
-        }
-        if (xState == 2 && xGain >= 1.0f) xState = 0;
     }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
@@ -246,7 +225,7 @@ void TabbyEqAudioProcessor::lpTick()
     if (! lpPrepared) return;
 
     const int  q   = (int) lpQuality->load();
-    const bool lin = phaseMode->load() > 0.5f;
+    const bool lin = phaseMode->load() > 1.5f;   // index 2 = Linear Phase (FIR)
 
     if (q != lastQuality)   { lastQuality = q; lp.setQuality (q); if (lin) setLatencySamples (lp.latencySamples()); }
     if (lin != lastLinear)  { lastLinear = lin; setLatencySamples (lin ? lp.latencySamples() : 0); }

@@ -55,17 +55,47 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     };
     addAndMakeVisible (prePost);
 
-    phaseButton.onClick = [this]
+    // Phase + quality combos. NB: AudioProcessorValueTreeState::ComboBoxAttachment does NOT reliably
+    // auto-populate from the choice param here (getAllValueStrings() comes back empty -> "(no choices)"),
+    // so we fill each combo from the parameter's own `choices` (single source of truth for the strings)
+    // and let the attachment only sync the selection. Item ids are 1..N (the attachment maps id-1 -> index).
+    for (auto* c : { &phaseCombo, &qualityCombo })
     {
-        if (auto* pp = proc.apvts.getParameter ("phaseMode"))
-            pp->setValueNotifyingHost (pp->getValue() > 0.5f ? 0.0f : 1.0f);   // toggle Natural <-> Linear
-    };
-    addAndMakeVisible (phaseButton);
-    if (auto* pm = proc.apvts.getParameter ("phaseMode"))
-    {
-        phaseAtt = std::make_unique<juce::ParameterAttachment> (*pm, [this] (float) { updatePhaseLabel(); });
-        phaseAtt->sendInitialUpdate();
+        c->setColour (juce::ComboBox::textColourId,       tabby::palette::text());
+        c->setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel());
+        c->setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
+        c->setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
     }
+
+    // Phase mode (Zero Latency / Natural Phase / Linear Phase). Natural Phase is reserved but not built
+    // yet, so its item is greyed. The attachment is then the single source of truth (param <-> combo) —
+    // which also kills the old button/label one-event lag.
+    addAndMakeVisible (phaseCombo);
+    if (auto* pm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("phaseMode")))
+    {
+        phaseCombo.addItemList (pm->choices, 1);
+        phaseCombo.setItemEnabled (2, false);   // item id 2 = "Natural Phase" — coming soon (see ROADMAP)
+        phaseAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "phaseMode", phaseCombo);
+    }
+    // Refresh the latency readout from the combo's OWN selection (always current) on its onChange — NOT
+    // from getRawParameterValue(), whose atom can lag the attachment by one event (that lag is what
+    // showed the wrong mode: "Linear Phase" with 0 ms, "Zero Latency" with 1365 ms). Set after the
+    // attachment so its sendInitialUpdate doesn't fire this before the quality combo exists.
+    phaseCombo.onChange = [this] { updatePhaseUi(); };
+
+    // Linear-phase FIR quality — promoted out of the View menu into its own combo beside the mode.
+    addAndMakeVisible (qualityCombo);
+    if (auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality")))
+    {
+        qualityCombo.addItemList (lq->choices, 1);
+        qualityAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "lpQuality", qualityCombo);
+    }
+    qualityCombo.onChange = [this] { updatePhaseUi(); };
+
+    latencyLabel.setJustificationType (juce::Justification::centredLeft);
+    latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    addAndMakeVisible (latencyLabel);
+    updatePhaseUi();   // initial latency text + quality-combo enable state
 
     viewButton.setButtonText ("View");
     viewButton.onClick = [this] { showViewMenu(); };
@@ -137,23 +167,23 @@ void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto
                     side->setValueNotifyingHost (mid->getValue());
 }
 
-void TabbyEqEditor::updatePhaseLabel()
+void TabbyEqEditor::updatePhaseUi()
 {
-    const bool lin = proc.apvts.getRawParameterValue ("phaseMode")->load() > 0.5f;
-    if (! lin)
+    const bool linear = phaseCombo.getSelectedItemIndex() == 2;   // 0 Zero Latency / 1 Natural Phase / 2 Linear Phase
+    qualityCombo.setEnabled (linear);   // FIR quality only bites in Linear Phase
+
+    if (! linear)   // Zero Latency (or the reserved Natural Phase) — no added delay
     {
-        phaseButton.setButtonText ("Natural");
-        phaseButton.removeColour (juce::TextButton::buttonColourId);
-        phaseButton.repaint();
+        latencyLabel.setText ("0 ms", juce::dontSendNotification);
+        latencyLabel.setColour (juce::Label::textColourId, tabby::palette::textDim());
         return;
     }
     static constexpr int sizes[] = { 4096, 16384, 65536, 131072 };
-    const int q = juce::jlimit (0, 3, (int) proc.apvts.getRawParameterValue ("lpQuality")->load());
+    const int q = juce::jlimit (0, 3, qualityCombo.getSelectedItemIndex());
     const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
     const double ms = (double) sizes[q] / 2.0 / sr * 1000.0;
-    phaseButton.setButtonText ("Lin " + juce::String (ms, ms < 100.0 ? 1 : 0) + " ms");
-    phaseButton.setColour (juce::TextButton::buttonColourId, tabby::palette::violet().withAlpha (0.55f));   // latency engaged
-    phaseButton.repaint();
+    latencyLabel.setText (juce::String (ms, ms < 100.0 ? 1 : 0) + " ms", juce::dontSendNotification);
+    latencyLabel.setColour (juce::Label::textColourId, juce::Colour (0xffff5a5a));   // latency engaged — red
 }
 
 void TabbyEqEditor::showViewMenu()
@@ -184,12 +214,6 @@ void TabbyEqEditor::showViewMenu()
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
     m.addItem (40, "M/S: link Mid/Side freq", true, msFreqLink);
 
-    juce::PopupMenu lpMenu;
-    const int lq = juce::jlimit (0, 3, (int) proc.apvts.getRawParameterValue ("lpQuality")->load());
-    const char* lpNames[] = { "Low", "Medium", "High", "Max" };
-    for (int i = 0; i < 4; ++i) lpMenu.addItem (50 + i, lpNames[i], true, lq == i);
-    m.addSubMenu ("Linear-phase quality", lpMenu);
-
     juce::PopupMenu domMenu;
     const int dom = proc.getSpectrumDomain();
     const char* domNames[] = { "Stereo", "Mid", "Side" };
@@ -212,9 +236,6 @@ void TabbyEqEditor::showViewMenu()
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
         if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
                        if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
-        if (r >= 50 && r <= 53) { if (auto* p = safe->proc.apvts.getParameter ("lpQuality"))
-                                      p->setValueNotifyingHost (p->convertTo0to1 ((float) (r - 50)));
-                                  safe->updatePhaseLabel(); }
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
     });
 }
@@ -245,11 +266,13 @@ void TabbyEqEditor::resized()
     auto r = getLocalBounds();
     auto top = r.removeFromTop (30);
     title.setBounds (top.removeFromLeft (150).reduced (8, 4));
-    prePost.setBounds (top.removeFromRight (74).reduced (6, 3));
-    phaseButton.setBounds (top.removeFromRight (82).reduced (4, 3));
-    viewButton.setBounds (top.removeFromRight (60).reduced (4, 3));
-    resetButton.setBounds (top.removeFromRight (58).reduced (4, 3));
-    fullButton.setBounds (top.removeFromRight (50).reduced (4, 3));
+    prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
+    latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
+    qualityCombo.setBounds (top.removeFromRight (84).reduced (4, 4));   // FIR quality (greyed unless Linear)
+    phaseCombo.setBounds (top.removeFromRight (110).reduced (4, 4));    // phase mode
+    viewButton.setBounds (top.removeFromRight (52).reduced (4, 3));
+    resetButton.setBounds (top.removeFromRight (52).reduced (4, 3));
+    fullButton.setBounds (top.removeFromRight (46).reduced (4, 3));
     corrMeter.setBounds (top.removeFromLeft (108).reduced (8, 2));   // remaining middle-left of the top bar
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
