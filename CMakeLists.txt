@@ -18,14 +18,25 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS build archs" FORCE)
 endif()
 
-# --- The reusable EQ DSP core — now consumed from felitronics-core (teq:: is the transitional compat
-# shim, so src/ is unchanged). The local teq/ is kept for history but NO LONGER built; the source of
-# truth is felitronics-core. Local dev consumes the sibling checkout; switch to GIT_REPOSITORY+tag later.
+# --- The reusable EQ DSP core — consumed from felitronics-core (teq:: is the transitional compat shim, so
+# src/ is unchanged). HYBRID consumption: if a local sibling checkout exists (TABBYEQ_FCORE_DIR, default
+# ../felitronics-core) it's used as-is for fast co-development; otherwise the pinned public release is
+# fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
 include(FetchContent)
-set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "felitronics-core source (local dev)")
+set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
+set(TABBYEQ_FCORE_TAG "v0.1.0" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 set(FELITRONICS_BUILD_TESTS ON)   # keep the JUCE-free core self-tests in this repo's `ctest`
 enable_testing()                  # so this repo's ctest discovers felitronics-core's suites (top-level)
-FetchContent_Declare(felitronics_core SOURCE_DIR "${TABBYEQ_FCORE_DIR}")
+if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
+    message(STATUS "felitronics-core: local checkout — ${TABBYEQ_FCORE_DIR}")
+    FetchContent_Declare(felitronics_core SOURCE_DIR "${TABBYEQ_FCORE_DIR}")
+else()
+    message(STATUS "felitronics-core: fetching ${TABBYEQ_FCORE_TAG} from GitHub")
+    FetchContent_Declare(felitronics_core
+        GIT_REPOSITORY https://github.com/darwinscat/felitronics-core.git
+        GIT_TAG        ${TABBYEQ_FCORE_TAG}
+        GIT_SHALLOW    TRUE)
+endif()
 FetchContent_MakeAvailable(felitronics_core)
 
 # The plugin pulls JUCE — gate it so CI (and anyone who only wants the core) builds the
