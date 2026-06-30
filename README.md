@@ -2,6 +2,10 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![CI](https://github.com/darwinscat/tabby-eq/actions/workflows/ci.yml/badge.svg)](https://github.com/darwinscat/tabby-eq/actions/workflows/ci.yml)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#)
+[![Formats: VST3 · AU · CLAP · Standalone](https://img.shields.io/badge/formats-VST3%20%C2%B7%20AU%20%C2%B7%20CLAP%20%C2%B7%20Standalone-blue.svg)](#)
+[![core: felitronics-core](https://img.shields.io/badge/core-felitronics--core-brightgreen.svg)](https://github.com/darwinscat/felitronics-core)
+[![JUCE 8](https://img.shields.io/badge/JUCE-8.0.14-orange.svg)](https://juce.com)
 
 **A production EQ you drive by intent.** It's a full, honest parametric EQ — real
 frequency / Q / gain, **always visible and editable** — with a **semantic helper** on top: pick
