@@ -24,7 +24,7 @@ endif()
 # fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
 include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_FCORE_TAG "v0.1.0" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+set(TABBYEQ_FCORE_TAG "v0.1.1" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 set(FELITRONICS_BUILD_TESTS ON)   # keep the JUCE-free core self-tests in this repo's `ctest`
 enable_testing()                  # so this repo's ctest discovers felitronics-core's suites (top-level)
 if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
