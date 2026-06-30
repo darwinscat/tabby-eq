@@ -73,8 +73,16 @@ optional accelerator on top, riding the same real, automatable parameters a huma
   boost to hold perceived energy); collision sparks on aggressive GR.
 
 ### Later (post-v1.x)
-Saturation / "warmers", linear-phase mode, external sidechain, surround channel masks,
+Saturation / "warmers", external sidechain, surround channel masks,
 A/B / undo / presets, LUFS / true-peak, spectrogram, EQ-match, cross-track collision.
+
+**DONE — "Natural Phase" (3rd phase mode).** The Phase combo ships three modes —
+`Zero Latency` (matched IIR) / `Natural Phase` (mixed-phase FIR) / `Linear Phase` (linear-phase FIR,
+5 quality steps). Natural Phase is the Pro-Q-style hybrid: it follows the Zero-Latency magnitude
+**exactly** but blends the phase φ=k·φ_min (cepstral mixed-phase) — a **`k` knob** morphs
+linear↔min-phase, at light latency / more CPU. It's `phaseMode` **index 1**, its own core entity
+**`felitronics::lineareq::NaturalPhaseEq`** (+ `MixedPhaseFir`), riding `felitronics::convolution`'s
+click-free IR-swap engine so live band edits stay artifact-free.
 
 ## Freeze now (schema)
 
@@ -130,7 +138,7 @@ fader · **M/S · L/R routing per band** (delta-fold in the L/R domain, stereo-o
 **add-band UX** (3×2 grid defaults, ghost preview, press-drag-to-place, Alt drag-audition w/ spotlight
 or bell + Listen Q) · **floating per-band toolbar** (Neutron-style: power-enable, ‹ › prev/next,
 icon-only type, solo, route, freq/Q/gain inline, right-click delete; semi-transparent, tracks the
-node; the bottom is now **reserved for the Helper**). (591 engine checks; all four Mac formats build
+node; the bottom is now **reserved for the Helper**). (core `ctest` suites green; all four Mac formats build
 + AU passes auval.)
 
 **Deferred — need a decision / live feedback:**

@@ -13,6 +13,18 @@ namespace
         float prev = a.load (std::memory_order_relaxed);
         while (v > prev && ! a.compare_exchange_weak (prev, v, std::memory_order_relaxed)) {}
     }
+
+    // Multi-channel de-zippered gain — the JUCE-free equivalent of juce::LinearSmoothedValue::applyGain
+    // (AudioBuffer overload): one ramp step per sample, applied to every channel (bit-exact same numerics).
+    inline void applyGainRamp (teq::LinearSmoother& sm, juce::AudioBuffer<float>& buf, int n) noexcept
+    {
+        const int nch = buf.getNumChannels();
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = sm.getNextValue();
+            for (int ch = 0; ch < nch; ++ch) buf.getWritePointer (ch)[i] *= g;
+        }
+    }
 }
 
 TabbyEqAudioProcessor::TabbyEqAudioProcessor()
@@ -42,8 +54,9 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
         p.sBypass= apvts.getRawParameterValue (tabby::bandId (b, "sBypass"));
     }
     outputGain = apvts.getRawParameterValue ("output");
-    phaseMode  = apvts.getRawParameterValue ("phaseMode");
-    lpQuality  = apvts.getRawParameterValue ("lpQuality");
+    phaseMode   = apvts.getRawParameterValue ("phaseMode");
+    lpQuality   = apvts.getRawParameterValue ("lpQuality");
+    phaseAmount = apvts.getRawParameterValue ("phaseAmount");
     lpUpdater.startTimerHz (30);   // coalesces param edits into background FIR rebuilds
 }
 
@@ -54,20 +67,18 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
 
-    // Linear-phase path: build the initial FIR from the current params so it's ready immediately.
+    // FIR paths: build BOTH initial FIRs from the current params so either mode is ready immediately.
     lpPrepared = false;
     std::array<teq::BandParams, tabby::kNumBands> snap;
     for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
-    lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels(),
-                (int) lpQuality->load(), snap.data(), tabby::kNumBands);
+    const int chans = getTotalNumOutputChannels();
+    lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, (int) lpQuality->load(), snap.data(), tabby::kNumBands);
+    np.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, kNaturalQuality, phaseAmount->load(), snap.data(), tabby::kNumBands);
     lastQuality = (int) lpQuality->load();
-    lastLinear  = phaseMode->load() > 0.5f;
-    setLatencySamples (lastLinear ? lp.latencySamples() : 0);
+    lastK       = phaseAmount->load();
+    lastMode    = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    setLatencySamples (lastMode == 2 ? lp.latencySamples() : lastMode == 1 ? np.latencySamples() : 0);
     lpPrepared = true;
-
-    activeLinear = lastLinear;   // crossfade machine starts settled on the saved mode
-    xState = 0; xGain = 1.0f; lpRanPrev = false;
-    xStep = 1.0f / (float) juce::jmax (1, (int) std::lround (0.010 * sampleRate));   // ~10 ms fade per side
 }
 
 // Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
@@ -106,12 +117,36 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         accMax (inPeak, inPk);
         if (inPk >= 1.0f) inClip.store (true, std::memory_order_relaxed);
     }
-    auto meterOutput = [this, &buffer, n, meter]() noexcept
+    auto meterOutput = [this, &buffer, n, nc, meter]() noexcept
     {
         if (! meter) return;
         const float pk = buffer.getMagnitude (0, n);
         accMax (outPeak, pk);
         if (pk >= 1.0f) outClip.store (true, std::memory_order_relaxed);
+
+        float corr = 1.0f;                                                  // L/R phase correlation (mono => 1)
+        if (nc >= 2)
+        {
+            const float* L = buffer.getReadPointer (0);
+            const float* R = buffer.getReadPointer (1);
+            double sLR = 0.0, sLL = 0.0, sRR = 0.0;
+            for (int s = 0; s < n; ++s) { sLR += (double) L[s] * R[s]; sLL += (double) L[s] * L[s]; sRR += (double) R[s] * R[s]; }
+            corr = (sLL > 1e-12 && sRR > 1e-12) ? (float) (sLR / std::sqrt (sLL * sRR)) : 0.0f;
+        }
+        corrState = 0.85f * corrState + 0.15f * corr;                       // light smoothing for a steady meter
+        correlation.store (corrState, std::memory_order_relaxed);
+    };
+
+    // Feed the analyzer FIFOs the chosen domain (Stereo ch0 / Mid / Side) — replaces the engine's
+    // old internal ch0 push, so the analyzer can show the M/S content.
+    auto pushDomain = [this, &buffer, n, nc] (teq::SpectrumTap& tap) noexcept
+    {
+        const int dom = spectrumDomain.load (std::memory_order_relaxed);
+        const float* L = buffer.getReadPointer (0);
+        const float* R = nc > 1 ? buffer.getReadPointer (1) : L;
+        if      (nc < 2 || dom == 0) for (int s = 0; s < n; ++s) tap.push (L[s]);
+        else if (dom == 1)           for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] + R[s]));
+        else                         for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] - R[s]));
     };
 
     // Drag-audition: a narrow band-pass at an arbitrary frequency (search-by-ear while dragging),
@@ -128,9 +163,8 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
         soloFilter.flushDenormals();
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-        outputGainSmoothed.applyGain (buffer, n);
+        applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
-        lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
     }
 
@@ -148,56 +182,41 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
         soloFilter.flushDenormals();
         outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-        outputGainSmoothed.applyGain (buffer, n);
+        applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
-        lpRanPrev = false;   // the convolver was idle this block — reset it when the main path resumes
         return;
     }
 
-    // Main EQ path — Linear (FIR convolution) or Natural (matched IIR), with a click-free crossfade
-    // between the two. We process with `activeLinear` (which lags the param); once a switch has fully
-    // faded out we flip the mode at this block boundary and fade the new path back in. The latency
-    // jump (0 <-> N/2) is hidden inside the ~20 ms dip.
-    const bool target = phaseMode->load (std::memory_order_relaxed) > 0.5f;
-    if (xState == 1 && xGain <= 0.0f && target != activeLinear) activeLinear = target;   // flip on the silent boundary
-    if      (target != activeLinear) xState = 1;   // a switch is pending -> fade out
-    else if (xGain < 1.0f)           xState = 2;   // settle back up
-    else                             xState = 0;   // stable
-
-    bool lpRanNow = false;
-    if (activeLinear)
+    // Main EQ path. Switching modes (Zero-Latency IIR <-> Linear FIR) is a deliberate, rare click, so a
+    // hard cut with a seam is fine — and the reported latency itself changes (0 <-> N/2), so the host
+    // re-aligns anyway. What MUST stay artifact-free is editing a band WHILE in a mode: the IIR engine
+    // smooths its coefficients, and the FIR path swaps its impulse click-free inside the convolver
+    // (lpTick coalesces edits -> ConvolutionEngine crossfade). There is no cross-path blend here — that
+    // fragile audio-thread state, reset under the host's latency-change re-prepare, was the silent-Natural bug.
+    const int mode = (int) (phaseMode->load (std::memory_order_relaxed) + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    if (mode >= 1)
     {
-        // The linear FIR is rebuilt off the audio thread (see lpTick); here we only convolve and hand
-        // the analyzer its pre/post samples (engine.process would normally do that).
-        if (! lpRanPrev) lp.reset();   // clear stale convolver state when resuming after any gap
-        if (meter) { const float* in0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.inputTap().push (in0[s]); }
-        lp.process (buffer, nc);
-        if (meter) { const float* out0 = buffer.getReadPointer (0); for (int s = 0; s < n; ++s) engine.outputTap().push (out0[s]); }
-        lpRanNow = true;
+        // FIR path (Natural or Linear). The FIR is rebuilt off the audio thread (lpTick); here we only
+        // convolve + hand the analyzer its pre/post samples. We deliberately do NOT reset the convolver on
+        // resume (that stranded it on its empty bank — the core primes the IR itself).
+        if (meter) pushDomain (engine.inputTap());
+        if (mode == 2) lp.process (buffer, nc);
+        else           np.process (buffer, nc);
+        if (meter) pushDomain (engine.outputTap());
     }
     else
     {
-        // Feed each band's params to the engine HERE (audio thread) so setBand/process share a thread
-        // — the engine's contract. Smoothing + recompute-skip live inside the engine.
+        // Zero-Latency: feed each band's params to the engine HERE (audio thread) so setBand/process share
+        // a thread — the engine's contract. Smoothing + recompute-skip live inside the engine.
+        if (meter) pushDomain (engine.inputTap());
         for (int b = 0; b < tabby::kNumBands; ++b)
             engine.setBand (b, readBand (b));
         engine.process (buffer.getArrayOfWritePointers(), nc, n);
-    }
-    lpRanPrev = lpRanNow;
-
-    // Crossfade envelope (stable -> a no-op at unity).
-    if (xState != 0)
-    {
-        for (int s = 0; s < n; ++s)
-        {
-            xGain = juce::jlimit (0.0f, 1.0f, xGain + (xState == 1 ? -xStep : xStep));
-            for (int c = 0; c < nc; ++c) buffer.getWritePointer (c)[s] *= xGain;
-        }
-        if (xState == 2 && xGain >= 1.0f) xState = 0;
+        if (meter) pushDomain (engine.outputTap());
     }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
-    outputGainSmoothed.applyGain (buffer, n);   // de-zippered output trim
+    applyGainRamp (outputGainSmoothed, buffer, n);   // de-zippered output trim
     meterOutput();
 }
 
@@ -207,17 +226,22 @@ void TabbyEqAudioProcessor::lpTick()
 {
     if (! lpPrepared) return;
 
-    const int  q   = (int) lpQuality->load();
-    const bool lin = phaseMode->load() > 0.5f;
+    const int   q    = (int) lpQuality->load();
+    const int   mode = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
+    const float k    = phaseAmount->load();
 
-    if (q != lastQuality)   { lastQuality = q; lp.setQuality (q); if (lin) setLatencySamples (lp.latencySamples()); }
-    if (lin != lastLinear)  { lastLinear = lin; setLatencySamples (lin ? lp.latencySamples() : 0); }
+    auto reportLatency = [this] (int m) { setLatencySamples (m == 2 ? lp.latencySamples() : m == 1 ? np.latencySamples() : 0); };
 
-    if (lin)
+    if (q != lastQuality)               { lastQuality = q; lp.setQuality (q); if (mode == 2) reportLatency (mode); }
+    if (std::abs (k - lastK) > 1.0e-4f) { lastK = k;       np.setBlend (k); }   // Natural latency is fixed → no re-report
+    if (mode != lastMode)               { lastMode = mode; reportLatency (mode); }
+
+    if (mode >= 1)   // feed the active FIR builder (Natural or Linear)
     {
         std::array<teq::BandParams, tabby::kNumBands> snap;
         for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
-        lp.updateSnapshot (snap.data(), tabby::kNumBands);
+        if (mode == 2) lp.updateSnapshot (snap.data(), tabby::kNumBands);
+        else           np.updateSnapshot (snap.data(), tabby::kNumBands);
     }
 }
 

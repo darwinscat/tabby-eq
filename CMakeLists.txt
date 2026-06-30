@@ -3,10 +3,10 @@ cmake_minimum_required(VERSION 3.22)
 # ----------------------------------------------------------------------------
 # TabbyEQ — educational semantic EQ (C++/JUCE). Felitronics line, by Darwin's Cat.
 #
-# The DSP lives in `teq/` — a reusable, framework-agnostic, header-only matched-EQ core
-# (JUCE-free) with its own self-tests. The plugin (slice 2) is a thin JUCE adapter on top.
-# Building this repo today builds + runs the teq core tests (no JUCE fetch needed).
-# See docs/CONCEPT.md.
+# The DSP core is consumed from felitronics-core (FetchContent — see the hybrid block below); the
+# `teq::` namespace is a compatibility shim, so the plugin in src/ is a thin JUCE adapter on top,
+# unchanged by the move. `-DTABBYEQ_BUILD_PLUGIN=OFF` configures core-only (no JUCE fetch) and runs
+# its JUCE-free test suites via `ctest`. See docs/CONCEPT.md.
 # ----------------------------------------------------------------------------
 project(TabbyEQ VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -18,9 +18,26 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS build archs" FORCE)
 endif()
 
-# --- The reusable EQ DSP core + its JUCE-free self-tests.
-set(TEQ_BUILD_TESTS ON)
-add_subdirectory(teq)
+# --- The reusable EQ DSP core — consumed from felitronics-core (teq:: is the transitional compat shim, so
+# src/ is unchanged). HYBRID consumption: if a local sibling checkout exists (TABBYEQ_FCORE_DIR, default
+# ../felitronics-core) it's used as-is for fast co-development; otherwise the pinned public release is
+# fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
+include(FetchContent)
+set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
+set(TABBYEQ_FCORE_TAG "v0.1.1" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+set(FELITRONICS_BUILD_TESTS ON)   # keep the JUCE-free core self-tests in this repo's `ctest`
+enable_testing()                  # so this repo's ctest discovers felitronics-core's suites (top-level)
+if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
+    message(STATUS "felitronics-core: local checkout — ${TABBYEQ_FCORE_DIR}")
+    FetchContent_Declare(felitronics_core SOURCE_DIR "${TABBYEQ_FCORE_DIR}")
+else()
+    message(STATUS "felitronics-core: fetching ${TABBYEQ_FCORE_TAG} from GitHub")
+    FetchContent_Declare(felitronics_core
+        GIT_REPOSITORY https://github.com/darwinscat/felitronics-core.git
+        GIT_TAG        ${TABBYEQ_FCORE_TAG}
+        GIT_SHALLOW    TRUE)
+endif()
+FetchContent_MakeAvailable(felitronics_core)
 
 # The plugin pulls JUCE — gate it so CI (and anyone who only wants the core) builds the
 # JUCE-free teq engine + tests without fetching JUCE. `-DTABBYEQ_BUILD_PLUGIN=OFF` for that.
@@ -88,8 +105,9 @@ target_compile_definitions(TabbyEQ PUBLIC
 
 target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
+    felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
-    juce::juce_dsp                      # FFT for the spectrum analyser
+    juce::juce_dsp                      # (legacy link; the FFT/convolution are now core — JUCE-dsp-free in src)
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)

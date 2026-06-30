@@ -5,9 +5,11 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <teq/EqEngine.h>
+#include <teq/Smoother.h>
 
 #include "Parameters.h"
 #include "LinearPhase.h"
+#include "NaturalPhase.h"
 
 #include <array>
 
@@ -25,7 +27,7 @@ public:
     ~TabbyEqAudioProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
-    void releaseResources() override { lpPrepared = false; lp.releaseResources(); }
+    void releaseResources() override { lpPrepared = false; lp.releaseResources(); np.releaseResources(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -37,10 +39,14 @@ public:
     // Ref-counted so concurrent editors don't disable each other's analyzer.
     void setAnalyzerActive (bool shouldRun) noexcept
     {
-        const int delta = shouldRun ? 1 : -1;
-        engine.setSpectrumActive ((analyzerRefs.fetch_add (delta, std::memory_order_relaxed) + delta) > 0);
+        analyzerRefs.fetch_add (shouldRun ? 1 : -1, std::memory_order_relaxed);   // taps are fed from processBlock (domain-aware)
     }
     bool pullSpectrum (bool pre, float* dst) noexcept { return (pre ? engine.inputTap() : engine.outputTap()).tryPull (dst); }
+
+    // Analyzer domain: which signal the spectrum shows — 0 Stereo (ch0) / 1 Mid (L+R)/2 / 2 Side (L-R)/2.
+    void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
+    int   getSpectrumDomain() const noexcept { return spectrumDomain.load (std::memory_order_relaxed); }
+    float getCorrelation()   const noexcept { return correlation.load (std::memory_order_relaxed); }   // L/R phase correlation -1..+1
     teq::BandParams readBand (int b) const noexcept;   // BandParams from the APVTS atomics
 
     void setSoloBand (int b) noexcept { soloBand.store (b, std::memory_order_relaxed); }   // -1 = no solo
@@ -88,19 +94,22 @@ private:
 
     teq::EqEngine engine;
 
-    LinearPhaseEq lp;                                              // linear-phase convolution path
-    std::atomic<float>* phaseMode = nullptr;                      // 0 = Natural (IIR), 1 = Linear (FIR)
-    std::atomic<float>* lpQuality = nullptr;                      // 0..3 -> FIR length
+    LinearPhaseEq lp;                                             // Linear-phase convolution path (exact zero-phase)
+    NaturalPhase  np;                                             // Natural-phase convolution path (mixed phase, blend k)
+    static constexpr int kNaturalQuality = 1;                    // Natural's fixed FIR length (L = 4096); the quality combo is Linear-only
+    std::atomic<float>* phaseMode   = nullptr;                    // 0 = Zero Latency (IIR) · 1 = Natural Phase (FIR) · 2 = Linear Phase (FIR)
+    std::atomic<float>* lpQuality   = nullptr;                    // 0..3 -> Linear FIR length
+    std::atomic<float>* phaseAmount = nullptr;                    // Natural blend k (0 linear … 1 minimum phase)
     bool lpPrepared = false;
     int  lastQuality = -1;
-    bool lastLinear  = false;
+    int  lastMode    = 0;                                         // 0/1/2 — track mode changes (re-report latency)
+    float lastK      = -1.0f;                                     // track k changes (re-prepare Natural)
 
-    // Click-free Natural<->Linear crossfade (audio thread): processes with `activeLinear` (which lags
-    // the phaseMode param), fades out, flips at a block boundary, fades the new path back in.
-    bool  activeLinear = false;
-    int   xState = 0;             // 0 = stable, 1 = fading out, 2 = fading in
-    float xGain = 1.0f, xStep = 1.0f;
-    bool  lpRanPrev = false;      // did the convolver run last block? (else reset it on resume)
+    // Mode switching is a hard cut — seams on a deliberate, rare click are fine. (The cross-path
+    // crossfade that used to live here is gone: its audio-thread state got corrupted by the
+    // latency-change re-prepare, which made "Natural" fall silent. We also do NOT reset the convolver on
+    // Linear resume — that stranded it on its empty bank, the "Linear silent until you nudge a band" bug;
+    // the core's own Pending→crossfade primes the IR from prepare()/lpTick instead.)
     struct LpUpdater : juce::Timer { TabbyEqAudioProcessor& p; explicit LpUpdater (TabbyEqAudioProcessor& pp) : p (pp) {}
                                      void timerCallback() override { p.lpTick(); } } lpUpdater { *this };
 
@@ -111,7 +120,7 @@ private:
     };
     std::array<BandPtrs, tabby::kNumBands> bands;
     std::atomic<float>* outputGain = nullptr;
-    juce::LinearSmoothedValue<float> outputGainSmoothed { 1.0f };   // de-zippered output trim
+    teq::LinearSmoother outputGainSmoothed { 1.0f };                // de-zippered output trim (core, JUCE-free)
     std::atomic<int> analyzerRefs { 0 };                            // editors needing the analyzer
     teq::Svf         soloFilter;                                    // band-listen band-pass (solo)
     std::atomic<int> soloBand { -1 };                               // soloed band index, or -1
@@ -120,6 +129,10 @@ private:
 
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
+
+    std::atomic<int>   spectrumDomain { 0 };   // analyzer domain: 0 Stereo (ch0) / 1 Mid / 2 Side
+    std::atomic<float> correlation { 1.0f };   // L/R phase correlation (-1..+1) for the meter
+    float corrState = 1.0f;                    // audio-thread smoothing state for the correlation meter
 
     static constexpr int kStateVersion = 2;   // v2: route removed, M/S Side lane added (additive)
 

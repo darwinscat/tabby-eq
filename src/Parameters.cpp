@@ -87,11 +87,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                              juce::NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,
                                                              juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
-    // Global phase mode + linear-phase quality (FIR length -> latency). Natural = the matched IIR path.
+    // Global phase mode + linear-phase quality (FIR length -> latency). Zero Latency = matched IIR
+    // (minimum-phase, no delay, the track-EQ default). Linear Phase = FIR convolution (no phase shift,
+    // N/2 latency, for surgical band work). "Natural Phase" — the Pro-Q-style low-phase-shift hybrid —
+    // is reserved here but NOT yet implemented; the editor greys it out. Order = increasing
+    // phase-correction/latency, so index 2 is Linear: the DSP treats index 2 as the FIR path, and the
+    // disabled middle (index 1) safely falls through to the IIR path until the hybrid is built.
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "phaseMode", 1 }, "Phase",
-                                                              juce::StringArray { "Natural", "Linear" }, 0));
+                                                              juce::StringArray { "Zero Latency", "Natural Phase", "Linear Phase" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "lpQuality", 1 }, "Linear Quality",
-                                                              juce::StringArray { "Low", "Medium", "High", "Max" }, 1));   // default Medium
+                                                              juce::StringArray { "Low", "Medium", "High", "Very High", "Maximum" }, 1));   // default Medium — FabFilter-style ladder
+    // Natural-phase blend: 0 = linear (flat phase, more latency/pre-ring) … 1 = minimum phase (no pre-ring,
+    // ~0 latency, full phase shift). 0.5 = the mastering middle ground. Only bites in Natural Phase mode.
+    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "phaseAmount", 1 }, "Phase Amount",
+                                                             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f));
     return layout;
 }
 

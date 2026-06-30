@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# TabbyEQ CI — configure, build, and run the JUCE-free teq DSP unit tests (the cramping +
-# engine correctness gate). No JUCE fetch needed: the teq core is framework-agnostic std C++20.
+# TabbyEQ CI — the DSP core now lives in felitronics-core, consumed via FetchContent. This job
+# configures with the plugin OFF (so JUCE is NOT fetched), which pulls the pinned core release and
+# builds its JUCE-free self-tests, then runs them through ctest. That gates the whole consumption
+# path (the fetch + the engine-correctness suites) on every push/PR, std C++20, no external deps.
 name: CI
 
 on:
@@ -12,16 +14,13 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5   # v5 runs on Node 24 (v4 pins the deprecated Node 20)
 
-      - name: Configure (core + tests only — no JUCE fetch)
+      - name: Configure (fetches felitronics-core; plugin OFF → no JUCE)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTABBYEQ_BUILD_PLUGIN=OFF
 
-      - name: Build
-        run: cmake --build build --target teq_tests -j
+      - name: Build the core self-tests
+        run: cmake --build build -j
 
       - name: Test
-        run: |
-          bin="$(find build -type f -name teq_tests -perm -u+x | head -1)"
-          echo "running $bin"
-          "$bin"
+        run: ctest --test-dir build --output-on-failure

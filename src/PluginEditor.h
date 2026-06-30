@@ -9,6 +9,7 @@
 #include "ui/EqCurveDisplay.h"
 #include "ui/BandEditStrip.h"
 #include "ui/LevelMeter.h"
+#include "ui/CorrelationMeter.h"
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
@@ -29,7 +30,7 @@ private:
     void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only
     void parameterChanged (const juce::String& id, float newValue) override;   // M/S freq-link mirror
     void alignLinkedFreqs();   // snap Side freq -> Mid freq on every split band (when link is switched on)
-    void updatePhaseLabel();   // refresh the Phase button text (Natural / Linear + latency)
+    void updatePhaseUi();      // refresh the latency readout + grey the quality combo when not Linear
 
     bool msFreqLink = false;  // when on, an M/S band's Mid & Side share one frequency
     bool mirroring  = false;  // re-entry guard for the freq-link mirror
@@ -40,12 +41,17 @@ private:
     BandEditStrip  strip;
     LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
     LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
+    CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
     juce::Label    inCap, outCap;
     juce::Label    title;
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
     juce::TextButton prePost;
-    juce::TextButton phaseButton;                                       // Natural <-> Linear phase mode
-    std::unique_ptr<juce::ParameterAttachment> phaseAtt;               // mirrors phaseMode -> button text
+    juce::ComboBox   phaseCombo;                                        // Zero Latency / Natural Phase / Linear Phase
+    juce::ComboBox   qualityCombo;                                      // linear-phase FIR quality (Low..Max) — Linear only
+    juce::Slider     phaseAmountSlider;                                 // Natural blend k (0 linear … 1 min phase) — Natural only
+    juce::Label      latencyLabel;                                      // reported latency — yellow (Natural) / red (Linear)
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> phaseAtt, qualityAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   phaseAmountAtt;
     juce::TextButton viewButton;
     juce::TextButton resetButton;
     juce::TextButton fullButton;
