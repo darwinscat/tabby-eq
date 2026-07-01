@@ -1026,8 +1026,12 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
         if (! placedF0 && x > xf0) { emit (xf0); placedF0 = true; }
         emit (x);
     }
-    g.setColour (col.withAlpha (0.5f));
-    g.strokePath (path, juce::PathStrokeType (1.4f));
+    {
+        juce::Graphics::ScopedSaveState ghostClip (g);
+        g.reduceClipRegion (0, 0, (int) wpx, plotBottomY());   // ghost dives off the bottom axis too (match the curves)
+        g.setColour (col.withAlpha (0.5f));
+        g.strokePath (path, juce::PathStrokeType (1.4f));
+    }
 
     // node dot (matches nodePos: hasGain -> own gain; HP/LP/notch/all-pass -> 0; only band-pass its corner)
     double nodeDb = 0.0;
