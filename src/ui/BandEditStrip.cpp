@@ -101,8 +101,8 @@ void BandEditStrip::setBand (int band)
 
     modeButton.setButtonText (curMs ? "M/S" : "ST");
     modeButton.setColour (juce::TextButton::textColourOffId, curMs ? tabby::palette::orange() : tabby::palette::text());
-    midTab.setVisible (curMs);   sideTab.setVisible (curMs);
-    prevButton.setVisible (! curMs);  nextButton.setVisible (! curMs);  title.setVisible (! curMs);
+    midTab.setVisible (curMs);   sideTab.setVisible (curMs);                    // M/S lane tabs — RIGHT of ST
+    prevButton.setVisible (true); nextButton.setVisible (true); title.setVisible (true);   // < index > nav — always
     midTab.setToggleState (! editingSide, juce::dontSendNotification);
     sideTab.setToggleState (editingSide, juce::dontSendNotification);
 
@@ -264,29 +264,29 @@ void BandEditStrip::resized()
 {
     auto r = getLocalBounds().reduced (8, 6);
 
-    // top row: power · < index > · type-icon · solo · route
+    // top row: power · < index > · type-icon · solo · ST · [M][S].  The < index > nav is ALWAYS present; the
+    // M/S lane tabs (when split) sit to the RIGHT of ST — they no longer hijack the nav slot (the strip widens
+    // a touch for M/S bands to make room, see EqCurveDisplay::toolbarW).
     auto top = r.removeFromTop (22);
     r.removeFromTop (8);
     onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
     top.removeFromLeft (6);
-    if (curMs)   // M/S: Mid | Side lane tabs take the nav slot
-    {
-        midTab.setBounds  (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
-        top.removeFromLeft (2);
-        sideTab.setBounds (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
-    }
-    else         // Stereo: < index > navigation
-    {
-        prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
-        title.setBounds (top.removeFromLeft (18));
-        nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
-    }
+    prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));    // < index > nav — always
+    title.setBounds (top.removeFromLeft (18));
+    nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
     top.removeFromLeft (8);
     typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
     top.removeFromLeft (8);
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
     top.removeFromLeft (6);
     modeButton.setBounds (top.removeFromLeft (34).withSizeKeepingCentre (34, 22));    // ST <-> M/S
+    if (curMs)   // Mid | Side lane tabs — to the RIGHT of ST
+    {
+        top.removeFromLeft (6);
+        midTab.setBounds  (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+        top.removeFromLeft (2);
+        sideTab.setBounds (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+    }
 
     // bottom row (one line), adapts to the type:
     //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
@@ -294,22 +294,22 @@ void BandEditStrip::resized()
     auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
     if (slopeBox.isVisible())
     {
-        slopeBox.setBounds (row.removeFromRight (96).withSizeKeepingCentre (96, 22));
+        slopeBox.setBounds (row.removeFromRight (104).withSizeKeepingCentre (104, 22));
         row.removeFromRight (8);
-        freq.setBounds (row);
+        freq.setBounds (row);                                          // FREQ fills the rest
     }
     else
     {
         if (gain.isVisible())
         {
-            gain.setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 22));
+            gain.setBounds (row.removeFromRight (68).withSizeKeepingCentre (68, 22));
             row.removeFromRight (8);
         }
         if (q.isVisible())
         {
-            freq.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (70, 22));
+            freq.setBounds (row.removeFromLeft (84).withSizeKeepingCentre (84, 22));
             row.removeFromLeft (8);
-            q.setBounds (row);
+            q.setBounds (row);                                         // Q fills the middle
         }
         else
             freq.setBounds (row);

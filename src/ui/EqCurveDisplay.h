@@ -181,6 +181,9 @@ private:
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
     static constexpr int kToolbarW    = 220, kToolbarH = 64;
+    static constexpr int kToolbarMsExtra = 36;        // M/S bands widen the strip so the [M][S] tabs fit RIGHT of ST
+    int  toolbarW() const noexcept;                   // strip width — base, or +extra when the selected band is M/S
+    bool lastToolbarMs = false;                       // last seen M/S state of the selected band (re-place on flip)
     static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
     static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
 
