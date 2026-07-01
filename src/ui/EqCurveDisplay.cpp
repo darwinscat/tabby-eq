@@ -38,6 +38,18 @@ namespace
     bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
+    // Asymptotic magnitude slope (dB/oct) a band contributes at HIGH frequency (near/past Nyquist). Used to
+    // continue the response off the top-right corner instead of drawing a flat shelf where f is clamped to
+    // Nyquist. Only a low-pass (rolls off at its own slope) and a band-pass (single matched biquad -> -6 dB/oct
+    // on the high side) tilt down; a high-pass is in its flat passband up there, and shelves / bell / notch /
+    // all-pass / (shelf-derived) tilt are all asymptotically flat. Confirmed against a codex+deepseek panel.
+    double hfAsymSlopeDbPerOct (teq::FilterType t, int slopeDb) noexcept
+    {
+        if (t == teq::FilterType::LowPass)  return -(double) slopeDb;
+        if (t == teq::FilterType::BandPass) return -6.0;
+        return 0.0;
+    }
+
     // Mid/main vs Side param id: "freq" -> "sFreq", "q" -> "sQ", "gain" -> "sGain", "type" -> "sType", ...
     juce::String laneParamId (int b, bool side, const juce::String& base)
     {
@@ -182,23 +194,36 @@ teq::BandParams EqCurveDisplay::sideView (int b) const noexcept   // the Side la
 
 double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 {
-    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * fsCache) / fsCache;
+    const double fNyq = 0.499 * fsCache;
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, fNyq) / fsCache;
     std::complex<double> h { 1.0, 0.0 };
+    double hfSlope = 0.0;   // summed asymptotic dB/oct past Nyquist (LP + band-pass only)
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
         if (! paramCache[b].on) continue;
         if (paramCache[b].ms && side)   // Side composite: an M/S band contributes its Side lane
         {
             if (paramCache[b].sOn && ! paramCache[b].sBypass)
+            {
                 for (int s = 0; s < designCacheSide[b].n; ++s) h *= teq::evalCoeffs (designCacheSide[b].sec[s], w);
+                hfSlope += hfAsymSlopeDbPerOct (paramCache[b].sType, paramCache[b].sSlope);
+            }
         }
         else                            // Mid composite, or a Stereo band (which affects both M and S)
         {
             if (! paramCache[b].bypass)
+            {
                 for (int s = 0; s < designCache[b].n; ++s) h *= teq::evalCoeffs (designCache[b].sec[s], w);
+                hfSlope += hfAsymSlopeDbPerOct (paramCache[b].type, paramCache[b].slope);
+            }
         }
     }
-    return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
+    double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
+    // Past Nyquist the clamp above froze the curve to a flat shelf. Continue the analog-intent asymptote
+    // instead (LP/BP keep diving, everything else stays flat) so a steep low-pass plunges off the top-right
+    // corner. Matched biquads track the analog magnitude at Nyquist, so this joins with little/no kink.
+    if (f > fNyq) db += hfSlope * std::log2 (f / fNyq);
+    return db;
 }
 
 juce::Point<float> EqCurveDisplay::nodePos (int b, bool side) const noexcept
@@ -241,11 +266,17 @@ juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
 
 double EqCurveDisplay::bandDb (int b, double f, bool side) const noexcept
 {
-    const auto& d = (paramCache[(size_t) b].ms && side) ? designCacheSide[(size_t) b] : designCache[(size_t) b];
-    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * fsCache) / fsCache;
+    const bool   S = paramCache[(size_t) b].ms && side;
+    const auto&  d = S ? designCacheSide[(size_t) b] : designCache[(size_t) b];
+    const double fNyq = 0.499 * fsCache;
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, fNyq) / fsCache;
     std::complex<double> h { 1.0, 0.0 };
     for (int s = 0; s < d.n; ++s) h *= teq::evalCoeffs (d.sec[s], w);
-    return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
+    double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
+    if (f > fNyq)   // continue the asymptote past Nyquist (see compositeDb) so LP/BP dive off the corner
+        db += hfAsymSlopeDbPerOct (S ? paramCache[(size_t) b].sType  : paramCache[(size_t) b].type,
+                                   S ? paramCache[(size_t) b].sSlope : paramCache[(size_t) b].slope) * std::log2 (f / fNyq);
+    return db;
 }
 
 EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
@@ -731,6 +762,23 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
     }
 
+    // --- beyond-Nyquist veil ---------------------------------------------
+    // Above fs/2 there is no real response — the curve there is an analog-asymptote extrapolation
+    // (see compositeDb), so shade the zone + drop a hairline at Nyquist to mark it as phantom. At
+    // 88.2/96k Nyquist sits past the 28k axis edge, so xNyq is off-screen and nothing is drawn; at
+    // 44.1/48k it greys the top sliver (22–28k / 24–28k); at low rates it honestly greys most of the top.
+    if (fsCache > 0.0)
+    {
+        const float xNyq = freqToX (0.499 * fsCache);
+        if (xNyq < w - 1.0f)
+        {
+            g.setColour (tabby::palette::bg().darker (0.6f).withAlpha (0.30f));
+            g.fillRect (xNyq, 0.0f, w - xNyq, h);
+            g.setColour (tabby::palette::grid().withAlpha (0.55f));
+            g.drawVerticalLine ((int) xNyq, 0.0f, h);
+        }
+    }
+
     // --- spectrum (filled) ------------------------------------------------
     {
         juce::Path specFill, specPeakPath;
@@ -1019,10 +1067,13 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     const float wpx = (float) getWidth();
     const float xf0 = freqToX (bp.freq);
     bool started = false, placedF0 = false;
+    const double fNyq = 0.499 * fsCache;
     auto emit = [&] (float x)
     {
-        const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * fsCache) / fsCache;
-        const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+        const double f  = xToFreq (x);
+        const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, fNyq) / fsCache;
+        double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+        if (f > fNyq) db += hfAsymSlopeDbPerOct (bp.type, bp.slope) * std::log2 (f / fNyq);   // dive past Nyquist too
         const float  y  = dbToY (juce::jmax (-2.5 * gainRange, db));   // dive off the bottom (match the composite/per-band cy)
         if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
     };
