@@ -1186,7 +1186,11 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (auto* fp = proc.apvts.getParameter (laneParamId (b, side, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (lt);
         if (draggingGain)
+        {
             if (auto* gp = proc.apvts.getParameter (laneParamId (b, side, "gain"))) gp->beginChangeGesture();
+            gainDragRefY    = (double) e.position.y;                              // relative-drag anchor...
+            gainDragRefGain = S ? paramCache[b].sGainDb : paramCache[b].gainDb;   // ...at the node's current gain
+        }
         lastDragFreq = (float) (S ? paramCache[b].sFreq : paramCache[b].freq);
         grabKeyboardFocus();
         if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
@@ -1230,18 +1234,22 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     setParam (laneParamId (draggingBand, draggingSide, "freq"), xToFreq (e.position.x));
     if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
     {
-        auto applyGain = [&] { setParam (laneParamId (draggingBand, draggingSide, "gain"),
-                                         juce::jlimit (-kGainMax, kGainMax, yToDb (e.position.y))); };
-        applyGain();
-        // Auto-zoom-out: while the node is pushed to the visible edge, widen the dB scale one step (rate-limited,
-        // so it escalates ±3→6→12→30 gradually as you hold). At ±30 the ±24 gain always fits — the node can't
-        // be dragged under the floating strip. Re-map the gain to the cursor at the new scale (no 1-frame jump).
+        // Relative gain drag from an anchor (set at mouseDown, re-based on auto-zoom). Absolute mapping used to
+        // snap the gain to the cursor, which — at the physical edge — read as the NEW scale's max and cascaded
+        // ±3→30 instantly. Relative + re-anchor keeps the node's gain across a zoom.
+        const double sens = 2.0 * gainRange / (double) juce::jmax (1, plotBottomY());   // dB per pixel at this scale
+        const double g = juce::jlimit (-kGainMax, kGainMax, gainDragRefGain + sens * (gainDragRefY - (double) e.position.y));
+        setParam (laneParamId (draggingBand, draggingSide, "gain"), g);
+        // At the visible edge, widen ONE step (rate-limited) and KEEP g: the node lands at its value on the new
+        // scale (e.g. +3 → mid-upper on ±6), not at the edge. Re-anchor so the cursor no longer reads as the new
+        // max → no cascade; a further deliberate drag escalates the next step, up to ±30 where ±24 always fits.
         const juce::uint32 now = juce::Time::getMillisecondCounter();
-        if (std::abs (yToDb (e.position.y)) >= gainRange - 0.05 && gainRange < kGainSteps[3] && now - lastZoomMs > 140)
+        if (std::abs (g) >= gainRange - 0.05 && gainRange < kGainSteps[3] && now - lastZoomMs > 140)
         {
             lastZoomMs = now;
             setGainRange (nextGainStep (gainRange));
-            applyGain();
+            gainDragRefGain = g;                    // keep the gain...
+            gainDragRefY    = (double) e.position.y; // ...and re-base the anchor at the cursor on the new scale
         }
     }
     positionToolbar();   // follow the node while dragging it by mouse (cursor is on the node, not the bar)

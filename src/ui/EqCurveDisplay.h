@@ -140,6 +140,7 @@ private:
     int  draggingBand = -1;
     bool draggingSide = false;   // the node being dragged is the Side lane
     bool draggingGain = false;
+    double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     bool whiskerSlope = false;   // the dragged whisker sets slope (HP/LP) rather than Q
