@@ -68,7 +68,7 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
 
     // FIR paths: build BOTH initial FIRs from the current params so either mode is ready immediately.
-    lpPrepared = false;
+    prepared.store (false, std::memory_order_relaxed);
     std::array<teq::BandParams, tabby::kNumBands> snap;
     for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
     const int chans = getTotalNumOutputChannels();
@@ -78,7 +78,7 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     lastK       = phaseAmount->load();
     lastMode    = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
     setLatencySamples (lastMode == 2 ? lp.latencySamples() : lastMode == 1 ? np.latencySamples() : 0);
-    lpPrepared = true;
+    prepared.store (true, std::memory_order_release);   // publish LAST: the engine + both FIRs are now fully built
 }
 
 // Generic any-channel support up to the engine's cap: any MATCHED layout (mono, stereo, 5.1, 7.1,
@@ -99,10 +99,17 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 {
     juce::ScopedNoDenormals noDenormals;   // FTZ/DAZ on the audio thread (engine also flushes per block)
 
+    // H1 — own our lifecycle safety: do NO DSP before prepareToPlay() completes or after releaseResources()
+    // (dry passthrough). Belt-and-suspenders vs. the core's own unprepared guards — the exact class that once
+    // crashed a sibling only on x86-64 (int /0). Acquire pairs with the release store at the end of prepare.
+    if (! prepared.load (std::memory_order_acquire)) return;
+
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
     const int n      = buffer.getNumSamples();
-    const int nc     = juce::jmin (numOut, teq::EqEngine::kMaxChannels);   // channels we EQ
+    // H2 — never index past the REAL buffer: cap the EQ'd channel count by the buffer's own channel count,
+    // not just the negotiated bus (jmin is a no-op in a conforming host, robust if a host hands a short buffer).
+    const int nc     = juce::jmin (numOut, teq::EqEngine::kMaxChannels, buffer.getNumChannels());   // channels we EQ
     if (nc <= 0) return;
 
     // Up-mix a mono input into stereo (the only non-matched layout we accept) => identical L/R.
@@ -224,7 +231,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 // quality changes (rebuild the FIR, re-report latency for the host's plugin-delay compensation).
 void TabbyEqAudioProcessor::lpTick()
 {
-    if (! lpPrepared) return;
+    if (! prepared.load (std::memory_order_acquire)) return;
 
     const int   q    = (int) lpQuality->load();
     const int   mode = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
