@@ -1033,39 +1033,31 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
 
 EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const noexcept
 {
-    const double f      = xToFreq (at.x);
-    const bool   above0 = yToDb (at.y) >= 0.0;                                       // side of the 0 dB line
-    const double frac   = std::log (f / kFreqMin) / std::log (kFreqMax / kFreqMin);  // 0 (20 Hz) .. 1 (20 kHz)
-    const bool   left   = frac < (1.0 / 3.0);                                        // freq thirds (log axis)
-    const bool   right  = frac > (2.0 / 3.0);
-
-    bool hasHP = false, hasLP = false, hasLowShelf = false, hasHighShelf = false;
-    for (int b = 0; b < tabby::kNumBands; ++b)
-        if (paramCache[b].on)
-        {
-            const auto t = paramCache[b].type;
-            hasHP        = hasHP        || t == teq::FilterType::HighPass;
-            hasLP        = hasLP        || t == teq::FilterType::LowPass;
-            hasLowShelf  = hasLowShelf  || t == teq::FilterType::LowShelf;
-            hasHighShelf = hasHighShelf || t == teq::FilterType::HighShelf;
-        }
-
+    const double f  = xToFreq (at.x);
+    const double db = yToDb (at.y);
     AddSpec s;
-    s.gainDb = above0 ? 2.0 : -2.0;                          // default boost/cut by side of 0 dB
 
-    if (left)
+    // The bottom quarter of the display (a deep cut) is entirely filters, split at 4 kHz: left → HPF, right → LPF
+    // (24 dB/oct, no gain). Drag a node low = "I want a filter", regardless of the finer freq bands.
+    if (db < -gainRange * 0.5)
     {
-        if (! above0 && ! hasHP) { s.typeIndex = 3; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }  // HPF 24
-        else if (! hasLowShelf)  { s.typeIndex = 1; }                                                           // Low Shelf +-2
-        else                     { s.typeIndex = 0; }                                                           // Bell +-2
+        s.typeIndex = (f < 4000.0) ? 3 : 4;   // HPF : LPF
+        s.slopeIndex = 2;                     // 24 dB/oct
+        s.gainDb = 0.0; s.hasGainCtrl = false;
+        return s;
     }
-    else if (right)
-    {
-        if (! above0 && ! hasLP) { s.typeIndex = 4; s.slopeIndex = 1; s.gainDb = 0.0; s.hasGainCtrl = false; }  // LPF 12
-        else if (! hasHighShelf) { s.typeIndex = 2; }                                                           // High Shelf +-2
-        else                     { s.typeIndex = 0; }                                                           // Bell +-2
-    }
-    else                         { s.typeIndex = 0; }                                                           // middle -> Bell +-2
+
+    // Otherwise pick the type by frequency band (along the 0 line); shelf/bell boost-or-cut follows the side of
+    // 0 the cursor is on. Purely positional (no de-dup) — you can stack the same type if you want.
+    const bool   above0 = db >= 0.0;
+    const double amt    = juce::jmax (0.5, gainRange / 6.0);   // default "amount" scales with the view (looks the same at any zoom)
+    s.gainDb = above0 ? amt : -amt;
+
+    if      (f <    30.0) { s.typeIndex = 3; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }   // < 30 Hz  → HPF 24
+    else if (f <   100.0) { s.typeIndex = 1; }                                                            // 30–100   → Low Shelf
+    else if (f <  8000.0) { s.typeIndex = 0; }                                                            // 100–8k   → Bell (dome)
+    else if (f < 19000.0) { s.typeIndex = 2; }                                                            // 8k–19k   → High Shelf
+    else                  { s.typeIndex = 4; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }   // > 19 kHz → LPF 24
 
     return s;
 }

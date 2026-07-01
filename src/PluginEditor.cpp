@@ -124,7 +124,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setViewBandCurves ((bool) proc.apvts.state.getProperty ("viewBandCurves", true));
     display.setViewBandFill   ((bool) proc.apvts.state.getProperty ("viewBandFill",   false));
     display.setViewLongSolo   ((bool) proc.apvts.state.getProperty ("viewLongSolo",   true));
-    display.setAddLineMode    ((int)  proc.apvts.state.getProperty ("addLineMode",    3));   // default: both lines
+    display.setAddLineMode    ((int)  proc.apvts.state.getProperty ("addLineMode",    1));   // default: the 0 dB line only
     display.setAuditionVisual ((int)  proc.apvts.state.getProperty ("auditionVisual", 1));   // default: bell
     display.setAuditionQ      ((float) (double) proc.apvts.state.getProperty ("auditionQ", 6.0));
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));

@@ -161,7 +161,7 @@ private:
     bool perBandFill   = false;                     // fill under each band's curve (off by default)
     bool longPressSolo = true;                      // hold the mouse on a node to solo it
 
-    AddLine addLine = AddLine::Both;                 // which line surfaces "+" (View option)
+    AddLine addLine = AddLine::ZeroLine;             // which line surfaces "+" (View option) — default: the 0 dB line only
     bool    placing    = false;                      // press-drag add in progress
     bool    placeMoved = false;                      // moved enough to take the gain from the drag Y
     AddSpec placeSpec;                               // type/slope locked at press
