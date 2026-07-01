@@ -177,7 +177,7 @@ teq::BandParams EqCurveDisplay::sideView (int b) const noexcept   // the Side la
 
 double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 {
-    const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * fsCache) / fsCache;
     std::complex<double> h { 1.0, 0.0 };
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
@@ -236,7 +236,7 @@ juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
 double EqCurveDisplay::bandDb (int b, double f, bool side) const noexcept
 {
     const auto& d = (paramCache[(size_t) b].ms && side) ? designCacheSide[(size_t) b] : designCache[(size_t) b];
-    const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * fsCache) / fsCache;
     std::complex<double> h { 1.0, 0.0 };
     for (int s = 0; s < d.n; ++s) h *= teq::evalCoeffs (d.sec[s], w);
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
@@ -641,7 +641,7 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
         juce::Path line, fill; bool started = false;
         for (float x = 0.0f; x <= w; x += 3.0f)
         {
-            const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
+            const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * fsCache) / fsCache;
             const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
             const float  y  = dbToY (db);
             if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
@@ -994,7 +994,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     bool started = false;
     for (float x = 0.0f; x <= wpx; x += 3.0f)
     {
-        const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
+        const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * fsCache) / fsCache;
         const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
         const float  y  = dbToY (db);
         if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
@@ -1040,12 +1040,12 @@ EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const
 
     // The bottom quarter of the display (a deep cut) is entirely filters, split at 4 kHz: left → HPF, right → LPF
     // (24 dB/oct, no gain). Drag a node low = "I want a filter", regardless of the finer freq bands.
-    if (db < -gainRange * 0.75)  // the very bottom 1/8 → a surgical Notch (narrow band-reject), any frequency
+    if (db < -gainRange * 0.875)  // the very bottom 1/16 → a surgical Notch (narrow band-reject), any frequency
     {
         s.typeIndex = 6; s.gainDb = 0.0; s.hasGainCtrl = false;
         return s;
     }
-    if (db < -gainRange * 0.5)    // the rest of the bottom quarter → a filter split at 4 kHz (left → HPF, right → LPF)
+    if (db < -gainRange * 0.75)    // the bottom 1/8 → a filter split at 4 kHz (left → HPF, right → LPF)
     {
         s.typeIndex = (f < 4000.0) ? 3 : 4;   // HPF : LPF
         s.slopeIndex = 2;                     // 24 dB/oct
@@ -1259,10 +1259,10 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
     {
         if (getLocalBounds().toFloat().contains (e.position))
         {
-            if (placeGainFromDrag && placeSpec.hasGainCtrl)
-                addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from drag Y
+            if (placeSpec.hasGainCtrl && (placeGainFromDrag || ! placeMoved))
+                addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from the cursor (plain click or free drag)
             else
-                addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // freq from X, default gain
+                addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // filter, or Alt-locked default gain
         }
         placing = false; placeMoved = false; repaint();
         return;   // the new band's selectBand() already placed the toolbar
