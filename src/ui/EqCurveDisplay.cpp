@@ -137,8 +137,10 @@ double EqCurveDisplay::xToFreq (float x) const noexcept
 // nodes (whose Y comes from dbToY) can never fall into the lane; every other mode uses the full height.
 int    EqCurveDisplay::plotBottomY() const noexcept
 {
-    // Always keep a strip at the very bottom for the frequency axis labels: the curve/node area (and the clip)
-    // stop above it, so a deep cut / notch dives off the plot's bottom edge instead of drawing over "500/1k/…".
+    // The NOMINAL +/-gainRange scale (dbToY, node positions, the drag-to-rescale boundary) stops a strip short
+    // of the window bottom. Below that invisible -gainRange line the curves OVERSHOOT (a deep cut / notch dives
+    // on down to the very bottom of the window), the spectrum shows, and in Fixed-lane the edit strip slides.
+    // The curve *clip* uses the full window height (see paint), so curves reach the bottom edge, not this line.
     return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH)
                                                    : juce::jmax (40, getHeight() - kBottomAxisH);
 }
@@ -768,7 +770,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     if (perBandCurves || solo >= 0)
     {
         juce::Graphics::ScopedSaveState bandClip (g);
-        g.reduceClipRegion (0, 0, (int) w, plotBottomY());   // curves dive off the bottom axis, not along it
+        g.reduceClipRegion (0, 0, (int) w, getHeight());   // curves dive to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = dbToY (0.0);
         auto drawLane = [&] (int b, bool side)
         {
@@ -801,7 +803,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
         juce::Graphics::ScopedSaveState compositeClip (g);
-        g.reduceClipRegion (0, 0, (int) w, plotBottomY());   // composite dives off the bottom axis, not along it
+        g.reduceClipRegion (0, 0, (int) w, getHeight());   // composite dives to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
@@ -1031,7 +1033,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     }
     {
         juce::Graphics::ScopedSaveState ghostClip (g);
-        g.reduceClipRegion (0, 0, (int) wpx, plotBottomY());   // ghost dives off the bottom axis too (match the curves)
+        g.reduceClipRegion (0, 0, (int) wpx, getHeight());   // ghost dives to the window bottom too (match the curves)
         g.setColour (col.withAlpha (0.5f));
         g.strokePath (path, juce::PathStrokeType (1.4f));
     }
