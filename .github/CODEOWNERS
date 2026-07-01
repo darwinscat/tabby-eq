@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# TabbyEQ code owners — Darwin's Cat. GitHub auto-requests a review from an owner on every PR,
+# and (with branch protection) requires an owner's approval before merge.
+#   @tsyma      — Oleh Tsymaienko
+#   @AliceLafox — Alisa Lafoks
+* @tsyma @AliceLafox
