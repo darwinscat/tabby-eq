@@ -241,10 +241,13 @@ void BandEditStrip::updateForType()
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
+    // The Notch rides a variable ORDER now (felitronics-core v0.1.5, slope->order like HP/LP), so it takes the
+    // slope combo in octaves too — not a Q box — matching its slope-whisker on the curve.
+    const bool usesSlope = isCut || (t == teq::FilterType::Notch);
 
-    slopeBox.setVisible (isCut);                       // HP/LP -> the slope combo replaces Q
+    slopeBox.setVisible (usesSlope);                   // HP/LP + Notch -> the slope combo (octaves) replaces Q
     gain.setVisible (hasGain);   gain.setEnabled (hasGain);
-    q.setVisible (! isCut && ! isTilt);   q.setEnabled (! isCut && ! isTilt);   // no Q for HP/LP or tilt
+    q.setVisible (! usesSlope && ! isTilt);   q.setEnabled (! usesSlope && ! isTilt);   // no Q for HP/LP/Notch or tilt
     resized();                                         // visibility changed -> re-lay the bottom row
 }
 

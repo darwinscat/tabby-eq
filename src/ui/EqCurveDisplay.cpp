@@ -36,6 +36,11 @@ namespace
     }
 
     bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
+
+    // Whiskers that encode the discrete SLOPE (octaves) via the Neutron-style handle spread, not a continuous
+    // Q. HP/LP have always done this; the Notch joins them now that felitronics-core v0.1.5 gives it a variable
+    // ORDER (slope->order, 6..96 dB/oct, like HP/LP). Its Q stays the -3 dB width (edited in the strip).
+    bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch; }
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
     // Mid/main vs Side param id: "freq" -> "sFreq", "q" -> "sQ", "gain" -> "sGain", "type" -> "sType", ...
@@ -231,7 +236,7 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
     const auto   t  = S ? bp.sType : bp.type;
     const int    sl = S ? bp.sSlope : bp.slope;
     const double qv = S ? bp.sQ : bp.Q;
-    const double bw = isCut (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
+    const double bw = slopeWhisker (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
     const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
@@ -738,22 +743,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
     }
 
-    // --- beyond-Nyquist veil ---------------------------------------------
-    // Below fs/2 the (oversampled, see designFs) curve ~= the real response; above it there is no real
-    // signal and the curve is pure analog intent. Shade that zone + drop a hairline at Nyquist to mark it.
-    // At 88.2/96k Nyquist sits past the 28k axis edge, so xNyq is off-screen and nothing is drawn; at
-    // 44.1/48k it greys the top sliver (22–28k / 24–28k); at low rates it honestly greys most of the top.
-    if (fsCache > 0.0)
-    {
-        const float xNyq = freqToX (0.499 * fsCache);
-        if (xNyq < w - 1.0f)
-        {
-            g.setColour (tabby::palette::bg().darker (0.6f).withAlpha (0.30f));
-            g.fillRect (xNyq, 0.0f, w - xNyq, h);
-            g.setColour (tabby::palette::grid().withAlpha (0.55f));
-            g.drawVerticalLine ((int) xNyq, 0.0f, h);
-        }
-    }
+    // (The beyond-Nyquist fog is drawn LAST — over the curve so it dissolves into it, see the end of paint.)
 
     // --- spectrum (filled) ------------------------------------------------
     {
@@ -998,6 +988,26 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             g.drawLine (addBtn.x, addBtn.y - 4.0f, addBtn.x, addBtn.y + 4.0f, 1.6f);
         }
     }
+
+    // --- beyond-Nyquist fog (drawn LAST, OVER the curve so the phantom tail dissolves) ------------
+    // Below fs/2 the (oversampled, see designFs) curve ~= the real response; above it there is no real
+    // signal — the curve is pure analog intent, so let it fade into fog toward the right edge. A gradient
+    // (clear at Nyquist -> near-opaque at 28k) thickens across the phantom zone; a hairline marks fs/2.
+    // At 88.2/96k Nyquist sits past the 28k axis, so xNyq is off-screen and nothing draws; at 44.1/48k it
+    // fogs the top sliver (the curve dissolves right at the edge); at low rates it fogs most of the top.
+    if (fsCache > 0.0)
+    {
+        const float xNyq = freqToX (0.499 * fsCache);
+        if (xNyq < w - 1.0f)
+        {
+            const auto fog = tabby::palette::bg().darker (0.35f);
+            g.setGradientFill (juce::ColourGradient (fog.withAlpha (0.0f),  xNyq, 0.0f,
+                                                     fog.withAlpha (0.94f), w,    0.0f, false));
+            g.fillRect (xNyq, 0.0f, w - xNyq, h);
+            g.setColour (tabby::palette::violetLo().withAlpha (0.5f));   // hairline at Nyquist — where real signal ends
+            g.drawVerticalLine ((int) xNyq, 0.0f, h);
+        }
+    }
 }
 
 //==============================================================================
@@ -1222,7 +1232,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (onLeft || onRight)
         {
             draggingBand = selBand; draggingSide = selSide; draggingQ = true; qDragSide = onRight ? 1 : -1;
-            whiskerSlope = isCut (selType);
+            whiskerSlope = slopeWhisker (selType);   // HP/LP + Notch step the discrete slope; others set Q
             if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selSide, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
             lastDragFreq = (float) ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sFreq
@@ -1386,7 +1396,7 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
-                if (isCut (lt))                                                         // HP/LP -> step the slope (octaves)
+                if (slopeWhisker (lt))                                                  // HP/LP + Notch -> step the slope (octaves)
                     setParamGestured (laneParamId (selBand, selSide, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) ls) + d));
                 else                                                                    // others -> Q +/- 0.1
                     setParamGestured (laneParamId (selBand, selSide, "q"), juce::jlimit (0.05, 40.0, lq + 0.1 * d));
