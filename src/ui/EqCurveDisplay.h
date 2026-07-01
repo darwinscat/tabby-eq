@@ -195,7 +195,8 @@ private:
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
     bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)
 
-    static constexpr double kFreqMin   = 20.0, kFreqMax = 28000.0;   // top runs ~½-oct past 20k so the >20k rolloff (~22k) is visible
+    static constexpr double kFreqMin   = 20.0, kFreqMax = 28000.0;   // AXIS range: top runs ~½-oct past 20k so the >20k rolloff is visible
+    static constexpr double kFreqPlaceMax = 20000.0;                 // bands can only be PLACED up to here (= the freq param max); 20k–28k is display-only
     static constexpr double kGainMax   = 24.0;          // ± dB — the real gain-param clamp (drag / keyboard)
     static constexpr double kGainSteps[4] = { 3.0, 6.0, 12.0, 30.0 };   // selectable vertical-scale steps (visible ± dB)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;

@@ -198,17 +198,18 @@ double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 
 juce::Point<float> EqCurveDisplay::nodePos (int b, bool side) const noexcept
 {
-    // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor); notch/all-pass are
-    // surgical / phase-only so they sit on the 0 dB line; HP/LP/BP ride the composite at the corner.
+    // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor). HP/LP, notch and all-pass are
+    // gain-less (cut/surgical/phase) so they always rest on the 0 dB line and never drag vertically; only
+    // band-pass rides the composite at its corner.
     const auto& bp = paramCache[(size_t) b];
     const bool   S = bp.ms && side;
     const auto   t = S ? bp.sType : bp.type;
     const double f = S ? bp.sFreq : bp.freq;
     const double g = S ? bp.sGainDb : bp.gainDb;
     double db;
-    if (hasGain (t))                                                       db = g;
-    else if (t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
-    else                                                                   db = compositeDb (f, S);
+    if (hasGain (t))                                                                    db = g;
+    else if (isCut (t) || t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
+    else                                                                                db = compositeDb (f, S);
     return { freqToX (f), dbToY (db) };
 }
 
@@ -959,12 +960,11 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         {
             const auto ft = tabby::filterTypeFromChoice (typeIndex);
             setParamGestured (tabby::bandId (b, "type"), typeIndex);
-            setParamGestured (tabby::bandId (b, "freq"), xToFreq (at.x));
+            setParamGestured (tabby::bandId (b, "freq"), juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x)));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
-                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707
-                                                      : (ft == teq::FilterType::Notch) ? 4.0 : 1.0);   // notch = narrow band-reject
+                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
             if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);
@@ -980,8 +980,8 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     teq::BandParams bp;
     bp.on     = true;
     bp.type   = ft;
-    bp.freq   = juce::jlimit (kFreqMin, kFreqMax, xToFreq (at.x));
-    bp.Q      = (ft == teq::FilterType::Notch) ? 4.0 : isCut (ft) ? 0.707 : 1.0;   // notch reads narrow
+    bp.freq   = juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x));   // preview a placeable band (≤ 20k), matching the commit
+    bp.Q      = isCut (ft) ? 0.707 : 1.0;
     const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
     bp.gainDb = gain;
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
@@ -1002,10 +1002,10 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     g.setColour (col.withAlpha (0.5f));
     g.strokePath (path, juce::PathStrokeType (1.4f));
 
-    // node dot (matches nodePos: hasGain -> own gain; notch/all-pass -> 0; cut -> its own corner)
+    // node dot (matches nodePos: hasGain -> own gain; HP/LP/notch/all-pass -> 0; only band-pass its corner)
     double nodeDb = 0.0;
     if (hasGain (ft)) nodeDb = gain;
-    else if (! (ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
+    else if (! (isCut (ft) || ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
         nodeDb = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (
                      teq::bandResponse (bp, fsCache, 2.0 * juce::MathConstants<double>::pi * bp.freq / fsCache))));
     const float nx = freqToX (bp.freq), ny = dbToY (nodeDb);
@@ -1040,9 +1040,9 @@ EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const
 
     // The bottom quarter of the display (a deep cut) is entirely filters, split at 4 kHz: left → HPF, right → LPF
     // (24 dB/oct, no gain). Drag a node low = "I want a filter", regardless of the finer freq bands.
-    if (db < -gainRange * 0.875)  // the very bottom 1/16 → a surgical Notch (narrow band-reject), any frequency
+    if (db < -gainRange * 0.9375)  // the very bottom 1/32 → a surgical Notch (band-reject, 12 dB/oct default), any frequency
     {
-        s.typeIndex = 6; s.gainDb = 0.0; s.hasGainCtrl = false;
+        s.typeIndex = 6; s.slopeIndex = 1; s.gainDb = 0.0; s.hasGainCtrl = false;
         return s;
     }
     if (db < -gainRange * 0.75)    // the bottom 1/8 → a filter split at 4 kHz (left → HPF, right → LPF)
@@ -1352,6 +1352,7 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
     if (addLine == AddLine::Off)                          return { -1.0f, -1.0f };
     if (hoverPos.x < 0.0f || draggingBand >= 0 || placing) return { -1.0f, -1.0f };
+    if (hoverPos.x > freqToX (kFreqPlaceMax))              return { -1.0f, -1.0f };   // no add in the 20k–28k display-only headroom
 
     // keep the "+" clear of anything grabbable: a margin around every node (both lanes) so reaching for a node
     // never pops the add-affordance under the cursor.
