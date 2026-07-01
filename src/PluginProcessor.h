@@ -27,7 +27,7 @@ public:
     ~TabbyEqAudioProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
-    void releaseResources() override { lpPrepared = false; lp.releaseResources(); np.releaseResources(); }
+    void releaseResources() override { prepared.store (false, std::memory_order_relaxed); lp.releaseResources(); np.releaseResources(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -100,7 +100,13 @@ private:
     std::atomic<float>* phaseMode   = nullptr;                    // 0 = Zero Latency (IIR) · 1 = Natural Phase (FIR) · 2 = Linear Phase (FIR)
     std::atomic<float>* lpQuality   = nullptr;                    // 0..3 -> Linear FIR length
     std::atomic<float>* phaseAmount = nullptr;                    // Natural blend k (0 linear … 1 minimum phase)
-    bool lpPrepared = false;
+    // Master "fully prepared" flag: true only after prepareToPlay() finishes building the engine + BOTH
+    // FIR paths; false before the first prepare and after releaseResources(). Gates BOTH the audio thread
+    // (processBlock returns early when unprepared → the adapter OWNS its lifecycle safety instead of leaning
+    // on the core's unprepared guards) and lpTick(). Atomic + release/acquire so the audio thread that sees
+    // `true` also sees the fully-built engine/FIR state (publish pattern); this is the tabby-side mirror of
+    // felitronics-core's own use-before-prepare hardening.
+    std::atomic<bool> prepared { false };
     int  lastQuality = -1;
     int  lastMode    = 0;                                         // 0/1/2 — track mode changes (re-report latency)
     float lastK      = -1.0f;                                     // track k changes (re-prepare Natural)
