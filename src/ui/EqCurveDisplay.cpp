@@ -351,19 +351,10 @@ void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
     if (t != nullptr) addChildComponent (t);         // hidden until a band is selected
 }
 
-// The floating edit strip is a touch WIDER for an M/S band, so its [M][S] lane tabs fit to the RIGHT of ST
-// (instead of hijacking the < index > nav). paramCache is refreshed at the top of positionToolbar(), so the
-// selected band's .ms is current whenever the placement math below reads this.
-int EqCurveDisplay::toolbarW() const noexcept
-{
-    const bool ms = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].ms;
-    return kToolbarW + (ms ? kToolbarMsExtra : 0);
-}
-
 // 0 — Classic: the original. Centre the strip on the node, above it (below if it'd clip the top), clamp.
 juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) const noexcept
 {
-    const int W = toolbarW();
+    const int W = kToolbarW;
     int tx = (int) (node.x - (float) W * 0.5f);
     int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);            // above the node...
     if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);               // ...or below if no room
@@ -376,7 +367,7 @@ juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) cons
 // larger canvas gap, so it covers (at most) the neighbours on the emptier side instead of both sides at once.
 juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) const noexcept
 {
-    const int   W     = toolbarW();
+    const int   W     = kToolbarW;
     const bool right = node.x < (float) getWidth() * 0.5f;           // more room to the right → extend right
     int tx = right ? (int) (node.x - (float) W * 0.12f)
                    : (int) (node.x - (float) W * 0.88f);
@@ -392,7 +383,7 @@ juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) c
 // flicker while dragging). Returns the clamped winner + its post-clamp occlusion + slot index.
 juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept
 {
-    const float gap = kNodeR + 12.0f, W = (float) toolbarW(), H = (float) kToolbarH;
+    const float gap = kNodeR + 12.0f, W = (float) kToolbarW, H = (float) kToolbarH;
     const juce::Point<float> cand[8] = {
         { node.x - W * 0.5f,  node.y - gap - H },   // 0 above-center
         { node.x - W * 0.5f,  node.y + gap     },   // 1 below-center
@@ -438,7 +429,6 @@ void EqCurveDisplay::positionToolbar()
     if (toolbar == nullptr) return;
     refreshDesigns();   // ensure the cache reflects a just-added/just-toggled band before we test it
     const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
-    if (selBand >= 0 && selBand < tabby::kNumBands) lastToolbarMs = paramCache[(size_t) selBand].ms;   // track for the timer
     if (! show) { toolbar->setVisible (false); showLeader = false; return; }
 
     const auto node = nodePos (selBand, selSide);   // lane-aware (M/S: place at the actual selected node)
@@ -467,7 +457,7 @@ void EqCurveDisplay::positionToolbar()
             if (occl > 0)   // no clean local slot → dock to the far horizontal edge, leader across
             {
                 const bool dockTop = node.y > (float) getHeight() * 0.5f;
-                const int W  = toolbarW();
+                const int W  = kToolbarW;
                 const int tx = juce::jlimit (2, juce::jmax (2, getWidth() - W - 2), (int) (node.x - (float) W * 0.5f));
                 const int ty = dockTop ? 2 : stripMaxY();
                 b = { tx, ty, W, kToolbarH };
@@ -482,8 +472,8 @@ void EqCurveDisplay::positionToolbar()
             // FabFilter-style: the strip lives in the reserved bottom lane and only slides horizontally to
             // track the selected band's frequency. Nodes can't enter the lane (dbToY squeezes them above it),
             // so the strip can never occlude a node; it sits at the lane top, clear of the freq axis below it.
-            b = { juce::jlimit (2, juce::jmax (2, getWidth() - toolbarW() - 2), (int) (node.x - (float) toolbarW() * 0.5f)),
-                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), toolbarW(), kToolbarH };
+            b = { juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - (float) kToolbarW * 0.5f)),
+                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), kToolbarW, kToolbarH };
             break;
 
         case ToolbarPlace::Classic:
@@ -649,10 +639,6 @@ void EqCurveDisplay::timerCallback()
         prevSoloBand  = proc.getSoloBand();
         proc.setSoloBand (pressBand);
     }
-    // Pressing ST on the strip flips the selected band's M/S state, which changes the strip WIDTH (the [M][S]
-    // tabs need room). The strip can't re-place itself, so catch the flip here and re-run positionToolbar().
-    if (selBand >= 0 && selBand < tabby::kNumBands && proc.readBand (selBand).ms != lastToolbarMs)
-        positionToolbar();
     pushSpectrum();
     repaint();
 }

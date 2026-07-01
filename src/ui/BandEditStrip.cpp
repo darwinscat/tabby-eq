@@ -265,8 +265,8 @@ void BandEditStrip::resized()
     auto r = getLocalBounds().reduced (8, 6);
 
     // top row: power · < index > · type-icon · solo · ST · [M][S].  The < index > nav is ALWAYS present; the
-    // M/S lane tabs (when split) sit to the RIGHT of ST — they no longer hijack the nav slot (the strip widens
-    // a touch for M/S bands to make room, see EqCurveDisplay::toolbarW).
+    // M/S lane tabs (when split) sit to the RIGHT of ST — they no longer hijack the nav slot. The strip has a
+    // fixed width (EqCurveDisplay::kToolbarW) that always reserves the [M][S] slot, so ST never resizes it.
     auto top = r.removeFromTop (22);
     r.removeFromTop (8);
     onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
