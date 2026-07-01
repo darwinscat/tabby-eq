@@ -742,11 +742,23 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.drawHorizontalLine (plotBottomY(), 0.0f, w);
     }
 
+    // Shared curve sample grid: a uniform log-x grid PLUS an exact sample at every active band's centre freq,
+    // so a notch's -inf null (and bell peaks) are hit dead-on — the drawn tip no longer jitters between grid
+    // points as you drag. cy() clamps dB to the plot floor so nulls bottom out cleanly and consistently.
+    float curveXs[400]; int nCurveX = 0;
+    for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
+    {
+        curveXs[nCurveX++] = freqToX (paramCache[b].freq);
+        if (paramCache[b].ms) curveXs[nCurveX++] = freqToX (paramCache[b].sFreq);
+    }
+    std::sort (curveXs, curveXs + nCurveX);
+    auto cy = [&] (double db) { return dbToY (juce::jmax (-gainRange, db)); };
+
     // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the
     //     selected band's own curve is lifted ------------------------------------------------------
     if (perBandCurves || solo >= 0)
     {
-        constexpr int pts = 240;
         const float y0 = dbToY (0.0);
         auto drawLane = [&] (int b, bool side)
         {
@@ -754,10 +766,10 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             if (laneByp) return;
             juce::Path bc, bf;
             bf.startNewSubPath (0.0f, y0);
-            for (int i = 0; i <= pts; ++i)
+            for (int i = 0; i < nCurveX; ++i)
             {
-                const float x = (float) i / (float) pts * w;
-                const float y = dbToY (bandDb (b, xToFreq (x), side));
+                const float x = curveXs[i];
+                const float y = cy (bandDb (b, xToFreq (x), side));
                 if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
                 bf.lineTo (x, y);
             }
@@ -778,14 +790,13 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
-        constexpr int pts = 240;
         const float y0 = dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
-        for (int i = 0; i <= pts; ++i)
+        for (int i = 0; i < nCurveX; ++i)
         {
-            const float x = (float) i / (float) pts * w;
-            const float y = dbToY (compositeDb (xToFreq (x)));
+            const float x = curveXs[i];
+            const float y = cy (compositeDb (xToFreq (x)));
             if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
             fill.lineTo (x, y);
         }
@@ -829,10 +840,10 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (anyMs)
         {
             juce::Path sline; bool st = false;
-            for (int i = 0; i <= pts; ++i)
+            for (int i = 0; i < nCurveX; ++i)
             {
-                const float x = (float) i / (float) pts * w;
-                const float y = dbToY (compositeDb (xToFreq (x), true));
+                const float x = curveXs[i];
+                const float y = cy (compositeDb (xToFreq (x), true));
                 if (! st) { sline.startNewSubPath (x, y); st = true; } else sline.lineTo (x, y);
             }
             g.setColour (tabby::palette::violetLo().withAlpha (dim ? 0.40f : 0.95f));
