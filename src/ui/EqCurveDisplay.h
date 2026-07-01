@@ -86,6 +86,12 @@ private:
     struct Hit { int band = -1; bool side = false; };   // a node hit: which band + which lane (M/S)
 
     void   refreshDesigns();                       // pull the bands into the cache + design both lanes
+    // The curve is DESIGNED + evaluated at an oversampled "display" rate (>= 96k), not the real fs. A matched
+    // biquad's magnitude is even about fs/2, so at low real rates (44.1/48k) an LP/BP would visibly FLATTEN
+    // as it nears Nyquist (slope -> 0) and then kink; oversampling pushes that flattening far past the 28k
+    // axis so the curve shows the smooth analog INTENT (FabFilter-style) and looks identical at every rate.
+    // (The spectrum analyzer still uses the real fsCache — that's true measured content, not a design.)
+    double designFs() const noexcept { return juce::jmax (fsCache, 96000.0); }
     teq::BandParams sideView (int b) const noexcept;        // the band's Side lane as a BandParams (main fields)
     double compositeDb (double f, bool side = false) const noexcept;   // Mid (side=false) or Side composite
     juce::Point<float> nodePos (int band, bool side = false) const noexcept;
