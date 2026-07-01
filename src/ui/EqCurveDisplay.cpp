@@ -939,7 +939,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const auto addBtn = addButtonAt();
         if (addBtn.x >= 0.0f)
         {
-            drawAddPreview (g, predictAdd (addBtn), addBtn, false);   // ghost of what a click adds (default gain)
+            drawAddPreview (g, predictAdd (addBtn), addBtn, true);    // ghost passes THROUGH the cursor (gain from its Y)
             const float r = kNodeR + 2.0f;
             g.setColour (tabby::palette::panel().withAlpha (0.92f));    g.fillEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2);
             g.setColour (tabby::palette::violetLo().withAlpha (0.95f)); g.drawEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2, 1.5f);
@@ -963,7 +963,8 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
-                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
+                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707
+                                                      : (ft == teq::FilterType::Notch) ? 4.0 : 1.0);   // notch = narrow band-reject
             if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);
             setParamGestured (tabby::bandId (b, "on"), 1.0);
@@ -980,7 +981,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     bp.on     = true;
     bp.type   = ft;
     bp.freq   = juce::jlimit (kFreqMin, kFreqMax, xToFreq (at.x));
-    bp.Q      = isCut (ft) ? 0.707 : 1.0;
+    bp.Q      = (ft == teq::FilterType::Notch) ? 4.0 : isCut (ft) ? 0.707 : 1.0;   // notch reads narrow
     const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
     bp.gainDb = gain;
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
@@ -1039,7 +1040,12 @@ EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const
 
     // The bottom quarter of the display (a deep cut) is entirely filters, split at 4 kHz: left → HPF, right → LPF
     // (24 dB/oct, no gain). Drag a node low = "I want a filter", regardless of the finer freq bands.
-    if (db < -gainRange * 0.5)
+    if (db < -gainRange * 0.75)  // the very bottom 1/8 → a surgical Notch (narrow band-reject), any frequency
+    {
+        s.typeIndex = 6; s.gainDb = 0.0; s.hasGainCtrl = false;
+        return s;
+    }
+    if (db < -gainRange * 0.5)    // the rest of the bottom quarter → a filter split at 4 kHz (left → HPF, right → LPF)
     {
         s.typeIndex = (f < 4000.0) ? 3 : 4;   // HPF : LPF
         s.slopeIndex = 2;                     // 24 dB/oct
@@ -1066,8 +1072,7 @@ void EqCurveDisplay::smartAdd (juce::Point<float> at)
 {
     refreshDesigns();
     const AddSpec s = predictAdd (at);
-    if (s.hasGainCtrl) addBandOfType (s.typeIndex, { at.x, dbToY (s.gainDb) }, s.slopeIndex);   // default +-2 by side
-    else               addBandOfType (s.typeIndex, at, s.slopeIndex);                            // cut: gain ignored
+    addBandOfType (s.typeIndex, at, s.slopeIndex);   // freq + gain both come from the cursor (filters ignore gain)
 }
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
@@ -1347,7 +1352,14 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
     if (addLine == AddLine::Off)                          return { -1.0f, -1.0f };
     if (hoverPos.x < 0.0f || draggingBand >= 0 || placing) return { -1.0f, -1.0f };
-    if (nodeAt (hoverPos).band >= 0)                     return { -1.0f, -1.0f };   // on a node -> no "+"
+
+    // keep the "+" clear of anything grabbable: a margin around every node (both lanes) so reaching for a node
+    // never pops the add-affordance under the cursor.
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[(size_t) b].on)
+    {
+        if (hoverPos.getDistanceFrom (nodePos (b, false)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+        if (paramCache[(size_t) b].ms && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+    }
 
     // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)
     const auto selType = (selBand >= 0 && paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
@@ -1364,15 +1376,7 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
     for (int i = 0; i < tabby::kNumBands; ++i) if (! paramCache[(size_t) i].on) { anyFree = true; break; }
     if (! anyFree)                                        return { -1.0f, -1.0f };   // all bands used
 
-    // surface "+" when the cursor is within reach of an enabled trigger line (0 dB and/or the curve)
-    const float yZero  = dbToY (0.0);
-    const float yCurve = dbToY (compositeDb (xToFreq (hoverPos.x)));
-    float best = kAddThreshold;
-    bool  hit  = false;
-    if (addLine == AddLine::ZeroLine || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yZero);  if (d < best) { best = d; hit = true; } }
-    if (addLine == AddLine::Curve    || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yCurve); if (d < best) { best = d; hit = true; } }
-    if (! hit)                                            return { -1.0f, -1.0f };
-    return hoverPos;   // "+" sits at the cursor; predictAdd reads its Y for above/below 0
+    return hoverPos;   // "+" follows the cursor across the WHOLE graph (min→max); predictAdd + the preview read its X/Y
 }
 
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
