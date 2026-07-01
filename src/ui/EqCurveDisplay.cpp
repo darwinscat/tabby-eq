@@ -753,12 +753,17 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (paramCache[b].ms) curveXs[nCurveX++] = freqToX (paramCache[b].sFreq);
     }
     std::sort (curveXs, curveXs + nCurveX);
-    auto cy = [&] (double db) { return dbToY (juce::jmax (-gainRange, db)); };
+    // Below the graph floor, let the curve DIVE off the bottom axis (it's clipped to the plot area, below)
+    // instead of clamping it flat ONTO the bottom line — a deep cut / notch / LP slope should read as a
+    // dive off the bottom, not a smear of every curve along the bottom edge.
+    auto cy = [&] (double db) { return dbToY (juce::jmax (-2.5 * gainRange, db)); };
 
     // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the
     //     selected band's own curve is lifted ------------------------------------------------------
     if (perBandCurves || solo >= 0)
     {
+        juce::Graphics::ScopedSaveState bandClip (g);
+        g.reduceClipRegion (0, 0, (int) w, plotBottomY());   // curves dive off the bottom axis, not along it
         const float y0 = dbToY (0.0);
         auto drawLane = [&] (int b, bool side)
         {
@@ -790,6 +795,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
+        juce::Graphics::ScopedSaveState compositeClip (g);
+        g.reduceClipRegion (0, 0, (int) w, plotBottomY());   // composite dives off the bottom axis, not along it
         const float y0 = dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
@@ -1009,7 +1016,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     {
         const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * fsCache) / fsCache;
         const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
-        const float  y  = dbToY (juce::jmax (-gainRange, db));
+        const float  y  = dbToY (juce::jmax (-2.5 * gainRange, db));   // dive off the bottom (match the composite/per-band cy)
         if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
     };
     for (float x = 0.0f; x <= wpx; x += 3.0f)
