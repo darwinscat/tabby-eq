@@ -55,10 +55,14 @@ jobs:
             libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
             libxrender-dev libxcomposite-dev libxcursor-dev
 
+      # Set BOTH C and C++ to clang: JUCE has C sources (juce_graphics_Sheenbidi.c) and injects Clang-only
+      # warning flags (-Wshadow-all, -Wshorten-64-to-32…) when the C++ compiler is Clang; if `cc` stays GCC
+      # (the Linux default) those flags reach the C compiler and it hard-errors on the unknown options.
       - name: Configure (adapter test under ASan+UBSan; JUCE fetched; core suites OFF)
         run: >
           cmake -B build-san
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=clang
           -DCMAKE_CXX_COMPILER=clang++
           -DTABBYEQ_BUILD_PLUGIN=OFF
           -DTABBYEQ_BUILD_TESTS=ON
