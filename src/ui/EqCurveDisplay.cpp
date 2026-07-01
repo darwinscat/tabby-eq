@@ -999,16 +999,23 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
 
     const auto col = tabby::palette::violetLo();
 
-    // ghost response curve
+    // ghost response curve — floor-clamped + sampled dead-on at f0 (so a preview notch bottoms out cleanly
+    // at the plot floor exactly like the committed curves, not diving past it or jittering).
     juce::Path path;
     const float wpx = (float) getWidth();
-    bool started = false;
-    for (float x = 0.0f; x <= wpx; x += 3.0f)
+    const float xf0 = freqToX (bp.freq);
+    bool started = false, placedF0 = false;
+    auto emit = [&] (float x)
     {
         const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * fsCache) / fsCache;
         const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
-        const float  y  = dbToY (db);
+        const float  y  = dbToY (juce::jmax (-gainRange, db));
         if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
+    };
+    for (float x = 0.0f; x <= wpx; x += 3.0f)
+    {
+        if (! placedF0 && x > xf0) { emit (xf0); placedF0 = true; }
+        emit (x);
     }
     g.setColour (col.withAlpha (0.5f));
     g.strokePath (path, juce::PathStrokeType (1.4f));
