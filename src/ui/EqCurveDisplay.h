@@ -114,6 +114,10 @@ private:
     juce::Rectangle<int> placeClassic    (juce::Point<float> node) const noexcept;   // 0: centered above/below + clamp
     juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
     juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
+    int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
+    void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
+    static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
+    int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
@@ -169,8 +173,9 @@ private:
     enum class AudVisual { Spotlight, Bell };
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
-    static constexpr int kToolbarW = 220, kToolbarH = 64;
-    static constexpr int kLaneH    = 74;              // reserved bottom-lane height for Fixed-lane mode (>= kToolbarH)
+    static constexpr int kToolbarW    = 220, kToolbarH = 64;
+    static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
+    static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
 
     // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.
     enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid, FixedLane };
@@ -179,12 +184,19 @@ private:
     bool showLeader = false;                          // draw the node<->toolbar connector (collision/hybrid)
     juce::Point<float> leaderNode, leaderBar;         // connector endpoints (canvas coords)
 
+    // Vertical dB scale (top-right combo, persisted). gainRange is the VISIBLE ± dB window; it auto-zooms out
+    // while dragging a node past the edge (kGainSteps), so a node never gets stranded under the floating strip.
+    double gainRange = 12.0;                          // visible ± dB (curve y-axis); NOT the gain clamp (that's kGainMax)
+    juce::uint32 lastZoomMs = 0;                      // rate-limit for drag auto-zoom (one step per interval)
+    juce::ComboBox gainScaleCombo;                    // vertical-scale picker (±3/6/12/30 dB) — top-right overlay
+
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
     bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)
 
-    static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
-    static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)
+    static constexpr double kFreqMin   = 20.0, kFreqMax = 28000.0;   // top runs ~½-oct past 20k so the >20k rolloff (~22k) is visible
+    static constexpr double kGainMax   = 24.0;          // ± dB — the real gain-param clamp (drag / keyboard)
+    static constexpr double kGainSteps[4] = { 3.0, 6.0, 12.0, 30.0 };   // selectable vertical-scale steps (visible ± dB)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = 6.0f;
     static constexpr float  kAddThreshold = 36.0f;       // px from the curve to surface the "+" add button

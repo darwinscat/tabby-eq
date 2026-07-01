@@ -94,6 +94,21 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     specPeak.fill (-120.0f);
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
+
+    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB.
+    for (int i = 0; i < 4; ++i) gainScaleCombo.addItem (juce::String ((int) kGainSteps[i]) + " dB", i + 1);
+    gainScaleCombo.setColour (juce::ComboBox::textColourId,       tabby::palette::text());
+    gainScaleCombo.setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel().withAlpha (0.85f));
+    gainScaleCombo.setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
+    gainScaleCombo.setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
+    gainScaleCombo.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (gainScaleCombo);
+    gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
+    setGainRange ((double) proc.apvts.state.getProperty ("gainRange", 12.0), false);   // restore saved scale (no re-persist)
+    { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
+      for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) mx = juce::jmax (mx, std::abs (paramCache[b].gainDb));
+      while (gainRange < kGainSteps[3] && mx > gainRange) setGainRange (nextGainStep (gainRange), false); }
+
     startTimerHz (30);
 }
 
@@ -126,12 +141,12 @@ int    EqCurveDisplay::plotBottomY() const noexcept
 }
 float  EqCurveDisplay::dbToY (double db) const noexcept
 {
-    return (float) ((0.5 - db / (2.0 * kGainRange)) * (double) plotBottomY());
+    return (float) ((0.5 - db / (2.0 * gainRange)) * (double) plotBottomY());
 }
 
 double EqCurveDisplay::yToDb (float y) const noexcept
 {
-    return (0.5 - (double) y / (double) juce::jmax (1, plotBottomY())) * (2.0 * kGainRange);
+    return (0.5 - (double) y / (double) juce::jmax (1, plotBottomY())) * (2.0 * gainRange);
 }
 
 float  EqCurveDisplay::specDbToY (double db) const noexcept
@@ -326,7 +341,7 @@ juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) cons
     int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);            // above the node...
     if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);               // ...or below if no room
     tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
-    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    ty = juce::jlimit (2, stripMaxY(), ty);
     return { tx, ty, kToolbarW, kToolbarH };
 }
 
@@ -340,7 +355,7 @@ juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) c
     int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);
     if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);
     tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
-    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    ty = juce::jlimit (2, stripMaxY(), ty);
     return { tx, ty, kToolbarW, kToolbarH };
 }
 
@@ -384,7 +399,7 @@ juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node
     }
     slotOut = best;
     const int tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), (int) cand[best].x);
-    const int ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), (int) cand[best].y);
+    const int ty = juce::jlimit (2, stripMaxY(), (int) cand[best].y);
     const juce::Rectangle<float> rc ((float) tx, (float) ty, W, H);
     occlOut = 0; for (int i = 0; i < no; ++i) if (rc.contains (others[i])) ++occlOut;
     return { tx, ty, kToolbarW, kToolbarH };
@@ -424,7 +439,7 @@ void EqCurveDisplay::positionToolbar()
             {
                 const bool dockTop = node.y > (float) getHeight() * 0.5f;
                 const int tx = juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - kToolbarW * 0.5f));
-                const int ty = dockTop ? 2 : juce::jmax (2, getHeight() - kToolbarH - 2);
+                const int ty = dockTop ? 2 : stripMaxY();
                 b = { tx, ty, kToolbarW, kToolbarH };
                 lastPlaceSlot = -2;   // docked
                 showLeader = true;
@@ -436,9 +451,9 @@ void EqCurveDisplay::positionToolbar()
         case ToolbarPlace::FixedLane:
             // FabFilter-style: the strip lives in the reserved bottom lane and only slides horizontally to
             // track the selected band's frequency. Nodes can't enter the lane (dbToY squeezes them above it),
-            // so the strip can never occlude a node. No leader — it's always in the same lane.
+            // so the strip can never occlude a node; it sits at the lane top, clear of the freq axis below it.
             b = { juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - kToolbarW * 0.5f)),
-                  juce::jmax (2, getHeight() - kLaneH + (kLaneH - kToolbarH) / 2), kToolbarW, kToolbarH };
+                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), kToolbarW, kToolbarH };
             break;
 
         case ToolbarPlace::Classic:
@@ -454,7 +469,36 @@ void EqCurveDisplay::positionToolbar()
     toolbar->toFront (false);
 }
 
-void EqCurveDisplay::resized() { positionToolbar(); }
+void EqCurveDisplay::resized()
+{
+    gainScaleCombo.setBounds (getWidth() - 82, 6, 74, 22);   // top-right overlay, above the dB scale
+    positionToolbar();
+}
+
+// Lowest allowed toolbar TOP: keeps the strip's bottom above the freq-axis label strip at the very bottom.
+int EqCurveDisplay::stripMaxY() const noexcept { return juce::jmax (2, getHeight() - kToolbarH - kBottomAxisH); }
+
+double EqCurveDisplay::nextGainStep (double r) noexcept   // smallest step strictly greater than r (clamps at the max)
+{
+    for (double s : kGainSteps) if (s > r + 0.01) return s;
+    return kGainSteps[3];
+}
+int EqCurveDisplay::gainStepIndex() const noexcept
+{
+    int best = 0; double bd = 1.0e9;
+    for (int i = 0; i < 4; ++i) { const double d = std::abs (kGainSteps[i] - gainRange); if (d < bd) { bd = d; best = i; } }
+    return best;
+}
+void EqCurveDisplay::setGainRange (double r, bool persist)
+{
+    double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
+    for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
+    gainRange = snapped;
+    gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
+    if (persist) proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    positionToolbar();   // dbToY changed → node/strip positions moved
+    repaint();
+}
 
 void EqCurveDisplay::clearSelection() { selectBand (-1); }
 
@@ -657,10 +701,13 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.drawText (f >= 1000.0 ? juce::String (f / 1000.0, (f == 1000.0 ? 0 : 0)) + "k" : juce::String ((int) f),
                     (int) x + 2, (int) h - 14, 34, 12, juce::Justification::left);
     }
-    for (double db : { -18.0, -12.0, -6.0, 0.0, 6.0, 12.0, 18.0 })
+    // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
+    const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
+    for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
     {
         const float y = dbToY (db);
-        if (db == 0.0)
+        const bool zero = std::abs (db) < 0.01;
+        if (zero)
         {
             g.setColour (tabby::palette::violetLo().withAlpha (0.05f));   // soft glow on the 0 dB line
             g.fillRect (0.0f, y - 2.5f, w, 5.0f);
@@ -669,6 +716,11 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         else
             g.setColour (tabby::palette::grid());
         g.drawHorizontalLine ((int) y, 0.0f, w);
+        if (! zero && y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // dB value on the right (below the scale combo)
+        {
+            g.setColour (tabby::palette::axisText());
+            g.drawText ((db > 0.0 ? "+" : "") + juce::String ((int) db), (int) w - 32, (int) y - 6, 28, 12, juce::Justification::right);
+        }
     }
 
     // --- spectrum (filled) ------------------------------------------------
@@ -909,7 +961,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             setParamGestured (tabby::bandId (b, "type"), typeIndex);
             setParamGestured (tabby::bandId (b, "freq"), xToFreq (at.x));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
-                setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
+                setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
                                                        || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
             if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
@@ -929,7 +981,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     bp.type   = ft;
     bp.freq   = juce::jlimit (kFreqMin, kFreqMax, xToFreq (at.x));
     bp.Q      = isCut (ft) ? 0.707 : 1.0;
-    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)) : s.gainDb) : 0.0;
+    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
     bp.gainDb = gain;
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
 
@@ -1177,7 +1229,21 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     }
     setParam (laneParamId (draggingBand, draggingSide, "freq"), xToFreq (e.position.x));
     if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
-        setParam (laneParamId (draggingBand, draggingSide, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
+    {
+        auto applyGain = [&] { setParam (laneParamId (draggingBand, draggingSide, "gain"),
+                                         juce::jlimit (-kGainMax, kGainMax, yToDb (e.position.y))); };
+        applyGain();
+        // Auto-zoom-out: while the node is pushed to the visible edge, widen the dB scale one step (rate-limited,
+        // so it escalates ±3→6→12→30 gradually as you hold). At ±30 the ±24 gain always fits — the node can't
+        // be dragged under the floating strip. Re-map the gain to the cursor at the new scale (no 1-frame jump).
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (std::abs (yToDb (e.position.y)) >= gainRange - 0.05 && gainRange < kGainSteps[3] && now - lastZoomMs > 140)
+        {
+            lastZoomMs = now;
+            setGainRange (nextGainStep (gainRange));
+            applyGain();
+        }
+    }
     positionToolbar();   // follow the node while dragging it by mouse (cursor is on the node, not the bar)
 }
 
@@ -1244,7 +1310,7 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (lt))
             {
                 setParamGestured (laneParamId (selBand, selSide, "gain"),
-                                  juce::jlimit (-kGainRange, kGainRange, lg + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                                  juce::jlimit (-kGainMax, kGainMax, lg + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
                 positionToolbar();
                 return true;                                                            // gain +/- 0.5 dB
             }
