@@ -118,14 +118,20 @@ double EqCurveDisplay::xToFreq (float x) const noexcept
     return std::pow (10.0, lo + t * (hi - lo));
 }
 
+// Bottom of the curve/node plotting area. In Fixed-lane mode it stops above the reserved bottom strip, so
+// nodes (whose Y comes from dbToY) can never fall into the lane; every other mode uses the full height.
+int    EqCurveDisplay::plotBottomY() const noexcept
+{
+    return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH) : getHeight();
+}
 float  EqCurveDisplay::dbToY (double db) const noexcept
 {
-    return (float) ((0.5 - db / (2.0 * kGainRange)) * (double) getHeight());
+    return (float) ((0.5 - db / (2.0 * kGainRange)) * (double) plotBottomY());
 }
 
 double EqCurveDisplay::yToDb (float y) const noexcept
 {
-    return (0.5 - (double) y / (double) juce::jmax (1, getHeight())) * (2.0 * kGainRange);
+    return (0.5 - (double) y / (double) juce::jmax (1, plotBottomY())) * (2.0 * kGainRange);
 }
 
 float  EqCurveDisplay::specDbToY (double db) const noexcept
@@ -427,6 +433,14 @@ void EqCurveDisplay::positionToolbar()
             break;
         }
 
+        case ToolbarPlace::FixedLane:
+            // FabFilter-style: the strip lives in the reserved bottom lane and only slides horizontally to
+            // track the selected band's frequency. Nodes can't enter the lane (dbToY squeezes them above it),
+            // so the strip can never occlude a node. No leader — it's always in the same lane.
+            b = { juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - kToolbarW * 0.5f)),
+                  juce::jmax (2, getHeight() - kLaneH + (kLaneH - kToolbarH) / 2), kToolbarW, kToolbarH };
+            break;
+
         case ToolbarPlace::Classic:
         default:
             b = placeClassic (node);
@@ -666,6 +680,13 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.fillPath (specFill);
         g.setColour (tabby::palette::spectrum().withAlpha (0.55f));
         g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
+    }
+
+    // Fixed-lane placement: mark the reserved bottom lane — nodes stay above this line, spectrum still shows below.
+    if (toolbarPlace == ToolbarPlace::FixedLane)
+    {
+        g.setColour (tabby::palette::gridZero());
+        g.drawHorizontalLine (plotBottomY(), 0.0f, w);
     }
 
     // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the

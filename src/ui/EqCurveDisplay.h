@@ -69,7 +69,7 @@ public:
     // Floating-toolbar placement strategy (View menu; persisted). 0 Classic (centered above/below — the
     // original) · 1 Anchor-to-open-side · 2 Collision-aware (+leader line) · 3 Hybrid (float, else dock to an
     // edge when the graph is crowded). (In the design discussion these were labelled 0 / 1 / 2 / 7.)
-    void setToolbarPlacement (int m) noexcept { toolbarPlace = (ToolbarPlace) juce::jlimit (0, 3, m); lastPlaceSlot = -1; positionToolbar(); repaint(); }
+    void setToolbarPlacement (int m) noexcept { toolbarPlace = (ToolbarPlace) juce::jlimit (0, 4, m); lastPlaceSlot = -1; positionToolbar(); repaint(); }
     int  toolbarPlacement() const noexcept { return (int) toolbarPlace; }
 
 private:
@@ -80,7 +80,8 @@ private:
     double xToFreq (float x)  const noexcept;
     float  dbToY   (double db) const noexcept;     // curve gain scale (± kGainRange around centre)
     double yToDb   (float y)   const noexcept;
-    float  specDbToY (double db) const noexcept;   // spectrum dBFS scale
+    float  specDbToY (double db) const noexcept;   // spectrum dBFS scale (always full height)
+    int    plotBottomY() const noexcept;           // bottom of the curve/node area — above the Fixed-lane strip
 
     struct Hit { int band = -1; bool side = false; };   // a node hit: which band + which lane (M/S)
 
@@ -169,9 +170,10 @@ private:
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
     static constexpr int kToolbarW = 220, kToolbarH = 64;
+    static constexpr int kLaneH    = 74;              // reserved bottom-lane height for Fixed-lane mode (>= kToolbarH)
 
     // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.
-    enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid };
+    enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid, FixedLane };
     ToolbarPlace toolbarPlace = ToolbarPlace::Classic;
     int  lastPlaceSlot = -1;                          // hysteresis: last chosen candidate slot (collision/hybrid)
     bool showLeader = false;                          // draw the node<->toolbar connector (collision/hybrid)

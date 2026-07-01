@@ -245,8 +245,9 @@ void TabbyEqEditor::showViewMenu()
 
     juce::PopupMenu placeMenu;   // floating edit-strip placement (try each live; persisted)
     const int tp = display.toolbarPlacement();
-    const char* placeNames[] = { "Classic (centered)", "Anchor to open side", "Collision-aware", "Hybrid (dock when crowded)" };
-    for (int i = 0; i < 4; ++i) placeMenu.addItem (70 + i, placeNames[i], true, tp == i);
+    const char* placeNames[] = { "Classic (centered)", "Anchor to open side", "Collision-aware",
+                                 "Hybrid (dock when crowded)", "Fixed lane (FabFilter)" };
+    for (int i = 0; i < 5; ++i) placeMenu.addItem (70 + i, placeNames[i], true, tp == i);
     m.addSubMenu ("Edit-strip placement", placeMenu);
 
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
@@ -266,7 +267,7 @@ void TabbyEqEditor::showViewMenu()
         if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
                        if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
-        if (r >= 70 && r <= 73) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
+        if (r >= 70 && r <= 74) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
     });
 }
 
