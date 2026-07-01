@@ -128,6 +128,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionVisual ((int)  proc.apvts.state.getProperty ("auditionVisual", 1));   // default: bell
     display.setAuditionQ      ((float) (double) proc.apvts.state.getProperty ("auditionQ", 6.0));
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
+    display.setToolbarPlacement ((int)  proc.apvts.state.getProperty ("toolbarPlace", 0));   // floating edit-strip behaviour
 
     msFreqLink = (bool) proc.apvts.state.getProperty ("msFreqLink", false);   // M/S Mid<->Side freq lock
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
@@ -242,6 +243,12 @@ void TabbyEqEditor::showViewMenu()
     for (int i = 0; i < 3; ++i) domMenu.addItem (60 + i, domNames[i], true, dom == i);
     m.addSubMenu ("Analyzer domain", domMenu);
 
+    juce::PopupMenu placeMenu;   // floating edit-strip placement (try each live; persisted)
+    const int tp = display.toolbarPlacement();
+    const char* placeNames[] = { "Classic (centered)", "Anchor to open side", "Collision-aware", "Hybrid (dock when crowded)" };
+    for (int i = 0; i < 4; ++i) placeMenu.addItem (70 + i, placeNames[i], true, tp == i);
+    m.addSubMenu ("Edit-strip placement", placeMenu);
+
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
     {
@@ -259,6 +266,7 @@ void TabbyEqEditor::showViewMenu()
         if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
                        if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
+        if (r >= 70 && r <= 73) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
     });
 }
 

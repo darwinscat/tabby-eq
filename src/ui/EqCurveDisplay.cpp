@@ -313,21 +313,128 @@ void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
     if (t != nullptr) addChildComponent (t);         // hidden until a band is selected
 }
 
+// 0 — Classic: the original. Centre the strip on the node, above it (below if it'd clip the top), clamp.
+juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) const noexcept
+{
+    int tx = (int) (node.x - kToolbarW * 0.5f);
+    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);            // above the node...
+    if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);               // ...or below if no room
+    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
+    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    return { tx, ty, kToolbarW, kToolbarH };
+}
+
+// 1 — Anchor-to-open-side: don't straddle the node. Sit it just inside one horizontal end and extend into the
+// larger canvas gap, so it covers (at most) the neighbours on the emptier side instead of both sides at once.
+juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) const noexcept
+{
+    const bool right = node.x < (float) getWidth() * 0.5f;           // more room to the right → extend right
+    int tx = right ? (int) (node.x - kToolbarW * 0.12f)
+                   : (int) (node.x - kToolbarW * 0.88f);
+    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);
+    if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);
+    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
+    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    return { tx, ty, kToolbarW, kToolbarH };
+}
+
+// 2/3 core — score 8 candidate slots around the node (above/below/left/right + diagonals) by how many OTHER
+// band nodes they'd cover, then off-canvas overhang, then closeness; a light bonus keeps the last slot (no
+// flicker while dragging). Returns the clamped winner + its post-clamp occlusion + slot index.
+juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept
+{
+    const float gap = kNodeR + 12.0f, W = (float) kToolbarW, H = (float) kToolbarH;
+    const juce::Point<float> cand[8] = {
+        { node.x - W * 0.5f,  node.y - gap - H },   // 0 above-center
+        { node.x - W * 0.5f,  node.y + gap     },   // 1 below-center
+        { node.x + gap,       node.y - H * 0.5f },  // 2 right
+        { node.x - gap - W,   node.y - H * 0.5f },  // 3 left
+        { node.x + gap,       node.y - gap - H },   // 4 above-right
+        { node.x - gap - W,   node.y - gap - H },   // 5 above-left
+        { node.x + gap,       node.y + gap     },   // 6 below-right
+        { node.x - gap - W,   node.y + gap     },   // 7 below-left
+    };
+
+    juce::Point<float> others[tabby::kNumBands * 2]; int no = 0;     // every OTHER visible node centre
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
+    {
+        if (! (b == selBand && ! selSide))              others[no++] = nodePos (b, false);
+        if (paramCache[b].ms && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
+    }
+
+    const juce::Rectangle<float> canvas (0.0f, 0.0f, (float) getWidth(), (float) getHeight());
+    int best = 0; float bestScore = 1.0e30f;
+    for (int s = 0; s < 8; ++s)
+    {
+        const juce::Rectangle<float> r (cand[s].x, cand[s].y, W, H);
+        int occl = 0; for (int i = 0; i < no; ++i) if (r.contains (others[i])) ++occl;
+        const float over = juce::jmax (0.0f, canvas.getX() - r.getX())
+                         + juce::jmax (0.0f, r.getRight()  - canvas.getRight())
+                         + juce::jmax (0.0f, canvas.getY() - r.getY())
+                         + juce::jmax (0.0f, r.getBottom() - canvas.getBottom());
+        float score = (float) occl * 1000.0f + over * 20.0f + r.getCentre().getDistanceFrom (node) * 0.05f;
+        if (s == lastPlaceSlot) score -= 40.0f;                     // hysteresis: prefer the last slot
+        if (score < bestScore) { bestScore = score; best = s; }
+    }
+    slotOut = best;
+    const int tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), (int) cand[best].x);
+    const int ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), (int) cand[best].y);
+    const juce::Rectangle<float> rc ((float) tx, (float) ty, W, H);
+    occlOut = 0; for (int i = 0; i < no; ++i) if (rc.contains (others[i])) ++occlOut;
+    return { tx, ty, kToolbarW, kToolbarH };
+}
+
 void EqCurveDisplay::positionToolbar()
 {
     if (toolbar == nullptr) return;
     refreshDesigns();   // ensure the cache reflects a just-added/just-toggled band before we test it
     const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
-    if (! show) { toolbar->setVisible (false); return; }
+    if (! show) { toolbar->setVisible (false); showLeader = false; return; }
 
-    const auto pos = nodePos (selBand);
-    int tx = (int) (pos.x - kToolbarW * 0.5f);
-    int ty = (int) (pos.y - kNodeR - 12.0f - kToolbarH);              // above the node...
-    if (ty < 2) ty = (int) (pos.y + kNodeR + 12.0f);                  // ...or below if no room
-    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
-    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    const auto node = nodePos (selBand, selSide);   // lane-aware (M/S: place at the actual selected node)
+    juce::Rectangle<int> b;
+    showLeader = false;
 
-    const juce::Rectangle<int> b (tx, ty, kToolbarW, kToolbarH);
+    switch (toolbarPlace)
+    {
+        case ToolbarPlace::AnchorSide:
+            b = placeAnchorSide (node);
+            break;
+
+        case ToolbarPlace::Collision:
+        {
+            int occl = 0, slot = 0;
+            b = bestFloatCandidate (node, occl, slot);
+            lastPlaceSlot = slot;
+            showLeader = (slot >= 2);   // 0/1 hug the node (above/below); 2-7 are offset → draw a connector
+            break;
+        }
+
+        case ToolbarPlace::Hybrid:
+        {
+            int occl = 0, slot = 0;
+            b = bestFloatCandidate (node, occl, slot);
+            if (occl > 0)   // no clean local slot → dock to the far horizontal edge, leader across
+            {
+                const bool dockTop = node.y > (float) getHeight() * 0.5f;
+                const int tx = juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - kToolbarW * 0.5f));
+                const int ty = dockTop ? 2 : juce::jmax (2, getHeight() - kToolbarH - 2);
+                b = { tx, ty, kToolbarW, kToolbarH };
+                lastPlaceSlot = -2;   // docked
+                showLeader = true;
+            }
+            else { lastPlaceSlot = slot; showLeader = (slot >= 2); }
+            break;
+        }
+
+        case ToolbarPlace::Classic:
+        default:
+            b = placeClassic (node);
+            break;
+    }
+
+    if (showLeader) { leaderNode = node; leaderBar = b.toFloat().getCentre(); }
+
     if (toolbar->getBounds() != b) toolbar->setBounds (b);
     if (! toolbar->isVisible()) toolbar->setVisible (true);
     toolbar->toFront (false);
@@ -669,6 +776,15 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             g.setColour (bandColour (hb.band).withAlpha (0.22f));
             g.fillEllipse (hp.x - kNodeR - 7, hp.y - kNodeR - 7, (kNodeR + 7) * 2, (kNodeR + 7) * 2);
         }
+    }
+
+    // --- toolbar leader line (Collision / Hybrid placement): a thin connector node -> strip -----------
+    if (showLeader && toolbar != nullptr && toolbar->isVisible())
+    {
+        g.setColour (tabby::palette::violetLo().withAlpha (0.50f));
+        g.drawLine (leaderNode.x, leaderNode.y, leaderBar.x, leaderBar.y, 1.4f);
+        g.setColour (tabby::palette::violetLo().withAlpha (0.90f));
+        g.fillEllipse (leaderNode.x - 2.5f, leaderNode.y - 2.5f, 5.0f, 5.0f);
     }
 
     // --- nodes (Mid/main always; Side too for M/S bands) ------------------

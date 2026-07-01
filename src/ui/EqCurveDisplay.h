@@ -66,6 +66,12 @@ public:
     void  setAuditionLockGain (bool v) noexcept { audLockGain = v; }   // Alt-drag changes only freq (sweep)
     bool  auditionLockGain() const noexcept { return audLockGain; }
 
+    // Floating-toolbar placement strategy (View menu; persisted). 0 Classic (centered above/below — the
+    // original) · 1 Anchor-to-open-side · 2 Collision-aware (+leader line) · 3 Hybrid (float, else dock to an
+    // edge when the graph is crowded). (In the design discussion these were labelled 0 / 1 / 2 / 7.)
+    void setToolbarPlacement (int m) noexcept { toolbarPlace = (ToolbarPlace) juce::jlimit (0, 3, m); lastPlaceSlot = -1; positionToolbar(); repaint(); }
+    int  toolbarPlacement() const noexcept { return (int) toolbarPlace; }
+
 private:
     void timerCallback() override;
 
@@ -103,7 +109,10 @@ private:
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
     void   selectBand (int newSel, bool side = false);   // update selection + fire onBandSelected
-    void   positionToolbar();                        // float the toolbar near the selected node
+    void   positionToolbar();                        // float the toolbar near the selected node (per toolbarPlace)
+    juce::Rectangle<int> placeClassic    (juce::Point<float> node) const noexcept;   // 0: centered above/below + clamp
+    juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
+    juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
@@ -160,6 +169,13 @@ private:
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
     static constexpr int kToolbarW = 220, kToolbarH = 64;
+
+    // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.
+    enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid };
+    ToolbarPlace toolbarPlace = ToolbarPlace::Classic;
+    int  lastPlaceSlot = -1;                          // hysteresis: last chosen candidate slot (collision/hybrid)
+    bool showLeader = false;                          // draw the node<->toolbar connector (collision/hybrid)
+    juce::Point<float> leaderNode, leaderBar;         // connector endpoints (canvas coords)
 
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
