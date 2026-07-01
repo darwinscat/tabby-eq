@@ -706,6 +706,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
     for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
     {
+        if (std::abs (std::abs (db) - gainRange) < 0.01) continue;   // skip the outermost ticks — they sit ON the top/bottom
+                                                                     // edge and read as a frame the curves "bump into"
         const float y = dbToY (db);
         const bool zero = std::abs (db) < 0.01;
         if (zero)
