@@ -1,8 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# TabbyEQ CI — the DSP core now lives in felitronics-core, consumed via FetchContent. This job
-# configures with the plugin OFF (so JUCE is NOT fetched), which pulls the pinned core release and
-# builds its JUCE-free self-tests, then runs them through ctest. That gates the whole consumption
-# path (the fetch + the engine-correctness suites) on every push/PR, std C++20, no external deps.
+# TabbyEQ CI — two gates on every push/PR:
+#   • tests       — plugin OFF (so JUCE is NOT fetched): pulls the pinned felitronics-core, builds its
+#                   JUCE-free self-tests and runs them via ctest. Gates the whole consumption path
+#                   (the fetch + the engine-correctness suites), std C++20, no external deps.
+#   • sanitizers  — the tabby-side of felitronics-core's ASan+UBSan barrier: builds TabbyEQ's OWN adapter
+#                   (the real juce::AudioProcessor) under Clang ASan+UBSan and drives it through adversarial
+#                   host lifecycle/misuse orders (tests/lifecycle_misuse.cpp). UBSan makes platform-divergent
+#                   UB LOUD on x86-64 (int /0, signed overflow, OOB shift/store) that is SILENT on the
+#                   Apple-Silicon dev machine — the exact class that once shipped an unprepared-engine
+#                   divide-by-zero and only surfaced as a Windows crash. We do NOT re-test the core here
+#                   (that's felitronics-core's own job) — only tabby's glue.
 name: CI
 
 on:
@@ -24,3 +31,50 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # Dedicated ASan + UBSan job over TabbyEQ's OWN adapter (JUCE is fetched for this one). Sanitizers are
+  # scoped to tabby's sources — ASan still catches heap issues process-wide, while UBSan instruments only
+  # our TUs (so JUCE's own benign UB doesn't red-fail -fno-sanitize-recover). felitronics-core is header-only,
+  # so our USE of it (the integration) is UBSan-checked here without re-running the core's isolated suites.
+  sanitizers:
+    name: ubuntu-clang-asan-ubsan (adapter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # JUCE links juce_gui_basics on Linux even for a headless AudioProcessor test (verified against the
+      # fetched juce-src): X11 core + Xext/Xrandr/Xinerama/Xrender/Xcomposite/Xcursor headers, plus freetype2
+      # / fontconfig (juce_graphics) and alsa (juce_audio_devices). Xvfb is belt-and-suspenders in case the
+      # message-loop pump touches X (the test never opens a window, so it usually wouldn't).
+      - name: Install JUCE Linux deps + Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config xvfb \
+            libasound2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxrender-dev libxcomposite-dev libxcursor-dev
+
+      - name: Configure (adapter test under ASan+UBSan; JUCE fetched; core suites OFF)
+        run: >
+          cmake -B build-san
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_COMPILER=clang++
+          -DTABBYEQ_BUILD_PLUGIN=OFF
+          -DTABBYEQ_BUILD_TESTS=ON
+          -DTABBYEQ_BUILD_CORE_TESTS=OFF
+          -DTABBYEQ_ENABLE_SANITIZERS=ON
+
+      - name: Build the adapter lifecycle/misuse test
+        run: cmake --build build-san --target TabbyEQ_LifecycleTest -j
+
+      - name: Test
+        env:
+          # LSan (Linux-only) OFF: JUCE keeps process-exit global singletons (MessageManager, LookAndFeel…)
+          # by design — that is not a tabby leak. detect_odr_violation / detect_container_overflow OFF: this
+          # build mixes ASan-instrumented tabby sources with UNinstrumented JUCE + libstdc++, the two checks
+          # that false-positive under partial instrumentation. Everything that matters stays on: heap/stack/
+          # global overflow, use-after-free, use-after-return, double-free — plus all of UBSan (our code).
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=0:detect_odr_violation=0:detect_container_overflow=0:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: xvfb-run -a ctest --test-dir build-san --output-on-failure
