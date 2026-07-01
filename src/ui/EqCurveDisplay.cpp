@@ -137,7 +137,10 @@ double EqCurveDisplay::xToFreq (float x) const noexcept
 // nodes (whose Y comes from dbToY) can never fall into the lane; every other mode uses the full height.
 int    EqCurveDisplay::plotBottomY() const noexcept
 {
-    return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH) : getHeight();
+    // Always keep a strip at the very bottom for the frequency axis labels: the curve/node area (and the clip)
+    // stop above it, so a deep cut / notch dives off the plot's bottom edge instead of drawing over "500/1k/…".
+    return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH)
+                                                   : juce::jmax (40, getHeight() - kBottomAxisH);
 }
 float  EqCurveDisplay::dbToY (double db) const noexcept
 {
