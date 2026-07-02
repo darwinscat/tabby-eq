@@ -21,20 +21,27 @@ namespace tabby::shapes
         juce::Path p;
         switch (t)
         {
-            case FT::Bell:      p.startNewSubPath (x0, mid); p.quadraticTo (cx - w * 0.18f, mid, cx, top);
-                                p.quadraticTo (cx + w * 0.18f, mid, x1, mid); break;
+            // Bell: a round DOME (cubic through a flattened apex) — a pointy peak reads as BandPass
+            // (Oleh's icon review). BandPass keeps the tall narrow spike (the long nose is the tell);
+            // Notch is exactly BandPass FLIPPED: baseline at the top, long nose down.
+            case FT::Bell:      p.startNewSubPath (x0, mid);
+                                p.cubicTo (cx - w * 0.28f, mid, cx - w * 0.17f, top, cx, top);
+                                p.cubicTo (cx + w * 0.17f, top, cx + w * 0.28f, mid, x1, mid); break;
             case FT::BandPass:  p.startNewSubPath (x0, bot); p.quadraticTo (cx - w * 0.10f, bot, cx, top);
                                 p.quadraticTo (cx + w * 0.10f, bot, x1, bot); break;
-            case FT::Notch:     p.startNewSubPath (x0, mid); p.quadraticTo (cx - w * 0.10f, mid, cx, bot);
-                                p.quadraticTo (cx + w * 0.10f, mid, x1, mid); break;
+            case FT::Notch:     p.startNewSubPath (x0, top); p.quadraticTo (cx - w * 0.10f, top, cx, bot);
+                                p.quadraticTo (cx + w * 0.10f, top, x1, bot); break;
             case FT::LowShelf:  p.startNewSubPath (x0, top); p.lineTo (cx - w * 0.12f, top);
                                 p.quadraticTo (cx, top, cx + w * 0.05f, mid); p.lineTo (x1, mid); break;
             case FT::HighShelf: p.startNewSubPath (x0, mid); p.lineTo (cx - w * 0.05f, mid);
                                 p.quadraticTo (cx, top, cx + w * 0.12f, top); p.lineTo (x1, top); break;
-            case FT::HighPass:  p.startNewSubPath (x0, bot); p.quadraticTo (cx - w * 0.05f, mid, cx, mid);
+            // HP/LP: Г-shaped — the transition squeezed into ~1/4 of the width (a steeper, more-dB/oct
+            // knee) with a soft corner at the plateau, then a long flat top (Oleh's icon review).
+            case FT::HighPass:  p.startNewSubPath (x0, bot);
+                                p.cubicTo (x0 + w * 0.10f, bot, x0 + w * 0.12f, mid, x0 + w * 0.26f, mid);
                                 p.lineTo (x1, mid); break;
-            case FT::LowPass:   p.startNewSubPath (x0, mid); p.lineTo (cx, mid);
-                                p.quadraticTo (cx + w * 0.05f, mid, x1, bot); break;
+            case FT::LowPass:   p.startNewSubPath (x0, mid); p.lineTo (x1 - w * 0.26f, mid);
+                                p.cubicTo (x1 - w * 0.12f, mid, x1 - w * 0.10f, bot, x1, bot); break;
             case FT::Tilt:      p.startNewSubPath (x0, bot); p.lineTo (x1, top); break;
             case FT::AllPass:   p.startNewSubPath (x0, mid); p.lineTo (x1, mid); break;
         }
