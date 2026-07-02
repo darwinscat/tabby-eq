@@ -8,6 +8,7 @@
 #include "PluginProcessor.h"
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
+#include "ui/LaneGlyphs.h"
 
 #include <functional>
 #include <memory>
@@ -52,6 +53,38 @@ private:
 };
 
 //==============================================================================
+// The placement-lane DROPDOWN button (replaces the old ST<->M/S toggle + [M][S] tabs). It shows the venn
+// "set glyph" of the point's enabled lanes plus a dot in the ACTIVE lane's colour; clicking opens the lane
+// menu, and the mouse-wheel cycles the active lane among the enabled ones.
+class LaneSetButton : public juce::Button
+{
+public:
+    LaneSetButton() : juce::Button ({}) {}
+    void setState (unsigned mask, int active) { enabledMask = mask; activeLane = active; repaint(); }
+    std::function<void(int)> onWheel;   // dir (+1 / -1) -> cycle the active lane
+
+    void paintButton (juce::Graphics& g, bool over, bool) override
+    {
+        auto b = getLocalBounds().toFloat();
+        g.setColour (tabby::palette::panel().brighter (over ? 0.30f : 0.18f));
+        g.fillRoundedRectangle (b, 4.0f);
+        if (! isEnabled()) return;
+        auto glyph = b.reduced (4.0f, 3.0f); glyph.removeFromRight (7.0f);       // leave room for the active dot
+        tabby::venn::drawSet (g, glyph, enabledMask, activeLane);
+        g.setColour (tabby::palette::lane (activeLane));                          // active-lane dot, bottom-right
+        g.fillEllipse (b.getRight() - 8.0f, b.getBottom() - 8.0f, 5.0f, 5.0f);
+    }
+
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        if (onWheel && w.deltaY != 0.0f) onWheel (w.deltaY > 0.0f ? +1 : -1);
+    }
+
+private:
+    unsigned enabledMask = 1; int activeLane = 0;
+};
+
+//==============================================================================
 // A lightweight OUTLINE chevron (< or >) — no button chrome. dir < 0 points left, > 0 right.
 class ChevronButton : public juce::Button
 {
@@ -75,10 +108,10 @@ private:
 };
 
 //==============================================================================
-// The selected-band inspector strip: shows AND keyboard-edits the real freq / Q / gain / type /
-// slope of whichever band is selected on the curve (#8 — values are first-class, not hidden). One
-// set of controls serves all 24 bands: when the selection changes it rebinds its APVTS attachments
-// to the new band's parameters, so the strip and the draggable node stay in lock-step for free.
+// The selected-band inspector strip: shows AND keyboard-edits the real freq / Q / gain / type / slope of
+// whichever band+lane is selected on the curve (#8). One set of controls serves all 24 bands × 5 lanes:
+// when the selection changes it rebinds its APVTS attachments to the ACTIVE lane's parameters, so the strip
+// and the draggable node stay in lock-step. The lane dropdown + canvas + wheel are the lane selectors.
 class BandEditStrip : public juce::Component
 {
 public:
@@ -88,8 +121,9 @@ public:
     void setBand (int band);                 // -1 = nothing selected (controls disabled)
     std::function<void(int)> onStep;         // < / > pressed: step the selection by +/-1 (set by the editor)
     std::function<void()>    onEdited;       // a value-bar drag ended — editor re-places the floating toolbar
-    std::function<void(bool)> onLaneChanged; // Mid/Side tab clicked — editor highlights that node on the canvas
-    void setActiveLane (bool side);          // set the editing lane WITHOUT firing onLaneChanged (external sync)
+    std::function<void(int)> onLaneChanged;  // active lane changed (menu/wheel) — editor highlights that node
+    std::function<void()>    onLanesEdited;  // lane set / link edited — editor repaints the canvas
+    void setActiveLane (int lane);           // set the editing lane WITHOUT firing onLaneChanged (external sync)
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -100,31 +134,31 @@ public:
 private:
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    void rebind();                           // (re)create attachments for the current band
+    void rebind();                           // (re)create attachments for the current band + active lane
     void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the SHARED point type
-    juce::String laneId (const juce::String& base) const;   // lane-scoped param id (ST / Mid / Side) for freq/Q/gain/slope/byp
+    void showLaneMenu();                     // the placement-lane dropdown (checkbox set + Link FQ/Q)
+    void selectLane (int lane);              // user picked a lane (menu name-click / wheel): set active + notify
+    void cycleLane (int dir);                // wheel over the dropdown: step the active lane among enabled ones
+    void refreshLaneButton();                // sync the dropdown glyph to the enabled set + active lane
+    juce::String laneId (const juce::String& base) const;   // active-lane-scoped param id for freq/Q/gain/slope/byp
     int  bandTypeIndex() const;                             // the point's SHARED filter-type index
-    void setLane (bool side);                               // switch the toolbar to Mid (false) / Side (true)
-    void toggleMs();                                        // ST <-> M/S: split enables m+s (seed from st on FIRST split) / unsplit reverses
-    void copyStToMs();                                      // seed the Mid + Side lanes from the ST lane
-    bool msLanesFresh() const;                              // m + s lanes still at factory defaults (never configured)
-    int  activeLaneIndex() const;                           // teq::Lane index for the current (ST / Mid / Side) edit lane
+    bool laneOn (int lane) const;                           // is lane `lane` enabled on the current band?
+    int  enabledLaneCount() const;                          // # enabled lanes on the current band
+    unsigned enabledMask() const;                           // bit set of enabled lanes
+    bool stereoBus() const;                                 // the processor's bus is stereo (L/R/M/S usable)
 
     TabbyEqAudioProcessor& proc;
     int  curBand = -1;
-    bool curMs = false;          // selected band is SPLIT (m or s lane enabled)
-    bool editingSide = false;    // the toolbar edits the Side lane (vs the Mid lane; ignored when unsplit = ST)
+    int  activeLane = 0;         // teq::Lane index (0..4) currently edited by the strip
 
     juce::Label        title;
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left
     juce::TextButton   soloButton { "S" };
     TypeIconButton     typeButton;               // icon-only; opens the type menu
-    juce::TextButton   modeButton;               // ST <-> M/S toggle
-    juce::TextButton   midTab { "M" }, sideTab { "S" };   // lane tabs (visible only in M/S)
+    LaneSetButton      laneButton;               // placement-lane dropdown (venn set glyph + active dot)
     ChevronButton      prevButton { -1 };   // lightweight outline <
     ChevronButton      nextButton { +1 };   // lightweight outline >
     juce::ComboBox     slopeBox;

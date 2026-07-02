@@ -15,9 +15,10 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (display);
 
     display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
-    display.onBandSelected = [this] (int b, bool side) { strip.setBand (b); strip.setActiveLane (side); };   // node+lane -> toolbar
-    strip.onLaneChanged    = [this] (bool side) { display.setSelectedSide (side); };   // Mid/Side tab -> highlight node
-    strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step to the prev / next band
+    display.onBandSelected = [this] (int b, int lane) { strip.setBand (b); strip.setActiveLane (lane); };   // node+lane -> toolbar
+    strip.onLaneChanged    = [this] (int lane) { display.setSelectedLane (lane); };   // lane dropdown/wheel -> highlight node
+    strip.onLanesEdited    = [this] { display.refreshAfterLaneEdit(); };   // lane set / links changed -> re-cache + repaint
+    strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step across all visible nodes
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
 
     // OUT rail trim — a minimalist vertical fader; double-click returns to 0 dB.
@@ -210,11 +211,10 @@ void TabbyEqEditor::showViewMenu()
     for (int i = 0; i < 4; ++i)
         audMenu.addItem (30 + i, "Q " + juce::String (audQv[i]), true, juce::roundToInt (display.auditionQ()) == audQv[i]);
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
-    // Link FQ / Link Q are per-point (mirrored processor-side); here the View menu edits the GLOBAL defaults
-    // for newly split points. Interim (PR D adds the per-point lane menu): toggling ON also links the
-    // currently-selected split band right away.
-    m.addItem (40, "Link FQ (new splits)", true, (bool) proc.apvts.state.getProperty ("defaultLinkFq", false));
-    m.addItem (41, "Link Q (new splits)",  true, (bool) proc.apvts.state.getProperty ("defaultLinkQ", false));
+    // Link FQ / Link Q are per-point (edited in the lane dropdown, mirrored processor-side). Here the View
+    // menu edits ONLY the GLOBAL defaults seeded into newly split points.
+    m.addItem (40, "New splits: Link FQ default", true, (bool) proc.apvts.state.getProperty ("defaultLinkFq", false));
+    m.addItem (41, "New splits: Link Q default",  true, (bool) proc.apvts.state.getProperty ("defaultLinkQ", false));
 
     juce::PopupMenu domMenu;
     const int dom = proc.getSpectrumDomain();
@@ -243,19 +243,10 @@ void TabbyEqEditor::showViewMenu()
         if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
         if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
-        if (r == 40 || r == 41)
+        if (r == 40 || r == 41)   // GLOBAL new-split default only (per-point linking lives in the lane dropdown)
         {
             const char* gKey = (r == 40) ? "defaultLinkFq" : "defaultLinkQ";
-            const char* bKey = (r == 40) ? "linkFq"        : "linkQ";
-            const bool v = ! (bool) st.getProperty (gKey, false);
-            st.setProperty (gKey, v, nullptr);
-            const int sb = safe->display.selectedBand();
-            if (v && sb >= 0)   // interim: apply immediately to the selected split band
-            {
-                const bool split = safe->proc.apvts.getRawParameterValue (tabby::laneParamId (sb, 3, "on"))->load() > 0.5f
-                                || safe->proc.apvts.getRawParameterValue (tabby::laneParamId (sb, 4, "on"))->load() > 0.5f;
-                if (split) st.setProperty (tabby::bandId (sb, bKey), true, nullptr);
-            }
+            st.setProperty (gKey, ! (bool) st.getProperty (gKey, false), nullptr);
         }
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
         if (r >= 70 && r <= 74) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
