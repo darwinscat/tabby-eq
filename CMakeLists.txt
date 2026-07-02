@@ -90,6 +90,50 @@ if(TABBYEQ_BUILD_PLUGIN OR TABBYEQ_BUILD_TESTS)
     FetchContent_MakeAvailable(juce)
 endif()
 
+# ----------------------------------------------------------------------------
+# Build-time version stamp — TabbyVersion.h, baked into the binary (end users have NO repo, so git
+# is consulted only here, at build time). A custom target (always out-of-date) re-runs the generator
+# on EVERY build via `cmake -P`, so kBuildNumber is a fresh UTC timestamp each build and the git
+# describe/hash reflect the tree at build time — never a stale configure-time snapshot. Everything
+# that includes the generated header depends on this target (BYPRODUCTS names the header so Ninja
+# orders + cleans it). Generation never fails the build (see cmake/GenerateTabbyVersion.cmake).
+# ----------------------------------------------------------------------------
+find_package(Git QUIET)
+set(TABBY_VERSION_DIR    "${CMAKE_BINARY_DIR}/generated")
+set(TABBY_VERSION_HEADER "${TABBY_VERSION_DIR}/TabbyVersion.h")
+file(MAKE_DIRECTORY "${TABBY_VERSION_DIR}")
+
+# Mirror the hybrid FetchContent decision above so kCoreVersion reports the checkout that was used:
+# the sibling (describe it live) vs the pinned tag (fetched).
+if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
+    set(_tabby_fcore_local ON)
+else()
+    set(_tabby_fcore_local OFF)
+endif()
+
+add_custom_target(TabbyVersionGen ALL
+    BYPRODUCTS "${TABBY_VERSION_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DOUT_FILE=${TABBY_VERSION_HEADER}
+        -DFCORE_LOCAL=${_tabby_fcore_local}
+        -DFCORE_DIR=${TABBYEQ_FCORE_DIR}
+        -DFCORE_TAG=${TABBYEQ_FCORE_TAG}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateTabbyVersion.cmake"
+    COMMENT "Baking TabbyVersion.h build stamp"
+    VERBATIM)
+
+# Generate once at configure time too, so the header exists for IDEs / clangd before the first build.
+execute_process(COMMAND ${CMAKE_COMMAND}
+    -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+    -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUT_FILE=${TABBY_VERSION_HEADER}
+    -DFCORE_LOCAL=${_tabby_fcore_local}
+    -DFCORE_DIR=${TABBYEQ_FCORE_DIR}
+    -DFCORE_TAG=${TABBYEQ_FCORE_TAG}
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateTabbyVersion.cmake")
+
 if(TABBYEQ_BUILD_PLUGIN)
 
 # ----------------------------------------------------------------------------
@@ -134,9 +178,11 @@ target_sources(TabbyEQ PRIVATE
     src/Parameters.cpp
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
-    src/ui/BandEditStrip.cpp)
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)
 
-target_include_directories(TabbyEQ PRIVATE src)   # "Parameters.h", "Vocab.h"
+target_include_directories(TabbyEQ PRIVATE src "${TABBY_VERSION_DIR}")   # "Parameters.h", "Vocab.h", generated TabbyVersion.h
+add_dependencies(TabbyEQ TabbyVersionGen)                                # bake TabbyVersion.h before compiling
 
 target_compile_definitions(TabbyEQ PUBLIC
     JUCE_WEB_BROWSER=0
@@ -180,9 +226,11 @@ target_sources(TabbyEQ_LifecycleTest PRIVATE
     src/Parameters.cpp
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
-    src/ui/BandEditStrip.cpp)
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
 
-target_include_directories(TabbyEQ_LifecycleTest PRIVATE src)
+target_include_directories(TabbyEQ_LifecycleTest PRIVATE src "${TABBY_VERSION_DIR}")
+add_dependencies(TabbyEQ_LifecycleTest TabbyVersionGen)
 
 target_compile_definitions(TabbyEQ_LifecycleTest PRIVATE
     JUCE_WEB_BROWSER=0
@@ -205,7 +253,8 @@ tabbyeq_sanitize(TabbyEQ_LifecycleTest
     src/Parameters.cpp
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
-    src/ui/BandEditStrip.cpp)
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)
 
 add_test(NAME tabbyeq_lifecycle_misuse COMMAND TabbyEQ_LifecycleTest)
 
@@ -221,9 +270,11 @@ target_sources(TabbyEQ_AdapterTest PRIVATE
     src/Parameters.cpp
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
-    src/ui/BandEditStrip.cpp)
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
 
-target_include_directories(TabbyEQ_AdapterTest PRIVATE src)
+target_include_directories(TabbyEQ_AdapterTest PRIVATE src "${TABBY_VERSION_DIR}")
+add_dependencies(TabbyEQ_AdapterTest TabbyVersionGen)
 
 target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
     JUCE_WEB_BROWSER=0
@@ -248,8 +299,25 @@ tabbyeq_sanitize(TabbyEQ_AdapterTest
     src/Parameters.cpp
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
-    src/ui/BandEditStrip.cpp)
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)
 
 add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 
 endif()  # TABBYEQ_BUILD_TESTS
+
+if(TABBYEQ_BUILD_CORE_TESTS)
+
+# ----------------------------------------------------------------------------
+# Tiny JUCE-free unit over the build-time-baked TabbyVersion.h: asserts kBuildNumber is a valid
+# 14-digit UTC stamp + the string constants are populated. Rides the plugin-OFF core-tests ctest
+# (guarded by the SAME flag as felitronics-core's suites, which the sanitizer job turns OFF — so it
+# is never orphaned there, where only the named adapter targets are built). Depends on the version
+# generator so the header exists before it compiles.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_VersionTest tests/version_header.cpp)
+target_include_directories(TabbyEQ_VersionTest PRIVATE "${TABBY_VERSION_DIR}")
+add_dependencies(TabbyEQ_VersionTest TabbyVersionGen)
+add_test(NAME tabbyeq_version_header COMMAND TabbyEQ_VersionTest)
+
+endif()  # TABBYEQ_BUILD_CORE_TESTS

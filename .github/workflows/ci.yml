@@ -17,11 +17,17 @@ on:
     branches: [ main ]
   pull_request:
 
+# Stamp every CI build as a "ci" builder (TabbyVersion.h kBuilder), replacing the local username.
+env:
+  TABBYEQ_BUILDER: ci
+
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5   # v5 runs on Node 24 (v4 pins the deprecated Node 20)
+        with:
+          fetch-depth: 0            # full history + tags so `git describe --tags` sees them
 
       - name: Configure (fetches felitronics-core; plugin OFF → no JUCE)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTABBYEQ_BUILD_PLUGIN=OFF
@@ -41,6 +47,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0            # full history + tags so `git describe --tags` sees them
 
       # JUCE links juce_gui_basics on Linux even for a headless AudioProcessor test (verified against the
       # fetched juce-src): X11 core + Xext/Xrandr/Xinerama/Xrender/Xcomposite/Xcursor headers, plus freetype2

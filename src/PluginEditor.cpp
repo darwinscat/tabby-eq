@@ -56,6 +56,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     };
     addAndMakeVisible (prePost);
 
+    addAndMakeVisible (infoButton);   // (i) build/version popover — sits just left of POST
+
     // Phase + quality combos. NB: AudioProcessorValueTreeState::ComboBoxAttachment does NOT reliably
     // auto-populate from the choice param here (getAllValueStrings() comes back empty -> "(no choices)"),
     // so we fill each combo from the parameter's own `choices` (single source of truth for the strings)
@@ -288,6 +290,7 @@ void TabbyEqEditor::resized()
     auto top = r.removeFromTop (30);
     title.setBounds (top.removeFromLeft (150).reduced (8, 4));
     prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
+    infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i) — just left of POST
     latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
     const auto firSlot = top.removeFromRight (84).reduced (4, 4);      // shared slot: quality (Linear) / blend knob (Natural)
     qualityCombo.setBounds (firSlot);
