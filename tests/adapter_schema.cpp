@@ -205,6 +205,29 @@ int main()
         check (! prop (p->apvts, "migrationNote"), "offband: no migrationNote (inaudible coercion)");
     }
 
+    // ============================ 4c. Fission target must be PRISTINE (stale off-band slot reuse) ============================
+    // Band 0 is an OFF ms-band -> migrates in place (stale Mid lane populated, point off). Band 2 is a LIVE
+    // ms-band with sType != type -> fission picks band 0 (first free slot). The fissioned point must be a
+    // clean {s}-only point: WITHOUT the pristine-slot reset, band 0's stale Mid lane would come back ON
+    // inside the new point (deleted-state resurrection).
+    {
+        auto p = std::make_unique<TabbyEqAudioProcessor>();
+        V2Builder v;
+        v.band (0, false /*OFF — deleted*/, 0 /*Bell*/, 500.0, 2.0, 5.0, 1, false);
+        v.side (0, true /*stale ms*/, true, 0 /*sType == type: in-place*/, 4000.0, 1.0, -5.0, 1, false);
+        v.band (2, true, 0 /*Bell*/, 700.0, 2.0, 5.0, 1, false);
+        v.side (2, true, true, 2 /*sType HighShelf != Bell*/, 6000.0, 1.2, -3.0, 1, false);
+        v.load (*p);
+
+        check (rv (p->apvts, bandId (0, "on")) > 0.5f, "pristine: fission target (band 0) is the new point");
+        check ((int) rv (p->apvts, bandId (0, "type")) == 2, "pristine: target type = sType (HighShelf)");
+        check (rv (p->apvts, laneParamId (0, 3, "on")) < 0.5f, "pristine: target Mid lane OFF (stale lane wiped)");
+        check (rv (p->apvts, laneParamId (0, 0, "on")) < 0.5f, "pristine: target ST lane off ({s}-only)");
+        check (rv (p->apvts, laneParamId (0, 4, "on")) > 0.5f, "pristine: target Side on");
+        check (near (rv (p->apvts, laneParamId (0, 4, "freq")), 6000.0), "pristine: target Side freq <- the LIVE band's s*");
+        check (near (rv (p->apvts, laneParamId (0, 3, "freq")), 1000.0), "pristine: target Mid freq back at default (not 500)");
+    }
+
     // ============================ 5. Migration: pool full -> coerce sType->type + migrationNote ============================
     {
         auto p = std::make_unique<TabbyEqAudioProcessor>();

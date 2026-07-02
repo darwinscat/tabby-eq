@@ -115,6 +115,12 @@ namespace
                 {
                     mig[(size_t) b].linkFq = false;
                     consumed[(size_t) freeT] = true;
+                    // Pristine slot FIRST: a target with index < b may already hold an OFF band's
+                    // in-place-migrated lanes (stale Mid/Side of a DELETED point). Turning the slot on
+                    // without wiping them would resurrect that deleted state inside the fissioned point.
+                    mig[(size_t) freeT] = MigBand {};
+                    for (int L = 0; L < kNumLanes; ++L)
+                        mig[(size_t) freeT].lane[(size_t) L] = { L == 0, 1000.0, 1.0, 0.0, 1, false };
                     mig[(size_t) freeT].on    = true;
                     mig[(size_t) freeT].type  = sType;
                     mig[(size_t) freeT].swept = false;
