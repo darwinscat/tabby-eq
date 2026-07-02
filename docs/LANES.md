@@ -6,8 +6,13 @@
 > round 1 (Codex REJECT + DeepSeek APPROVE-WITH-FIXES; Gemini unavailable): fixed the bypass
 > migration, the sType migration, the FIR degeneracy/convolver story, the order-invariance
 > claim, link-mirroring thread/race spec, idle-lane cost, name collisions, mono wording,
-> coincident-node selection, stepping order. Inspiration: Pro-Q 3 per-band stereo placement —
-> but **multi-select**: one point may live in several placement lanes at once.
+> coincident-node selection, stepping order. **Rev 3** after round 2: RT-safe drain (no
+> AsyncUpdater from the audio thread — FIFO + dirty flag + the 30 Hz timer), shared-FDL warm
+> history for topology switches, lane toggles = documented hard steps (no clickless
+> overclaim), delivery-order mirroring determinism, fission terminology + no-reorder +
+> one-time notice, activeLane load fallback, point-bypass preserves lane state.
+> Inspiration: Pro-Q 3 per-band stereo placement — but **multi-select**: one point may live in
+> several placement lanes at once.
 
 ## Goal
 
@@ -58,7 +63,9 @@ gain / slope / bypass); the point's **filter type is shared** by all its lanes. 
    2 direct IRs), or full matrix (new, 4 IRs + cross sums).
 9. **Clean parameter-ID break.** Pre-release is the last cheap moment: new lane-keyed IDs, no
    legacy aliases (the old flat set meant *Stereo* or *Mid* depending on `ms` — an alias cannot
-   be honest). Saved v2 states migrate by value (§ Migration); `stateVersion` → **3**.
+   be honest). Saved v2 states migrate by value **with two documented lossy corners**
+   (§ Migration: `sType` fission when the pool is full; nothing else loses data);
+   `stateVersion` → **3**.
 
 ## Data model — `felitronics::eq::BandParams` v2 (breaking, core v0.2.0)
 
@@ -107,7 +114,9 @@ State per band (fixed-size, zero-alloc, RT-safe as today):
   per-band *moving/settled* check spans **active lanes only**; `operator==` still compares all
   fields bitwise (recompute-skip stays exact). Enabling a lane = topology reset for that lane's
   column + snap its smoothers to current targets (the shipped snap-on-load pattern — fresh
-  state + fresh design ⇒ no click by construction; the delta-fold folds it in from silence).
+  state, no stale-history artifacts). **Lane on/off (and lane bypass) is a hard operator step —
+  exactly today's band-enable/bypass semantics**: a deliberate, rare user action; the engine
+  guarantees no stale state and no NaN, not an amplitude crossfade. (Same as shipped ST↔M/S.)
 - **Topology resets**, extending today's rules: lane `on` toggle resets that lane's column;
   `type`/`swept` change or slope-driven section-count change resets the affected lanes;
   channel-count change resets all.
@@ -175,10 +184,14 @@ matrix engine therefore adds real new machinery, not just "more IRs":
   reconstruction breaks.)
 - **Natural phase:** apply the φ = k·φ_min cepstral blend to each scalar lane response, then
   compose (complex entries, 4 general IRs). Same `k` knob, same latency story as today.
-- **Click-free edits AND topology switches:** the IR swap generalizes to an atomic **operator
-  swap** — the crossfade mixes the *outputs* of the old and new stereo operators, so it is
-  agnostic to whether either side is 2-IR-M/S, 2-IR-L/R, or 4-IR matrix. Never mixes old h_LL
-  with new h_LR; enabling the first L lane mid-playback crossfades cleanly between topologies.
+- **Click-free edits AND topology switches — shared warm history by construction:** all
+  topologies ride **one shared per-channel input FDL** (frequency-domain delay line; the input
+  spectra history depends only on the input and the partition scheme, which are common). An
+  "operator" is then just a set of spectral IR banks + routing *over that shared FDL* — so a
+  freshly engaged topology reads the same warm history as the outgoing one; there is **no
+  cold-start tail**. The atomic **operator swap** crossfades the *outputs* of the old and new
+  operators computed from the same FDL. Never mixes old h_LL with new h_LR; enabling the first
+  L lane mid-playback crossfades cleanly between topologies.
 - Mono (`nc==1`) in FIR modes: one IR = the **ST-axis composite** (∏ H_ST — the only lanes that
   run on mono; the old code called this the "Mid" IR, same thing under v2 semantics).
 
@@ -206,25 +219,31 @@ band{b}_{k}_byp   Bool    "B{n} {Lane} Bypass"
 - **Groups:** one `AudioProcessorParameterGroup` per band ("Band 4"), all 34 of its params
   inside — the Pro-Q-style DAW tree.
 - **Non-parameter state** (per-band `ValueTree` properties, saved with the session, not
-  automatable): `linkFq`, `linkQ`, `activeLane` (pure UI). Global properties: `defaultLinkFq`,
-  `defaultLinkQ` (View menu) — seeds for newly split points. `msFreqLink` dies.
+  automatable): `linkFq`, `linkQ`, `activeLane` (pure UI; persisted — on load, a missing or
+  no-longer-enabled `activeLane` falls back to the lowest enabled lane index). Global
+  properties: `defaultLinkFq`, `defaultLinkQ` (View menu) — seeds for newly split points.
+  `msFreqLink` dies. Point `bypass` never touches lane state — lanes keep their `on/bypass`
+  flags and params and come back exactly as left when the point is un-bypassed.
 
 ### Link mirroring (processor-side, host-safe)
 
 - `AudioProcessorValueTreeState::Listener::parameterChanged` may fire on **any thread**
-  (automation arrives on the audio thread). The listener therefore only pushes a
-  `{band, lane, param}` event into a **lock-free FIFO** and triggers an `AsyncUpdater`; all
-  mirroring runs on the **message thread** drain.
+  (automation arrives on the audio thread). The listener does **only RT-safe work**: push a
+  `{band, lane, param, value}` event into a **lock-free FIFO** and set an atomic dirty flag —
+  **no `AsyncUpdater`, no posting from the audio thread** (posting a message is not an RT
+  primitive). The FIFO is drained by the processor's **existing 30 Hz message-thread timer**
+  (the `lpTick` pattern) — worst-case mirror latency one timer period, fine for an edit mirror.
 - Mirrored writes go through `setValueNotifyingHost` under a re-entrancy guard (mirror-writes
   are tagged and never re-mirrored). No gesture forwarding — mirrors are plain value changes
   (JUCE `ParameterAttachment` behaves the same way).
 - `linkFq` mirrors freq across the point's *enabled* lanes; `linkQ` mirrors Q — or slope when
   the shared type is HP/LP/Notch-like. Disabled lanes are not written; they inherit on enable
   (the enable seeds from the active lane, § UI).
-- **Determinism rule:** within one drain batch, if several lanes of the same linked point
-  changed, the **lowest lane index wins** (st < l < r < m < s) and the batch mirrors once.
-  Simultaneously automating two linked lanes of one point is thereby deterministic, if silly —
-  documented as such.
+- **Determinism = delivery order:** the drain processes events **in FIFO order** (the host's own
+  delivery order within the block), each event mirroring in turn (consecutive events for the
+  same param coalesce). The final state is the *last delivered* edit — temporally correct, not
+  an arbitrary priority. Simultaneously automating two linked lanes of one point is still silly
+  and documented as such, but it resolves the way the host ordered it.
 - `readBand()` packs the 5 lanes straight into `BandParams` v2. Solo (`S`) band-passes at the
   **active lane's** freq. Analyzer domains (ST ch0 / Mid / Side) unchanged.
 
@@ -237,9 +256,9 @@ In `setStateInformation`, when the incoming tree carries version ≤ 2, translat
 | `ms = false`                      | `st` lane ← flat fields (incl. `bypass` → **`st` lane bypass**); other lanes off |
 | `ms = true`                       | `m` lane ← flat fields (incl. `bypass` → **`m` lane bypass**), `s` lane ← `s*` fields, `st` off |
 | point `bypass` (new)              | **always `false`** — v2's flat `bypass` muted only the Mid lane (Side kept running: `sideActive` ignores it); mapping it to the point would silence previously-running Side lanes |
-| `ms = true && sType ≠ type`       | **split into two points**: `s` lane moves to the first free band slot as an `{s}`-only point with `type = sType` (shared-type invariant holds per point). If no slot is free: coerce `sType → type` and record `migrationNote` in the state (accepted, logged loss) |
+| `ms = true && sType ≠ type`       | **fission into two points**: the `s` lane moves to the **first free band slot** (existing bands keep their indices — no reorder) as an `{s}`-only point with `type = sType` (shared-type invariant holds per point); both fissioned points get `linkFq = false` (a single-lane point has nothing to link). If no slot is free: coerce `sType → type` and record a `migrationNote` state property (accepted, logged loss; the editor shows a one-time notice when it's present) |
 | `sOn / sBypass`                   | `s` lane `on / bypass`                                        |
-| editor `msFreqLink` prop          | `defaultLinkFq ← old value`. Per-band `linkFq = true` **only where the band was split AND its Mid/Side freqs actually match** (ε = 0.01 Hz) — v2 sessions saved with the link on but freqs later diverged (headless edits — the old editor-only flaw) must NOT be re-linked, or the first edit would collapse the divergence |
+| editor `msFreqLink` prop          | `defaultLinkFq ← old value`. Per-band `linkFq = true` **only for bands migrated as `{m,s}` (not fissioned ones) whose Mid/Side freqs actually match** (ε = 0.01 Hz) — v2 sessions saved with the link on but freqs later diverged (headless edits — the old editor-only flaw) must NOT be re-linked, or the first edit would collapse the divergence |
 
 Old automation lanes in existing DAW projects break (accepted — pre-release, decision #9).
 A v3 state loaded by an old binary simply resets (also accepted, pre-release).
@@ -288,15 +307,19 @@ Migration fixtures come from **real v2 session XML** dumped before the schema ch
    analytic 2×2 `H_eq` at every probe frequency — **complex compare, not magnitudes**, so
    off-diagonal sign/polarity is proven. Also proves the normative order (a reordered cascade
    would fail the cross terms).
-4. Topology/reset: lane toggles (enable mid-stream = clickless snap), type change, ST↔split
-   switches — no clicks/NaN; true-mono and 6-ch inputs run ST-only; **mono→stereo upmix runs all
-   lanes**; swept honored only unsplit; **disabled-lane automation** neither designs nor marks
-   the band moving (cost-zero proof).
+4. Topology/reset: lane toggles (enable mid-stream = hard step with fresh state — assert no
+   stale-history artifacts, no NaN, output settles within one block; amplitude steps are the
+   documented semantic, as with today's band enable), type change, ST↔split switches; true-mono
+   and 6-ch inputs run ST-only; **mono→stereo upmix runs all lanes**; swept honored only
+   unsplit; **disabled-lane automation** neither designs nor marks the band moving (cost-zero
+   proof).
 5. **FIR:** measured complex response == analytic `H_eq` per entry (linear: real signed entries
    after removing the N/2 delay; natural: complex within tolerance); linear-phase symmetry of
    all 4 IRs; **basis detection**: all-M/S picks the encode/decode path, all-L/R picks the
    direct path, both match the matrix prediction; **operator swap** atomicity incl. a
-   mid-playback topology switch (2-IR → 4-IR) — no click, no old/new IR mixing.
+   mid-playback topology switch (2-IR → 4-IR) — no click, no old/new IR mixing, and the
+   incoming topology reads the **shared warm FDL** (its first crossfaded block already carries
+   the input's past — assert against a cold-started reference, which must differ).
 6. **Adapter (`tests/`):** v2→v3 migration fixtures from real session XML — plain, ms-split,
    **Mid-bypassed + Side-active**, **`sType ≠ type` (split-to-new-point + pool-full coercion)**,
    **`msFreqLink=true` with diverged freqs (must NOT re-link)**, linked; link mirroring on the
