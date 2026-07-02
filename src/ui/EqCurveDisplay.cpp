@@ -4,7 +4,6 @@
 #include "ui/EqCurveDisplay.h"
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
-#include "ui/LaneGlyphs.h"
 #include "ui/LaneMenu.h"
 
 namespace
@@ -162,8 +161,11 @@ float  EqCurveDisplay::specDbToY (double db) const noexcept
 }
 
 //==============================================================================
-// Placement-lane node/lane helpers (ST/L/R/M/S). A node exists per ENABLED lane; a point looks unsplit
-// (per-band colour, no badge) while < 2 lanes are enabled, and takes lane colours + badges at ≥ 2.
+// Placement-lane node/lane helpers (ST/L/R/M/S). A node exists per ENABLED lane. A point looks unsplit
+// (per-band colour, no badge) ONLY in the plain single-ST configuration; any other lane set — including a
+// single non-ST lane ({m}-only after a migration fission, Alt-click make-only) — wears lane colours and
+// the badge, because such a point behaves differently from a plain one (it touches only its domain) and
+// hiding that would misread as a normal full-stereo band.
 bool EqCurveDisplay::laneOn (int b, int lane) const noexcept
 {
     return paramCache[(size_t) b].lanes[(size_t) lane].on;
@@ -178,7 +180,10 @@ int EqCurveDisplay::laneCount (int b) const noexcept
     int c = 0; for (int L = 0; L < teq::kNumLanes; ++L) if (paramCache[(size_t) b].lanes[(size_t) L].on) ++c;
     return c;
 }
-bool EqCurveDisplay::multiLane (int b) const noexcept { return laneCount (b) >= 2; }
+bool EqCurveDisplay::multiLane (int b) const noexcept
+{
+    return laneCount (b) >= 2 || ! paramCache[(size_t) b].lanes[(size_t) teq::Lane::Stereo].on;
+}
 
 // The stereo display axis a lane rides (decision #7). The Stereo lane folds into every axis, so its own
 // node/curve rides the hero (Mid) axis — exactly what today's single-ST composite is.
@@ -1003,7 +1008,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         {
             const juce::String badge = juce::String (laneKeyStr (lane)).toUpperCase();
             const float bw = badge.length() > 1 ? 15.0f : 11.0f, bh = 10.0f;
-            const juce::Rectangle<float> chip (pos.x + kNodeR - 2.0f, pos.y - kNodeR - bh + 2.0f, bw, bh);
+            juce::Rectangle<float> chip (pos.x + kNodeR - 2.0f, pos.y - kNodeR - bh + 2.0f, bw, bh);
+            if (chip.getY() < 1.0f) chip.setY (pos.y + kNodeR - 2.0f);   // top-edge clamp: flip below the node
             g.setColour (col);                               g.fillRoundedRectangle (chip, 2.5f);
             g.setColour (juce::Colours::black.withAlpha (0.85f));
             g.setFont (juce::Font (juce::FontOptions (8.0f).withStyle ("Bold")));
