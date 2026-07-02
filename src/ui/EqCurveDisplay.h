@@ -29,10 +29,11 @@ public:
     // The floating per-band toolbar (owned by the editor) is parented here so it overlays the canvas
     // and tracks the selected node. Pass nullptr to detach.
     void setToolbar (juce::Component* t) noexcept;
-    void stepSelection (int dir);   // select the prev/next active band (frequency order, wraps)
+    void stepSelection (int dir);   // step across ALL visible nodes in global frequency order (wraps)
     void clearSelection();          // deselect (hides the floating toolbar)
     void refreshToolbar();          // re-place the toolbar at the selected node (after a window edit)
-    void setSelectedSide (bool side);   // the toolbar switched the Mid/Side lane -> highlight that node
+    void refreshAfterLaneEdit();    // lane set / links changed elsewhere -> re-cache + re-place + repaint
+    void setSelectedLane (int lane);   // the toolbar switched the active lane -> highlight that node
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDrag        (const juce::MouseEvent&) override;
@@ -44,8 +45,8 @@ public:
     bool keyPressed       (const juce::KeyPress&) override;   // Esc cancels an in-progress add-drag
     void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
-    // Set by the editor: fires when the selected band changes (-1 = none). Drives the edit strip.
-    std::function<void(int, bool)> onBandSelected;   // (band, side-lane); -1 = none
+    // Set by the editor: fires when the selected band/lane changes (-1 = none). Drives the edit strip.
+    std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
     int  selectedBand() const noexcept { return selBand; }
     void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
@@ -83,9 +84,9 @@ private:
     float  specDbToY (double db) const noexcept;   // spectrum dBFS scale (always full height)
     int    plotBottomY() const noexcept;           // bottom of the curve/node area — above the Fixed-lane strip
 
-    struct Hit { int band = -1; bool side = false; };   // a node hit: which band + which lane (M/S)
+    struct Hit { int band = -1; int lane = 0; };   // a node hit: which band + which placement lane (0..4)
 
-    void   refreshDesigns();                       // pull the bands into the cache + design both lanes
+    void   refreshDesigns();                       // pull the bands into the cache + design every enabled lane
     // The curve is DESIGNED + evaluated at an oversampled "display" rate (>= 96k), not the real fs. A matched
     // biquad's magnitude is even about fs/2, so at low real rates (44.1/48k) an LP/BP would visibly FLATTEN
     // as it nears Nyquist (slope -> 0) and then kink; oversampling pushes that flattening far past the 28k
@@ -93,24 +94,26 @@ private:
     // (The spectrum analyzer still uses the real fsCache — that's true measured content, not a design.)
     double designFs() const noexcept { return juce::jmax (fsCache, 96000.0); }
 
-    // Two-lane UX helpers: a "point" is unsplit (single ST node) or split (Mid + Side nodes). The `side`
-    // bool identifies a node — false = the ST/Mid node, true = the Side node. laneOf maps (band, side) to a
-    // teq::Lane; splitB reads the paint cache, splitLive reads the live atomics (async menu callbacks).
-    bool       splitB    (int b) const noexcept;            // paramCache: is the point split (Mid or Side lane on)?
-    bool       splitLive (int b) const noexcept;            // live atomics variant
-    bool       laneEnabled (int b, bool side) const noexcept;   // is that node's lane ON? Migration can make {m}-only /
-                                                                // {s}-only points — one node each, never a phantom
-    teq::Lane  laneOf    (int b, bool side) const noexcept; // (band, side) -> ST / Mid / Side (from the cache)
-    teq::Lane  laneOfLive(int b, bool side) const noexcept; // live-atomics variant
-    static const char* laneKeyStr (teq::Lane l) noexcept;   // "st" / "l" / "r" / "m" / "s"
-    juce::String laneParamId (int b, bool side, juce::StringRef base) const;   // node -> APVTS id (type=shared, bypass=lane byp)
-    double compositeDb (double f, bool side = false) const noexcept;   // Mid (side=false) or Side composite
-    juce::Point<float> nodePos (int band, bool side = false) const noexcept;
-    std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b, bool side = false) const noexcept;
+    // Placement-lane node helpers. A "point" has a node per ENABLED lane (ST/L/R/M/S). `lane` is a teq::Lane
+    // index 0..4. laneOn reads the paint cache; laneOnLive reads the live atomics (async menu callbacks).
+    // A point is UNSPLIT (looks as today: per-band colour, no badge) when < 2 lanes are enabled; ≥ 2 → each
+    // node takes its lane colour + a permanent badge.
+    bool       laneOn     (int b, int lane) const noexcept;   // cache: is that lane enabled on the point?
+    bool       laneOnLive (int b, int lane) const noexcept;   // live-atomics variant
+    int        laneCount  (int b) const noexcept;             // # enabled lanes (cache)
+    bool       multiLane  (int b) const noexcept;             // ≥ 2 enabled lanes -> lane colours + badges
+    static teq::Axis   axisForLane (int lane) noexcept;       // lane -> the display axis it rides (ST -> the Mid hero)
+    static const char* laneKeyStr  (int lane) noexcept;       // "st" / "l" / "r" / "m" / "s"
+    juce::String laneParamId (int b, int lane, juce::StringRef base) const;   // node -> APVTS id (type/on = shared)
+    double compositeDbAxis (double f, teq::Axis a) const noexcept;   // one stereo axis composite (dB), from the cache
+    juce::Point<float> nodePos (int band, int lane) const noexcept;
+    std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b, int lane) const noexcept;
     juce::Colour bandColour (int b) const noexcept;    // per-band (or per-type) colour
-    double       bandDb (int b, double f, bool side = false) const noexcept;   // one lane's response (dB)
+    juce::Colour nodeColour (int b, int lane) const noexcept;   // lane colour for split points, else per-band
+    double       bandDb (int b, double f, int lane) const noexcept;   // one lane's response (dB)
     juce::Point<float> addButtonAt() const noexcept;   // the "+" on the curve under the cursor, or {-1,-1}
-    Hit    nodeAt (juce::Point<float> p) const noexcept;   // band + lane under p (band = -1 if none)
+    Hit    nodeAt (juce::Point<float> p) const noexcept;   // nearest node under p (band = -1 if none)
+    int    collectNodesAt (juce::Point<float> p, Hit* out, int maxOut) const noexcept;   // all nodes within grab radius
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
     void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
@@ -126,7 +129,7 @@ private:
     void    drawListenVisual (juce::Graphics&, double freqHz, double q, const juce::String& label) const;   // bell/spotlight + beam, shared by audition & solo
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
-    void   selectBand (int newSel, bool side = false);   // update selection + fire onBandSelected
+    void   selectBand (int newSel, int lane = 0);   // update selection + fire onBandSelected
     void   positionToolbar();                        // float the toolbar near the selected node (per toolbarPlace)
     juce::Rectangle<int> placeClassic    (juce::Point<float> node) const noexcept;   // 0: centered above/below + clamp
     juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
@@ -135,7 +138,6 @@ private:
     void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
-    juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
     TabbyEqAudioProcessor& proc;
@@ -148,14 +150,14 @@ private:
     std::array<float, teq::kSpectrumFftSize / 2 + 1> specDb {};
     std::array<float, teq::kSpectrumFftSize / 2 + 1> specPeak {};   // slow-decay peak-hold
 
-    // per-paint cache of the band designs (shared by curve / nodes / hit-test)
+    // per-paint cache of the band designs (shared by curve / nodes / hit-test). One design per placement
+    // lane (ST/L/R/M/S) of every band; a disabled lane is left as a default (never evaluated — gated by on).
     teq::BandParams paramCache[tabby::kNumBands];
-    teq::BandDesign designCache[tabby::kNumBands];       // Mid/main lane design
-    teq::BandDesign designCacheSide[tabby::kNumBands];   // Side lane design (M/S bands only)
+    teq::BandDesign designCache[tabby::kNumBands][teq::kNumLanes];
     double fsCache = 44100.0;
 
     int  draggingBand = -1;
-    bool draggingSide = false;   // the node being dragged is the Side lane
+    int  draggingLane = 0;       // the placement lane of the node being dragged (0..4)
     bool draggingGain = false;
     double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
@@ -169,7 +171,8 @@ private:
     int  prevSoloBand  = -1;
     juce::Point<float> pressPos;
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
-    bool selSide      = false;   // selected lane (false = Mid/main, true = Side) for M/S bands
+    int  selLane      = 0;       // selected placement lane (0..4) of the selected band
+    juce::Point<float> lastClickPos { -1.0e9f, -1.0e9f };   // coincident-node cycling: a repeat click in place cycles
     int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
     bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)

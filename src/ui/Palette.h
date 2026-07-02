@@ -27,4 +27,32 @@ namespace tabby::palette
     inline juce::Colour violet()    { return juce::Colour (0xff9170ff); }   // PRIMARY  — accent / cut (lifted for balance)
     inline juce::Colour violetLo()  { return juce::Colour (0xffb39bff); }   // hover / glow
     inline juce::Colour orange()    { return juce::Colour (0xffff8822); }   // SECONDARY — boost / warm
+
+    // --- placement-lane colours (LANES.md decision #5: roles locked, exact values tuned here) ---
+    // A split point's nodes/curves/badges take these fixed per-lane colours. Tuned to the dark canvas
+    // and the brand: readable (not neon), distinct hues, and clear of the per-band slot palette (badges
+    // disambiguate the rare overlap). Roles are LOCKED — only the values are tuned.
+    //   Stereo — the brand orange, i.e. the same hue as the hero composite (ST folds into every axis).
+    //   Left   — a soft, cool near-white: the "reference" lane, calm and neutral.
+    //   Right  — a clear red, warmer than the notch-type red and unmistakable next to orange.
+    //   Mid    — an emerald green, calmer than the bell-type green so it reads as a role, not a filter.
+    //   Side   — an azure blue, clear of the grey-blue spectrum fill and the violet accent.
+    inline juce::Colour laneStereo() { return orange(); }                   // ST — brand orange (hero hue)
+    inline juce::Colour laneLeft()   { return juce::Colour (0xffe6ebf2); }  // L  — soft cool white
+    inline juce::Colour laneRight()  { return juce::Colour (0xffef5b6b); }  // R  — clear red
+    inline juce::Colour laneMid()    { return juce::Colour (0xff46c98a); }  // M  — emerald green
+    inline juce::Colour laneSide()   { return juce::Colour (0xff4f9bef); }  // S  — azure blue
+
+    // Lane index (teq::Lane order: ST/L/R/M/S = 0..4) -> its fixed colour.
+    inline juce::Colour lane (int idx)
+    {
+        switch (idx)
+        {
+            case 1:  return laneLeft();
+            case 2:  return laneRight();
+            case 3:  return laneMid();
+            case 4:  return laneSide();
+            default: return laneStereo();
+        }
+    }
 }
