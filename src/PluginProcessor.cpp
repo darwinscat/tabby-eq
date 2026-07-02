@@ -189,7 +189,7 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", tabby::createParameterLayout()),
-      updateCheckerInstance (tabby::currentDescribe(), appPreferencesInstance)   // compares kDescribe → latest release
+      updateCheckerInstance (tabby::currentDescribe(), *appPreferencesInstance)   // compares kDescribe → latest release (prefs shared process-wide)
 {
     // Wire the per-band / per-lane atomic parameter pointers, and build the link-mirror index maps.
     const int numParams = getParameters().size();

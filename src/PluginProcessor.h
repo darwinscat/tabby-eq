@@ -187,9 +187,10 @@ private:
     int  resyncActiveLane (int band) const;                 // active lane from state prop / lowest-enabled fallback
 
     // appPreferencesInstance MUST precede updateCheckerInstance: the checker takes it by reference,
-    // so it has to be constructed first (members init in declaration order).
-    tabby::AppPreferences appPreferencesInstance;   // single global PropertiesFile owner (per-machine)
-    tabby::UpdateChecker  updateCheckerInstance;    // version + opt-in update check (built in the ctor)
+    // so it has to be constructed first (members init in declaration order). SharedResourcePointer =
+    // ONE AppPreferences per host process, shared by every TabbyEQ instance (see AppPreferences.h).
+    juce::SharedResourcePointer<tabby::AppPreferences> appPreferencesInstance;   // process-wide PropertiesFile owner
+    tabby::UpdateChecker updateCheckerInstance;                                  // version + opt-in update check (built in the ctor)
 
     teq::EqEngine engine;
 

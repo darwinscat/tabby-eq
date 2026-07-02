@@ -92,6 +92,25 @@ elseif(FCORE_TAG)
     set(_core "${FCORE_TAG}")                 # the pinned public release was fetched
 endif()
 
+# --- escape the collected values for C++ double-quoted string literals ----------------------
+# git tags may legally carry '"' or '\' (e.g. v1.2.3"x) and TABBYEQ_BUILDER / USER are arbitrary
+# env text — unescaped they would break the emitted header's compilation. Backslash and quote are
+# escaped; tab/CR/LF collapse to a space; UTF-8 bytes above ASCII pass through untouched.
+# (Other C0 control chars are not representable in CMake strings coming from execute_process/env
+# on the platforms we build on, so backslash+quote+whitespace is the complete practical set.)
+function(_tabby_cxx_escape var)
+    set(_v "${${var}}")
+    string(REPLACE "\\" "\\\\" _v "${_v}")
+    string(REPLACE "\"" "\\\"" _v "${_v}")
+    string(REGEX REPLACE "[\t\r\n]" " " _v "${_v}")
+    set(${var} "${_v}" PARENT_SCOPE)
+endfunction()
+
+_tabby_cxx_escape(_describe)
+_tabby_cxx_escape(_hash)
+_tabby_cxx_escape(_builder)
+_tabby_cxx_escape(_core)
+
 # --- emit the header ------------------------------------------------------------------------
 set(_content "// SPDX-License-Identifier: AGPL-3.0-or-later
 // GENERATED at build time by cmake/GenerateTabbyVersion.cmake — DO NOT EDIT, DO NOT COMMIT.

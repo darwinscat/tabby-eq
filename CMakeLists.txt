@@ -260,6 +260,11 @@ tabbyeq_sanitize(TabbyEQ_LifecycleTest
     src/UpdateChecker.cpp)
 
 add_test(NAME tabbyeq_lifecycle_misuse COMMAND TabbyEQ_LifecycleTest)
+# Prefs isolation: the harness constructs the REAL processor, whose AppPreferences would otherwise
+# read/write the developer's real per-user settings file (test pollution + CI variance). The env
+# override points it at a scratch dir inside the build tree (see AppPreferences.h).
+set_tests_properties(tabbyeq_lifecycle_misuse PROPERTIES
+    ENVIRONMENT "TABBYEQ_PREFS_DIR=${CMAKE_BINARY_DIR}/test-prefs")
 
 # ----------------------------------------------------------------------------
 # Adapter schema / v2->v3 migration / link-mirroring harness (v3 placement lanes). Same headless pattern:
@@ -308,6 +313,9 @@ tabbyeq_sanitize(TabbyEQ_AdapterTest
     src/UpdateChecker.cpp)
 
 add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
+# Same prefs isolation as the lifecycle harness (real processor => real AppPreferences otherwise).
+set_tests_properties(tabbyeq_adapter_schema PROPERTIES
+    ENVIRONMENT "TABBYEQ_PREFS_DIR=${CMAKE_BINARY_DIR}/test-prefs")
 
 endif()  # TABBYEQ_BUILD_TESTS
 
@@ -333,5 +341,16 @@ add_test(NAME tabbyeq_version_header COMMAND TabbyEQ_VersionTest)
 add_executable(TabbyEQ_UpdateCompareTest tests/update_compare.cpp)
 target_include_directories(TabbyEQ_UpdateCompareTest PRIVATE src)   # UpdateCompare.h
 add_test(NAME tabbyeq_update_compare COMMAND TabbyEQ_UpdateCompareTest)
+
+# ----------------------------------------------------------------------------
+# CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
+# a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
+# literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.
+# ----------------------------------------------------------------------------
+add_test(NAME tabbyeq_version_escape
+    COMMAND ${CMAKE_COMMAND}
+        -DGENERATOR=${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateTabbyVersion.cmake
+        -DTMP_DIR=${CMAKE_BINARY_DIR}/version-escape-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestVersionEscape.cmake)
 
 endif()  # TABBYEQ_BUILD_CORE_TESTS

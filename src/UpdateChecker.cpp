@@ -4,12 +4,17 @@
 #include "UpdateChecker.h"
 #include "UpdateCompare.h"   // the pure, JUCE-free compare rule (also unit-tested off the plugin)
 
+#include <utility>           // std::exchange
+
 namespace tabby
 {
 
 namespace
 {
     constexpr int  kTimeoutMs     = 5000;   // short — opt-in, non-blocking
+    // Join budget on destruction: the connect timeout is 5 s and cancel() aborts a blocked
+    // connect/read promptly, so 8 s is generous headroom before stopThread force-kills (last resort).
+    constexpr int  kJoinMs        = 8000;
     constexpr char kReleasesApi[] = "https://api.github.com/repos/darwinscat/tabby-eq/releases/latest";
     constexpr char kKeyLatest[]   = "updateLastSeenLatest";
     constexpr char kKeyEpoch[]    = "updateLastCheckEpoch";
@@ -23,13 +28,32 @@ namespace
 }
 
 UpdateChecker::UpdateChecker (juce::String currentDescribe, AppPreferences& prefsRef)
-    : current (std::move (currentDescribe)), prefs (prefsRef)
+    : juce::Thread ("TabbyEQ UpdateChecker"),
+      current (std::move (currentDescribe)), prefs (prefsRef)
 {
+    // Cross-process freshness: same-process instances share the PropertiesFile object (see
+    // AppPreferences), but another HOST PROCESS may have stored a newer tag — pick it up once here.
+    prefs.reload();
+
     // Badge-clear: if the running build has caught up to (or passed) a previously seen "latest",
     // drop the stored value so no stale badge shows. The ONLY place the plugin compares at ctor time.
     const juce::String seen = storedLatest();
     if (seen.isNotEmpty() && ! update::remoteIsNewer (current.toStdString(), seen.toStdString()))
         clearStored();
+}
+
+UpdateChecker::~UpdateChecker()
+{
+    // JOIN the worker before the plugin module can unload: signal, abort any blocking connect/read,
+    // wait. Then drop an undelivered async result (the AsyncUpdater base asserts on pending updates).
+    signalThreadShouldExit();
+    {
+        const juce::ScopedLock sl (streamLock);
+        if (activeStream != nullptr)
+            activeStream->cancel();                 // cross-thread-safe: unblocks connect/read promptly
+    }
+    stopThread (kJoinMs);
+    cancelPendingUpdate();
 }
 
 juce::String UpdateChecker::storedLatest() const
@@ -64,7 +88,9 @@ void UpdateChecker::clearStored()
     }
 }
 
-UpdateChecker::Result UpdateChecker::fetch (const juce::String& describe)
+// Worker thread. Blocking; the stream is registered under streamLock while it can block so the
+// destructor can cancel() it from another thread.
+UpdateChecker::Result UpdateChecker::fetch()
 {
     Result r;
 
@@ -79,12 +105,28 @@ UpdateChecker::Result UpdateChecker::fetch (const juce::String& describe)
     web.withConnectionTimeout (kTimeoutMs)
        .withNumRedirectsToFollow (3)
        .withExtraHeaders (headers);
-    if (! web.connect (nullptr))            // no network / DNS / TLS failure
-        return r;
-    if (web.getStatusCode() != 200)         // 404 = no releases yet, 403 = rate-limited, etc.
+
+    {
+        const juce::ScopedLock sl (streamLock);
+        if (threadShouldExit())
+            return r;                               // shutting down — never even start the request
+        activeStream = &web;                        // publish for cross-thread cancel()
+    }
+
+    const bool connected = web.connect (nullptr);   // no network / DNS / TLS failure → false
+    juce::String body;
+    if (connected && web.getStatusCode() == 200)    // 404 = no releases yet, 403 = rate-limited, etc.
+        body = web.readEntireStreamAsString();
+
+    {
+        const juce::ScopedLock sl (streamLock);
+        activeStream = nullptr;                     // retire BEFORE the stack-scope stream dies
+    }
+
+    if (threadShouldExit() || body.isEmpty())
         return r;
 
-    const juce::var json = juce::JSON::parse (web.readEntireStreamAsString());
+    const juce::var json = juce::JSON::parse (body);
     if (! json.isObject())
         return r;
 
@@ -98,27 +140,35 @@ UpdateChecker::Result UpdateChecker::fetch (const juce::String& describe)
     r.latest   = tag;
     r.url      = json.getProperty ("html_url", juce::var()).toString();   // the release page
     r.notes    = json.getProperty ("name",     juce::var()).toString();   // release title (optional)
-    r.outdated = update::remoteIsNewer (describe.toStdString(), tag.toStdString());
+    r.outdated = update::remoteIsNewer (current.toStdString(), tag.toStdString());
     return r;
 }
 
-void UpdateChecker::checkNow (std::function<void (Result)> onDone)
+void UpdateChecker::run()
 {
-    const juce::String ver = current;                       // capture by value (thread-safe)
-    juce::WeakReference<UpdateChecker> weak (this);
-    juce::Thread::launch ([weak, ver, onDone]
-    {
-        const Result r = fetch (ver);                       // static — touches no instance state
-        // Store + notify on the message thread (PropertiesFile + UI are not RT/thread-safe).
-        juce::MessageManager::callAsync ([weak, onDone, r]
-        {
-            if (auto* self = weak.get())                    // no-op if the plugin was removed meanwhile
-                if (r.ok && r.outdated && r.latest.isNotEmpty())
-                    self->storeOutdated (r.latest);
-            if (onDone)
-                onDone (r);
-        });
-    });
+    const Result r = fetch();
+    if (threadShouldExit())
+        return;                                     // shutting down — drop the result silently
+    pending = r;                                    // visible to handleAsyncUpdate: the message post synchronizes
+    triggerAsyncUpdate();
+}
+
+void UpdateChecker::handleAsyncUpdate()
+{
+    // Message thread. Persist first (PropertiesFile is not thread-safe), then notify the popover.
+    if (pending.ok && pending.outdated && pending.latest.isNotEmpty())
+        storeOutdated (pending.latest);
+
+    if (auto cb = std::exchange (onDone, nullptr))
+        cb (pending);
+}
+
+void UpdateChecker::checkNow (std::function<void (Result)> cb)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    onDone = std::move (cb);
+    if (! isThreadRunning())
+        startThread();                              // a finished worker restarts cleanly
 }
 
 } // namespace tabby

@@ -39,6 +39,11 @@ int main()
     check (parseSemver ("v3").major == 3 && parseSemver ("v3").minor == 0, "parse partial v3 -> {3,0,0}");
     check (parseSemver ("v10.20.30").major == 10 && parseSemver ("v10.20.30").minor == 20 && parseSemver ("v10.20.30").patch == 30, "parse multi-digit");
 
+    // --- parseSemver: hostile-input bound (kMaxComponentDigits) — no int overflow --------------
+    check (parseSemver ("v999999.1.2").major == 999999 && parseSemver ("v999999.1.2").patch == 2, "parse 6-digit component (at the bound)");
+    check (parseSemver ("v1234567.0.0").major == 0 && parseSemver ("v1234567.0.0").minor == 0, "parse 7-digit component -> unparseable {0,0,0}");
+    check (parseSemver ("v1.99999999999999999999.1").major == 0, "parse absurd middle component -> unparseable {0,0,0}");
+
     // --- isCleanRelease: only a bare vX.Y.Z is a clean release --------------------------------
     check (isCleanRelease ("v0.1.0"),  "v0.1.0 is a clean release");
     check (isCleanRelease ("1.2.3"),   "1.2.3 is a clean release");
@@ -49,6 +54,8 @@ int main()
     check (! isCleanRelease ("v0.1"),               "v0.1 (missing patch) is NOT clean");
     check (! isCleanRelease (""),                   "empty is NOT clean");
     check (! isCleanRelease ("v1.2.3.4"),           "four-part is NOT clean");
+    check (  isCleanRelease ("v999999.0.0"),        "6-digit component (at the bound) IS clean");
+    check (! isCleanRelease ("v1234567.0.0"),       "7-digit component is NOT clean (matches parse rejection)");
 
     // --- remoteIsNewer: clean-release numeric semver compare ----------------------------------
     expectNewer ("v0.1.0", "0.2.0", true,  "clean 0.1.0 < release 0.2.0");
@@ -70,6 +77,8 @@ int main()
     expectNewer ("v0.1.0",             "",         false, "empty remote tag offers nothing");
     expectNewer ("v0.1.0",             "0.0.0",    false, "0.0.0 remote offers nothing");
     expectNewer ("0.0.0-dev",          "unknown",  false, "unparseable remote offers nothing even to a dev build");
+    expectNewer ("v0.1.0", "99999999999999999999.0.0", false, "hostile over-long remote is rejected (no overflow)");
+    expectNewer ("v1234567.0.0",       "0.1.0",    true,  "hostile over-long local counts as dev < any release");
 
     std::printf (failures == 0 ? "\nALL PASS\n" : "\n%d FAILURE(S)\n", failures);
     return failures == 0 ? 0 : 1;

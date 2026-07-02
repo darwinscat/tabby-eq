@@ -29,22 +29,32 @@ namespace tabby::update
 {
     struct Semver { int major = 0, minor = 0, patch = 0; };
 
+    // Hostile-input bound: a version component may carry at most 6 digits (max 999999 — far beyond
+    // any real release). More digits marks the whole string UNPARSEABLE ({0,0,0} / not clean), so a
+    // hostile tag can never sign-overflow the int accumulation (999999 * 10 + 9 << INT_MAX).
+    inline constexpr int kMaxComponentDigits = 6;
+
     // Parse major.minor.patch from the LEADING part of a version string. A single leading 'v'/'V'
     // is stripped; scanning stops at the first char that is neither a digit nor a '.', so
     // "v0.1.0-78-g7ba0138" -> {0,1,0}, "0.0.0-dev" -> {0,0,0}, "unknown" -> {0,0,0}. Missing
-    // components default to 0.
+    // components default to 0. Any component longer than kMaxComponentDigits rejects the whole
+    // string to {0,0,0} (see the bound above).
     constexpr Semver parseSemver (std::string_view s) noexcept
     {
         if (! s.empty() && (s.front() == 'v' || s.front() == 'V'))
             s.remove_prefix (1);
 
         Semver out {};
-        int idx = 0, val = 0;                                   // idx: 0=major 1=minor 2=patch
+        int idx = 0, val = 0, digits = 0;                       // idx: 0=major 1=minor 2=patch
         auto commit = [&] { if (idx == 0) out.major = val; else if (idx == 1) out.minor = val; else if (idx == 2) out.patch = val; };
         for (char c : s)
         {
-            if (c >= '0' && c <= '9')      val = val * 10 + (c - '0');
-            else if (c == '.') { commit(); if (++idx > 2) return out; val = 0; }
+            if (c >= '0' && c <= '9')
+            {
+                if (++digits > kMaxComponentDigits) return {};  // hostile/absurd component → unparseable
+                val = val * 10 + (c - '0');
+            }
+            else if (c == '.') { commit(); if (++idx > 2) return out; val = 0; digits = 0; }
             else               break;                           // '-', '+', letter, space … : end of the numeric version
         }
         commit();
@@ -52,19 +62,21 @@ namespace tabby::update
     }
 
     // Is `describe` an exact, clean release tag "vX.Y.Z" (nothing after the patch)? Any commits-ahead
-    // suffix ("-N-g…"), "-dirty", pre-release text, "0.0.0-dev" or "unknown" makes it NOT clean → a dev build.
+    // suffix ("-N-g…"), "-dirty", pre-release text, "0.0.0-dev" or "unknown" makes it NOT clean → a dev
+    // build. An over-long component (see kMaxComponentDigits) is also not clean, keeping this
+    // consistent with parseSemver's rejection.
     constexpr bool isCleanRelease (std::string_view s) noexcept
     {
         if (! s.empty() && (s.front() == 'v' || s.front() == 'V'))
             s.remove_prefix (1);
         if (s.empty()) return false;
 
-        int dots = 0;
+        int dots = 0, digits = 0;
         bool digitInPart = false;
         for (char c : s)
         {
-            if      (c >= '0' && c <= '9') digitInPart = true;
-            else if (c == '.') { if (! digitInPart) return false; ++dots; digitInPart = false; }
+            if      (c >= '0' && c <= '9') { digitInPart = true; if (++digits > kMaxComponentDigits) return false; }
+            else if (c == '.') { if (! digitInPart) return false; ++dots; digitInPart = false; digits = 0; }
             else               return false;                    // any '-', letter, etc. → not a clean release
         }
         return dots == 2 && digitInPart;                        // exactly major.minor.patch, patch present
