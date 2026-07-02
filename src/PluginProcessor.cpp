@@ -104,11 +104,14 @@ namespace
                 // ms-band migrates in place ({m,s} lanes on band b) with sType silently coerced to the
                 // shared type — inaudible (the point is off), so no migrationNote either.
                 const bool live  = mig[(size_t) b].on;
-                const int  freeT = (live && sType != mig[(size_t) b].type) ? nextFree() : -1;
+                // Fission only when the Side lane is actually AUDIBLE (live point + side enabled): fissioning
+                // a disabled side lane would burn a free slot on an on-but-all-lanes-off husk of a point.
+                // A disabled side migrates in place (values kept, sType silently dropped — inaudible).
+                const int  freeT = (live && sOn && sType != mig[(size_t) b].type) ? nextFree() : -1;
                 if (sType == mig[(size_t) b].type || freeT < 0)
                 {
                     mig[(size_t) b].lane[4] = { sOn, sFreq, sQ, sGain, sSlope, sByp };   // Side on band b
-                    if (live && sType != mig[(size_t) b].type) migrationNote = true;     // pool full on a LIVE band -> audible coercion
+                    if (live && sOn && sType != mig[(size_t) b].type) migrationNote = true;   // pool full on an AUDIBLE side -> noted coercion
                     mig[(size_t) b].linkFq = msFreqLink && std::abs (oFreq - sFreq) < 0.01;
                 }
                 else   // fission: Side moves to the first free slot as an {s}-only point of type=sType

@@ -228,6 +228,25 @@ int main()
         check (near (rv (p->apvts, laneParamId (0, 3, "freq")), 1000.0), "pristine: target Mid freq back at default (not 500)");
     }
 
+    // ============================ 4d. A DISABLED side lane never fissions ============================
+    // ms=true, sOn=false, sType != type on a LIVE band: fissioning would burn a slot on an on-but-empty
+    // point. Must migrate in place: side values kept on band b (lane off), sType silently dropped.
+    {
+        auto p = std::make_unique<TabbyEqAudioProcessor>();
+        V2Builder v;
+        v.band (1, true, 0 /*Bell*/, 750.0, 1.5, 3.0, 1, false);
+        v.side (1, true /*ms*/, false /*sOn=false — side DISABLED*/, 2 /*sType != Bell*/, 5000.0, 1.0, -4.0, 1, false);
+        v.load (*p);
+
+        int onCount = 0;
+        for (int b = 0; b < kNumBands; ++b) if (rv (p->apvts, bandId (b, "on")) > 0.5f) ++onCount;
+        check (onCount == 1, "noFission: only the source band is on (no empty fissioned point)");
+        check (rv (p->apvts, laneParamId (1, 4, "on")) < 0.5f, "noFission: side lane stays disabled in place");
+        check (near (rv (p->apvts, laneParamId (1, 4, "freq")), 5000.0), "noFission: side values preserved in place");
+        check ((int) rv (p->apvts, bandId (1, "type")) == 0, "noFission: shared type stays the Mid type");
+        check (! prop (p->apvts, bandId (1, "migrationNote")), "noFission: no note for an inaudible coercion");
+    }
+
     // ============================ 5. Migration: pool full -> coerce sType->type + migrationNote ============================
     {
         auto p = std::make_unique<TabbyEqAudioProcessor>();
