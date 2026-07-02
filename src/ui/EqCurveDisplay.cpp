@@ -1140,10 +1140,11 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             if (slopeIndex >= 0) setParamGestured (tabby::laneParamId (b, 0, "slope"), (double) slopeIndex);
             setParamGestured (tabby::laneParamId (b, 0, "byp"), 0.0);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);            // point bypass off
-            // Fresh band = defined link state: a recycled slot may carry the previous point's linkFq/linkQ
-            // props; clear them so a later first split re-seeds cleanly from the View defaults.
-            proc.apvts.state.setProperty (tabby::bandId (b, "linkFq"), false, nullptr);
-            proc.apvts.state.setProperty (tabby::bandId (b, "linkQ"),  false, nullptr);
+            // Fresh band = INHERITED link state: REMOVE any props a recycled slot carried, so the point
+            // inherits the View defaults (absent = inherit; the first split materializes them; an
+            // explicit pre-split toggle sticks). Writing false here would silently defeat the defaults.
+            proc.apvts.state.removeProperty (tabby::bandId (b, "linkFq"), nullptr);
+            proc.apvts.state.removeProperty (tabby::bandId (b, "linkQ"),  nullptr);
             setParamGestured (tabby::bandId (b, "on"), 1.0);               // point on
             selectBand (b);
             return;

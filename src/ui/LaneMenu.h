@@ -110,11 +110,24 @@ namespace tabby::lanemenu
     // Seed the point's Link FQ / Link Q from the View-menu defaults (a point that just became a split).
     // Defaults only ever turn a flag ON — they never reset a flag the user explicitly enabled (a
     // re-split must not silently discard that choice). The defaults themselves default to ON.
+    // Inheritance semantics: an ABSENT per-band link prop means "inherit the View default"; an explicit
+    // prop (user toggled, or materialized at first split) always wins, in BOTH directions.
+    inline bool effectiveLink (TabbyEqAudioProcessor& p, int b, const char* prop, const char* defProp)
+    {
+        auto& st = p.apvts.state;
+        const auto id = tabby::bandId (b, prop);
+        if (st.hasProperty (id)) return (bool) st.getProperty (id, false);
+        return (bool) st.getProperty (defProp, true);
+    }
+    // First split MATERIALIZES the inherited defaults into explicit band props (the processor's mirror
+    // reads the band props directly) — but never overrides a prop the user already set pre-split.
     inline void seedLinkDefaults (TabbyEqAudioProcessor& p, int b)
     {
         auto& st = p.apvts.state;
-        if ((bool) st.getProperty ("defaultLinkFq", true)) st.setProperty (tabby::bandId (b, "linkFq"), true, nullptr);
-        if ((bool) st.getProperty ("defaultLinkQ",  true)) st.setProperty (tabby::bandId (b, "linkQ"),  true, nullptr);
+        if (! st.hasProperty (tabby::bandId (b, "linkFq")))
+            st.setProperty (tabby::bandId (b, "linkFq"), (bool) st.getProperty ("defaultLinkFq", true), nullptr);
+        if (! st.hasProperty (tabby::bandId (b, "linkQ")))
+            st.setProperty (tabby::bandId (b, "linkQ"), (bool) st.getProperty ("defaultLinkQ", true), nullptr);
     }
     // FIRST-TRANSITION rule: a plain {ST} point clicked on a DOMAIN lane splits into that lane's natural
     // PAIR — Mid/Side or Left/Right — with ST off, killing the confusing transient ST+Mid hybrid state.
@@ -334,7 +347,7 @@ namespace tabby::lanemenu
         void paint (juce::Graphics& g) override
         {
             auto rf = getLocalBounds().toFloat();
-            const bool on = (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
+            const bool on = effectiveLink (ctx->proc, ctx->band, prop(), isFreq ? "defaultLinkFq" : "defaultLinkQ");
             if (isItemHighlighted()) { g.setColour (juce::Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (rf.reduced (2.0f, 1.0f), 4.0f); }
 
             auto box = juce::Rectangle<float> (rf.getX() + 7.0f, rf.getCentreY() - 6.0f, 12.0f, 12.0f);
@@ -354,7 +367,7 @@ namespace tabby::lanemenu
 
         void mouseUp (const juce::MouseEvent&) override
         {
-            const bool v = ! (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
+            const bool v = ! effectiveLink (ctx->proc, ctx->band, prop(), isFreq ? "defaultLinkFq" : "defaultLinkQ");
             // Snap BEFORE raising the flag: with the link still off, the snap writes aren't re-mirrored
             // by the processor's drain (pure single writes), and the flag only ever goes true over an
             // already-converged point.
