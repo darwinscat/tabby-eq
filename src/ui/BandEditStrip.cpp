@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/BandEditStrip.h"
+
+#include <cmath>
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
@@ -254,12 +256,35 @@ void BandEditStrip::updateForType()
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
-    // The Notch rides a variable ORDER (slope->order like HP/LP), so it takes the slope combo in octaves too.
-    const bool usesSlope = isCut || (t == teq::FilterType::Notch);
+    // The Notch rides a variable ORDER (slope->order like HP/LP), so it shows the slope combo — but its
+    // Q is an INDEPENDENT width (the −3 dB bandwidth, order-invariant), so unlike HP/LP the width bar
+    // stays too (Oleh: «мы у Notch в окне ширину забыли»). Width displays in OCTAVES for the two
+    // bandwidth-shaped types (Notch + BandPass): BW = (2/ln2)·asinh(1/(2Q)), exact and invertible.
+    const bool isNotch   = (t == teq::FilterType::Notch);
+    const bool isBw      = isNotch || (t == teq::FilterType::BandPass);
+    const bool usesSlope = isCut || isNotch;
 
-    slopeBox.setVisible (usesSlope);                   // HP/LP + Notch -> the slope combo (octaves) replaces Q
+    slopeBox.setVisible (usesSlope);
     gain.setVisible (hasGain);   gain.setEnabled (hasGain);
-    q.setVisible (! usesSlope && ! isTilt);   q.setEnabled (! usesSlope && ! isTilt);   // no Q for HP/LP/Notch or tilt
+    const bool qOn = ! isCut && ! isTilt;              // only HP/LP (slope IS the width) and Tilt hide Q
+    q.setVisible (qOn);   q.setEnabled (qOn);
+
+    if (isBw)                                          // show/edit the width in octaves
+    {
+        q.textFromValueFunction = [] (double v)
+        { return juce::String ((2.0 / std::log (2.0)) * std::asinh (1.0 / (2.0 * juce::jmax (0.05, v))), 2) + " oct"; };
+        q.valueFromTextFunction = [] (const juce::String& txt)
+        {
+            const double bw = juce::jlimit (0.01, 12.0, txt.getDoubleValue());
+            return 1.0 / (2.0 * std::sinh (std::log (2.0) * bw / 2.0));
+        };
+    }
+    else
+    {
+        q.textFromValueFunction = [] (double v) { return juce::String (v, 1); };
+        q.valueFromTextFunction = nullptr;
+    }
+    q.updateText();
     resized();                                         // visibility changed -> re-lay the bottom row
 }
 
@@ -304,7 +329,15 @@ void BandEditStrip::resized()
     {
         slopeBox.setBounds (row.removeFromRight (104).withSizeKeepingCentre (104, 22));
         row.removeFromRight (8);
-        freq.setBounds (row);                                          // FREQ fills the rest
+        if (q.isVisible())                                             // Notch: FREQ | WIDTH(oct) share the rest
+        {
+            auto half = row.removeFromLeft (row.getWidth() / 2);
+            half.removeFromRight (2); row.removeFromLeft (2);
+            freq.setBounds (half);
+            q.setBounds (row);
+        }
+        else
+            freq.setBounds (row);                                      // HP/LP: FREQ fills the rest
     }
     else
     {
