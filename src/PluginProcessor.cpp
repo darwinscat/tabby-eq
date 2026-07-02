@@ -99,11 +99,16 @@ namespace
                 mig[(size_t) b].lane[0].on = false;                                      // ST off
                 mig[(size_t) b].lane[3]    = { true, oFreq, oQ, oGain, oSlope, oByp };   // Mid <- flat (bypass -> Mid lane byp)
 
-                const int freeT = (sType != mig[(size_t) b].type) ? nextFree() : -1;
+                // Fission ONLY for a LIVE band. A deleted (off) v2 band can carry stale ms/sType data;
+                // fissioning that would RESURRECT the deleted Side as a new, audible ON point. An off
+                // ms-band migrates in place ({m,s} lanes on band b) with sType silently coerced to the
+                // shared type — inaudible (the point is off), so no migrationNote either.
+                const bool live  = mig[(size_t) b].on;
+                const int  freeT = (live && sType != mig[(size_t) b].type) ? nextFree() : -1;
                 if (sType == mig[(size_t) b].type || freeT < 0)
                 {
                     mig[(size_t) b].lane[4] = { sOn, sFreq, sQ, sGain, sSlope, sByp };   // Side on band b
-                    if (sType != mig[(size_t) b].type) migrationNote = true;             // pool full -> coerce sType->type
+                    if (live && sType != mig[(size_t) b].type) migrationNote = true;     // pool full on a LIVE band -> audible coercion
                     mig[(size_t) b].linkFq = msFreqLink && std::abs (oFreq - sFreq) < 0.01;
                 }
                 else   // fission: Side moves to the first free slot as an {s}-only point of type=sType
@@ -177,21 +182,21 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
 {
     // Wire the per-band / per-lane atomic parameter pointers, and build the link-mirror index maps.
     const int numParams = getParameters().size();
-    linkKind.assign    ((size_t) numParams, (int8_t) -1);
+    linkField.assign   ((size_t) numParams, (int8_t) -1);
     linkBand.assign    ((size_t) numParams, (int16_t) -1);
     linkLaneIdx.assign ((size_t) numParams, (int16_t) -1);
 
-    auto mapLink = [this] (const juce::String& id, int band, int lane, int8_t kind)
+    auto mapLink = [this] (const juce::String& id, int band, int lane, int8_t field)
     {
         if (auto* p = apvts.getParameter (id))
         {
             const int idx = p->getParameterIndex();
-            if (idx >= 0 && idx < (int) linkKind.size())
+            if (idx >= 0 && idx < (int) linkField.size())
             {
-                linkKind[(size_t) idx]    = kind;
+                linkField[(size_t) idx]   = field;
                 linkBand[(size_t) idx]    = (int16_t) band;
                 linkLaneIdx[(size_t) idx] = (int16_t) lane;
-                p->addListener (this);            // RT-safe: parameterValueChanged only pushes to the FIFO
+                p->addListener (this);            // listener body is alloc/lock-free: it only pushes to the FIFO
             }
         }
     };
@@ -212,11 +217,12 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
             ln.gain  = apvts.getRawParameterValue (tabby::laneParamId (b, L, "gain"));
             ln.slope = apvts.getRawParameterValue (tabby::laneParamId (b, L, "slope"));
             ln.byp   = apvts.getRawParameterValue (tabby::laneParamId (b, L, "byp"));
-            // Link mirroring listens to the width/position params of every lane. freq -> Freq event;
-            // q and slope -> Width event (the drain picks Q or slope from the shared type).
-            mapLink (tabby::laneParamId (b, L, "freq"),  b, L, (int8_t) kKindFreq);
-            mapLink (tabby::laneParamId (b, L, "q"),     b, L, (int8_t) kKindWidth);
-            mapLink (tabby::laneParamId (b, L, "slope"), b, L, (int8_t) kKindWidth);
+            // Link mirroring listens to the position/width params of every lane. Each event carries the
+            // EXACT field (freq/q/slope) + the captured value — the drain replays them verbatim (freq is
+            // gated by linkFq, q AND slope by linkQ; no drain-time type mapping).
+            mapLink (tabby::laneParamId (b, L, "freq"),  b, L, (int8_t) kFieldFreq);
+            mapLink (tabby::laneParamId (b, L, "q"),     b, L, (int8_t) kFieldQ);
+            mapLink (tabby::laneParamId (b, L, "slope"), b, L, (int8_t) kFieldSlope);
         }
         activeLaneAtom[(size_t) b].store (-1, std::memory_order_relaxed);
     }
@@ -231,8 +237,8 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
 TabbyEqAudioProcessor::~TabbyEqAudioProcessor()
 {
     lpUpdater.stopTimer();
-    for (int i = 0; i < (int) linkKind.size(); ++i)
-        if (linkKind[(size_t) i] >= 0)
+    for (int i = 0; i < (int) linkField.size(); ++i)
+        if (linkField[(size_t) i] >= 0)
             if (auto* p = getParameters()[i])
                 p->removeListener (this);
 }
@@ -425,7 +431,10 @@ void TabbyEqAudioProcessor::lpTick()
 }
 
 //==============================================================================
-// Link mirroring — the RT-safe producer + the message-thread drain.
+// Link mirroring — the producer (any thread) + the message-thread drain. Honesty: the listener BODY is
+// alloc/lock-free (FIFO push + two relaxed stores), but JUCE's own listener dispatch briefly holds the
+// parameter's listener lock — uncontended except during editor open/close listener churn, and inherent to
+// every JUCE parameter listener/attachment, not added by this design.
 // Re-entrancy tag for the mirror writes. THREAD-LOCAL, not a shared atomic: a shared flag would also
 // swallow a GENUINE audio-thread automation event that lands inside the message thread's brief mirror
 // window (the edit itself would apply but its mirror would silently be skipped, desyncing linked lanes
@@ -433,19 +442,23 @@ void TabbyEqAudioProcessor::lpTick()
 // on its own thread and nothing else.
 static thread_local bool tlsMirrorWrite = false;
 
-void TabbyEqAudioProcessor::parameterValueChanged (int parameterIndex, float /*newValue*/)
+void TabbyEqAudioProcessor::parameterValueChanged (int parameterIndex, float newValue)
 {
     if (tlsMirrorWrite) return;                                               // our own mirror write — never re-enqueue
-    if (parameterIndex < 0 || parameterIndex >= (int) linkKind.size()) return;
-    const int8_t kind = linkKind[(size_t) parameterIndex];
-    if (kind < 0) return;
-    linkFifo.push (linkBand[(size_t) parameterIndex], linkLaneIdx[(size_t) parameterIndex], kind);   // sets overflowed on full
+    if (parameterIndex < 0 || parameterIndex >= (int) linkField.size()) return;
+    const int8_t field = linkField[(size_t) parameterIndex];
+    if (field < 0) return;
+    // Capture the exact FIELD and the VALUE the listener saw: the drain replays captured values verbatim,
+    // so interleaved edits of two linked lanes can't corrupt each other via drain-time source re-reads, and
+    // a type change between enqueue and drain can't remap which param a width event means.
+    linkFifo.push ({ (int) linkBand[(size_t) parameterIndex], (int) linkLaneIdx[(size_t) parameterIndex],
+                     (int) field, newValue });                                // sets overflowed on full
     linkDirty.store (true, std::memory_order_release);
 }
 
 void TabbyEqAudioProcessor::drainLinkFifo()
 {
-    auto flush = [this] { int b, l, k; while (linkFifo.pop (b, l, k)) {} };
+    auto flush = [this] { LinkEvent e; while (linkFifo.pop (e)) {} };
 
     if (linkFifo.overflowed.exchange (false, std::memory_order_acquire))     // storm: discard partial stream, resync
     {
@@ -456,8 +469,17 @@ void TabbyEqAudioProcessor::drainLinkFifo()
     }
     if (! linkDirty.exchange (false, std::memory_order_acquire)) return;
 
-    int band, lane, kind;
-    while (linkFifo.pop (band, lane, kind)) mirrorOne (band, lane, kind);
+    // Replay in FIFO delivery order, coalescing CONSECUTIVE events for the same param (only the run's last
+    // value is mirrored — the earlier ones are dead intermediate states of the same knob).
+    LinkEvent cur, e;
+    bool have = false;
+    while (linkFifo.pop (e))
+    {
+        if (have && ! (e.band == cur.band && e.lane == cur.lane && e.field == cur.field))
+            mirrorEvent (cur);
+        cur = e; have = true;
+    }
+    if (have) mirrorEvent (cur);
 
     if (linkFifo.overflowed.exchange (false, std::memory_order_acquire))     // overflow set mid-drain
     {
@@ -466,41 +488,39 @@ void TabbyEqAudioProcessor::drainLinkFifo()
     }
 }
 
-void TabbyEqAudioProcessor::mirrorField (int band, int srcLane, const char* field)
+// Write one captured normalized value to EVERY enabled lane of the point (disabled lanes are never
+// written; they inherit on enable). Tagged so the writes never re-enqueue.
+void TabbyEqAudioProcessor::applyToEnabledLanes (int band, const char* field, float v01)
 {
-    auto* src = apvts.getParameter (tabby::laneParamId (band, srcLane, field));
-    if (src == nullptr) return;
-    const float v01 = src->getValue();                                       // current normalized source value (last-wins)
     for (int L = 0; L < tabby::kNumLanes; ++L)
     {
-        if (L == srcLane) continue;
         if (bands[(size_t) band].lane[L].on->load() <= 0.5f) continue;       // disabled lanes are not written
         if (auto* dst = apvts.getParameter (tabby::laneParamId (band, L, field)))
         {
             tlsMirrorWrite = true;                                           // tag: this write must not re-enqueue
-            dst->setValueNotifyingHost (v01);                               // same range -> a normalized copy is exact
+            dst->setValueNotifyingHost (v01);                               // same range across lanes -> normalized copy is exact
             tlsMirrorWrite = false;
         }
     }
 }
 
-void TabbyEqAudioProcessor::mirrorOne (int band, int lane, int kind)
+void TabbyEqAudioProcessor::mirrorEvent (const LinkEvent& ev)
 {
-    if (band < 0 || band >= tabby::kNumBands) return;
-    if (bands[(size_t) band].lane[lane].on->load() <= 0.5f) return;          // a disabled source lane doesn't drive
+    if (ev.band < 0 || ev.band >= tabby::kNumBands || ev.lane < 0 || ev.lane >= tabby::kNumLanes) return;
+    if (ev.field < 0 || ev.field > kFieldSlope) return;
+    if (bands[(size_t) ev.band].lane[ev.lane].on->load() <= 0.5f) return;    // a disabled source lane doesn't drive
 
-    if (kind == kKindFreq)
-    {
-        if (! (bool) apvts.state.getProperty (tabby::bandId (band, "linkFq"), false)) return;
-        mirrorField (band, lane, "freq");
-    }
-    else   // Width: Q for bell-like, slope for HP/LP/Notch (the type dictates the width control)
-    {
-        if (! (bool) apvts.state.getProperty (tabby::bandId (band, "linkQ"), false)) return;
-        const auto t = tabby::filterTypeFromChoice ((int) bands[(size_t) band].type->load());
-        const bool slopeType = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass || t == teq::FilterType::Notch);
-        mirrorField (band, lane, slopeType ? "slope" : "q");
-    }
+    // Gate by the point's link flags: freq under linkFq; q AND slope under linkQ (both are the point's
+    // width analogs — no drain-time type mapping, the event's field IS the param that moved).
+    const char* prop   = (ev.field == kFieldFreq) ? "linkFq" : "linkQ";
+    if (! (bool) apvts.state.getProperty (tabby::bandId (ev.band, prop), false)) return;
+
+    // Replay the CAPTURED value onto every enabled lane — INCLUDING the source. Re-asserting the source is
+    // what makes delivery order deterministic: when two linked lanes were edited between drains, the earlier
+    // event's mirror overwrites the later lane's newer edit, and the later event then re-asserts its captured
+    // value on all lanes — so the final state is the LAST delivered edit everywhere (LANES.md determinism).
+    // The source write is a no-op re-assert in the common single-edit case.
+    applyToEnabledLanes (ev.band, kLinkFieldNames[ev.field], ev.value);
 }
 
 int TabbyEqAudioProcessor::resyncActiveLane (int band) const
@@ -511,6 +531,10 @@ int TabbyEqAudioProcessor::resyncActiveLane (int band) const
     return -1;
 }
 
+// Overflow recovery: for every linked point, snap all enabled lanes to the ACTIVE lane's current values
+// (idempotent — the partial event stream was discarded, so "current active lane" is the best truth left).
+// linkQ snaps BOTH q and slope: they are the point's two width analogs and both live under that flag
+// (matches the event gating; no type mapping here either).
 void TabbyEqAudioProcessor::resyncAllLinks()
 {
     for (int b = 0; b < tabby::kNumBands; ++b)
@@ -520,13 +544,13 @@ void TabbyEqAudioProcessor::resyncAllLinks()
         if (! linkFq && ! linkQ) continue;
         const int active = resyncActiveLane (b);
         if (active < 0) continue;
-        if (linkFq) mirrorField (b, active, "freq");
-        if (linkQ)
+        auto snap = [this, b, active] (const char* field)
         {
-            const auto t = tabby::filterTypeFromChoice ((int) bands[(size_t) b].type->load());
-            const bool slopeType = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass || t == teq::FilterType::Notch);
-            mirrorField (b, active, slopeType ? "slope" : "q");
-        }
+            if (auto* src = apvts.getParameter (tabby::laneParamId (b, active, field)))
+                applyToEnabledLanes (b, field, src->getValue());
+        };
+        if (linkFq) snap ("freq");
+        if (linkQ)  { snap ("q"); snap ("slope"); }
     }
 }
 
@@ -562,7 +586,7 @@ void TabbyEqAudioProcessor::setStateInformation (const void* data, int sizeInByt
     else        apvts.replaceState (incoming);
     tlsMirrorWrite = false;
 
-    int b, l, k; while (linkFifo.pop (b, l, k)) {}
+    { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop any enqueues that slipped through the load
     linkFifo.overflowed.store (false, std::memory_order_relaxed);
     linkDirty.store (false, std::memory_order_relaxed);
     for (int i = 0; i < tabby::kNumBands; ++i)

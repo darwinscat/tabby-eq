@@ -171,6 +171,10 @@ bool EqCurveDisplay::splitLive (int b) const noexcept
     auto* s = proc.apvts.getRawParameterValue (tabby::laneParamId (b, 4, "on"));
     return (m != nullptr && m->load() > 0.5f) || (s != nullptr && s->load() > 0.5f);
 }
+bool EqCurveDisplay::laneEnabled (int b, bool side) const noexcept
+{
+    return paramCache[(size_t) b].lane (laneOf (b, side)).on;
+}
 teq::Lane EqCurveDisplay::laneOf (int b, bool side) const noexcept
 {
     if (! splitB (b)) return teq::Lane::Stereo;
@@ -287,9 +291,12 @@ EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
         {
-            const float dm = p.getDistanceSquaredFrom (nodePos (b, false));
-            if (dm < bestD) { bestD = dm; best = { b, false }; }
-            if (splitB (b))
+            if (laneEnabled (b, false))                       // {s}-only points have no ST/Mid node
+            {
+                const float dm = p.getDistanceSquaredFrom (nodePos (b, false));
+                if (dm < bestD) { bestD = dm; best = { b, false }; }
+            }
+            if (splitB (b) && laneEnabled (b, true))          // {m}-only points have no Side node
             {
                 const float ds = p.getDistanceSquaredFrom (nodePos (b, true));
                 if (ds < bestD) { bestD = ds; best = { b, true }; }
@@ -352,6 +359,9 @@ void EqCurveDisplay::endDragGesture()
 
 void EqCurveDisplay::selectBand (int newSel, bool side)
 {
+    // Never select a disabled lane: an {m}-only / {s}-only point (migration fission) has ONE node.
+    if (newSel >= 0 && ! laneEnabled (newSel, side) && laneEnabled (newSel, ! side))
+        side = ! side;
     if (newSel == selBand && side == selSide) return;
     selBand = newSel;
     selSide = (newSel >= 0) && side;
@@ -420,8 +430,8 @@ juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node
     juce::Point<float> others[tabby::kNumBands * 2]; int no = 0;     // every OTHER visible node centre
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
     {
-        if (! (b == selBand && ! selSide))              others[no++] = nodePos (b, false);
-        if (splitB (b) && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
+        if (laneEnabled (b, false) && ! (b == selBand && ! selSide))              others[no++] = nodePos (b, false);
+        if (splitB (b) && laneEnabled (b, true) && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
     }
 
     const juce::Rectangle<float> canvas (0.0f, 0.0f, (float) getWidth(), (float) getHeight());
@@ -552,7 +562,11 @@ void EqCurveDisplay::stepSelection (int dir)
     int idx[tabby::kNumBands]; int n = 0;
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) idx[n++] = b;
     if (n == 0) return;
-    auto mainFreq = [this] (int b) { return paramCache[(size_t) b].lane (laneOf (b, false)).freq; };   // ST/Mid node freq
+    auto mainFreq = [this] (int b)   // the band's PRIMARY node freq ({s}-only points: their one node is the Side lane)
+    {
+        const bool side = ! laneEnabled (b, false);
+        return paramCache[(size_t) b].lane (laneOf (b, side)).freq;
+    };
     for (int i = 1; i < n; ++i)                       // insertion sort by frequency (n <= 24)
     {
         const int k = idx[i]; int j = i - 1;
@@ -798,8 +812,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
     {
-        curveXs[nCurveX++] = freqToX (paramCache[b].lane (laneOf (b, false)).freq);
-        if (splitB (b)) curveXs[nCurveX++] = freqToX (paramCache[b].lane (teq::Lane::Side).freq);
+        if (laneEnabled (b, false)) curveXs[nCurveX++] = freqToX (paramCache[b].lane (laneOf (b, false)).freq);
+        if (splitB (b) && laneEnabled (b, true)) curveXs[nCurveX++] = freqToX (paramCache[b].lane (teq::Lane::Side).freq);
     }
     std::sort (curveXs, curveXs + nCurveX);
     // Below the graph floor, let the curve DIVE off the bottom axis (it's clipped to the plot area, below)
@@ -959,14 +973,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (paramCache[b].on)
         {
-            drawNode (b, false);
-            if (splitB (b)) drawNode (b, true);
+            if (laneEnabled (b, false)) drawNode (b, false);              // no phantom node for a disabled lane
+            if (splitB (b) && laneEnabled (b, true)) drawNode (b, true);
         }
 
     // --- selection highlight (the focused lane's node) --------------------
     const int  rb    = draggingBand >= 0 ? draggingBand : selBand;
     const bool rside = draggingBand >= 0 ? draggingSide : selSide;
-    if (rb >= 0 && rb < tabby::kNumBands && paramCache[(size_t) rb].on)
+    if (rb >= 0 && rb < tabby::kNumBands && paramCache[(size_t) rb].on && laneEnabled (rb, rside))
     {
         const auto pos = nodePos (rb, rside);
         g.setColour (juce::Colours::white.withAlpha (0.85f));
@@ -995,7 +1009,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     if (auditioning)
         drawListenVisual (g, (double) audFreq, (double) audQ, "LISTEN");
     else if (solo >= 0 && solo < tabby::kNumBands && paramCache[(size_t) solo].on)
-        drawListenVisual (g, paramCache[(size_t) solo].lane (laneOf (solo, false)).freq, (double) audQSetting, "SOLO");   // width from the Listen-Q config
+        drawListenVisual (g, paramCache[(size_t) solo].lane (laneOf (solo, ! laneEnabled (solo, false))).freq,   // primary node ({s}-only: Side)
+                          (double) audQSetting, "SOLO");   // width from the Listen-Q config
 
     // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
     if (placing)
@@ -1458,8 +1473,8 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
     // never pops the add-affordance under the cursor.
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[(size_t) b].on)
     {
-        if (hoverPos.getDistanceFrom (nodePos (b, false)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
-        if (splitB (b) && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+        if (laneEnabled (b, false) && hoverPos.getDistanceFrom (nodePos (b, false)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+        if (splitB (b) && laneEnabled (b, true) && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
     }
 
     // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)

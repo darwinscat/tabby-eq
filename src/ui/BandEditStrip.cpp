@@ -99,15 +99,20 @@ void BandEditStrip::setBand (int band)
 {
     curBand = band;
     const bool has = curBand >= 0;
-    // "split" (the two-lane UX's M/S mode) = the Mid or Side lane is enabled.
-    curMs = has && (proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneM, "on"))->load() > 0.5f
-                 || proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneS, "on"))->load() > 0.5f);
-    if (! curMs) editingSide = false;
+    // "split" (the two-lane UX's M/S mode) = the Mid or Side lane is enabled. Migration fission can make
+    // single-domain ({m}-only / {s}-only) points — clamp the edit lane to a lane that actually EXISTS.
+    const bool mOn = has && proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneM, "on"))->load() > 0.5f;
+    const bool sOn = has && proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneS, "on"))->load() > 0.5f;
+    curMs = mOn || sOn;
+    if (! curMs)                      editingSide = false;
+    else if (editingSide && ! sOn)    editingSide = false;   // {m}-only: no Side lane to edit
+    else if (! editingSide && ! mOn)  editingSide = true;    // {s}-only: no Mid lane to edit
 
     title.setText (has ? juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
     juce::Component* controls[] = { &onButton, &soloButton, &typeButton, &prevButton, &nextButton,
                                     &modeButton, &midTab, &sideTab, &slopeBox, &freq, &q, &gain };
     for (auto* c : controls) c->setEnabled (has);
+    midTab.setEnabled (mOn);   sideTab.setEnabled (sOn);     // single-domain points: only the live lane's tab
 
     modeButton.setButtonText (curMs ? "M/S" : "ST");
     modeButton.setColour (juce::TextButton::textColourOffId, curMs ? tabby::palette::orange() : tabby::palette::text());
@@ -143,6 +148,14 @@ int BandEditStrip::bandTypeIndex() const   // the point's SHARED filter type
 
 void BandEditStrip::setActiveLane (bool side)
 {
+    // Never point the strip at a disabled lane (single-domain points from migration fission).
+    if (curBand >= 0 && curMs)
+    {
+        auto laneOn = [this] (int lane)
+        { return proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, lane, "on"))->load() > 0.5f; };
+        if      (side   && ! laneOn (LaneS)) side = false;
+        else if (! side && ! laneOn (LaneM)) side = true;
+    }
     editingSide = side;
     midTab.setToggleState (! side, juce::dontSendNotification);
     sideTab.setToggleState (side, juce::dontSendNotification);

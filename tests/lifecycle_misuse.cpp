@@ -77,6 +77,13 @@ namespace
         if (auto* f = dynamic_cast<juce::AudioParameterFloat*> (s.getParameter (id))) *f = v;
     }
 
+    // Bool params (band/lane on, bypass) need their OWN setter: setChoice's dynamic_cast to
+    // AudioParameterChoice fails silently on an AudioParameterBool, so the write never happens.
+    void setBool (juce::AudioProcessorValueTreeState& s, const juce::String& id, bool v)
+    {
+        if (auto* b = dynamic_cast<juce::AudioParameterBool*> (s.getParameter (id))) *b = v;
+    }
+
     // Let the message thread run briefly so the processor's 30 Hz LpUpdater timer actually FIRES — before
     // prepare it must early-return on !prepared (the gate), after prepare it feeds the FIR builders.
     void pumpTimers (int ms)
@@ -191,7 +198,7 @@ int main()
         p->prepareToPlay (48000.0, 256);
         for (int b = 0; b < tabby::kNumBands; ++b)
         {
-            setChoice (p->apvts, tabby::bandId (b, "on"),   1);
+            setBool   (p->apvts, tabby::bandId (b, "on"),   true);          // Bool param — setChoice would silently no-op
             setChoice (p->apvts, tabby::bandId (b, "type"), b % 9);        // Bell..Tilt (shared point type)
             setChoice (p->apvts, tabby::laneParamId (b, 0, "slope"), b % 7);   // ST lane: 6..96 dB/oct
             setFloat  (p->apvts, tabby::laneParamId (b, 0, "freq"), 20.0f + (float) b * 800.0f);
@@ -199,12 +206,12 @@ int main()
             setFloat  (p->apvts, tabby::laneParamId (b, 0, "q"),    (b % 2 == 0 ? 40.0f : 0.05f));
             if (b % 3 == 0)   // exercise the split (M/S delta-fold) path on a third of the bands
             {
-                setChoice (p->apvts, tabby::laneParamId (b, 0, "on"), 0);       // ST off
-                setChoice (p->apvts, tabby::laneParamId (b, 3, "on"), 1);       // Mid on
-                setChoice (p->apvts, tabby::laneParamId (b, 4, "on"), 1);       // Side on
-                setFloat  (p->apvts, tabby::laneParamId (b, 3, "gain"), 6.0f);
-                setFloat  (p->apvts, tabby::laneParamId (b, 4, "gain"), -6.0f);
-                setFloat  (p->apvts, tabby::laneParamId (b, 4, "freq"), 20.0f + (float) b * 850.0f);
+                setBool (p->apvts, tabby::laneParamId (b, 0, "on"), false);     // ST off
+                setBool (p->apvts, tabby::laneParamId (b, 3, "on"), true);      // Mid on
+                setBool (p->apvts, tabby::laneParamId (b, 4, "on"), true);      // Side on
+                setFloat (p->apvts, tabby::laneParamId (b, 3, "gain"), 6.0f);
+                setFloat (p->apvts, tabby::laneParamId (b, 4, "gain"), -6.0f);
+                setFloat (p->apvts, tabby::laneParamId (b, 4, "freq"), 20.0f + (float) b * 850.0f);
             }
         }
         for (int mode = 0; mode <= 2; ++mode)
@@ -258,7 +265,7 @@ int main()
     {
         auto donor = std::make_unique<TabbyEqAudioProcessor>();
         setChoice (donor->apvts, "phaseMode", 2);
-        setFloat  (donor->apvts, tabby::bandId (0, "gain"), 12.0f);
+        setFloat  (donor->apvts, tabby::laneParamId (0, 0, "gain"), 12.0f);   // v3 id (ST lane) — band0_gain is a dead v2 id
         juce::MemoryBlock mb;
         donor->getStateInformation (mb);
 

@@ -98,6 +98,8 @@ private:
     // teq::Lane; splitB reads the paint cache, splitLive reads the live atomics (async menu callbacks).
     bool       splitB    (int b) const noexcept;            // paramCache: is the point split (Mid or Side lane on)?
     bool       splitLive (int b) const noexcept;            // live atomics variant
+    bool       laneEnabled (int b, bool side) const noexcept;   // is that node's lane ON? Migration can make {m}-only /
+                                                                // {s}-only points — one node each, never a phantom
     teq::Lane  laneOf    (int b, bool side) const noexcept; // (band, side) -> ST / Mid / Side (from the cache)
     teq::Lane  laneOfLive(int b, bool side) const noexcept; // live-atomics variant
     static const char* laneKeyStr (teq::Lane l) noexcept;   // "st" / "l" / "r" / "m" / "s"

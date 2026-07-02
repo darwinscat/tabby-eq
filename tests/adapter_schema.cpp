@@ -181,6 +181,30 @@ int main()
         check (! prop (p->apvts, bandId (2, "linkFq")), "fission: source linkFq false");
     }
 
+    // ============================ 4b. Migration: OFF band with stale ms/sType must NOT resurrect ============================
+    // A deleted v2 band can still carry ms=1 + a mismatched sType; fissioning that stale Side into a free
+    // slot would turn a deleted band into a new AUDIBLE point. It must migrate in place: stay off, keep its
+    // values on band b, coerce sType silently (no migrationNote — the point is off, nothing audible changed).
+    {
+        auto p = std::make_unique<TabbyEqAudioProcessor>();
+        V2Builder v;
+        v.band (5, false /*OFF — deleted*/, 0 /*Bell*/, 640.0, 2.5, 3.5, 1, false);
+        v.side (5, true /*stale ms*/, true, 2 /*sType HighShelf != Bell*/, 4300.0, 1.3, -2.5, 1, false);
+        v.load (*p);
+
+        bool anyOn = false;
+        for (int b = 0; b < kNumBands; ++b) anyOn = anyOn || rv (p->apvts, bandId (b, "on")) > 0.5f;
+        check (! anyOn, "offband: NO band is on (nothing resurrected)");
+        check (rv (p->apvts, bandId (5, "on")) < 0.5f, "offband: the source band stays off");
+        check (rv (p->apvts, laneParamId (5, 3, "on")) > 0.5f, "offband: Mid lane migrated in place");
+        check (near (rv (p->apvts, laneParamId (5, 3, "freq")), 640.0), "offband: Mid freq preserved");
+        check (rv (p->apvts, laneParamId (5, 4, "on")) > 0.5f, "offband: Side lane migrated in place (no fission)");
+        check (near (rv (p->apvts, laneParamId (5, 4, "freq")), 4300.0), "offband: Side freq preserved");
+        check (near (rv (p->apvts, laneParamId (5, 4, "gain")), -2.5), "offband: Side gain preserved");
+        check ((int) rv (p->apvts, bandId (5, "type")) == 0, "offband: sType silently coerced to the shared type");
+        check (! prop (p->apvts, "migrationNote"), "offband: no migrationNote (inaudible coercion)");
+    }
+
     // ============================ 5. Migration: pool full -> coerce sType->type + migrationNote ============================
     {
         auto p = std::make_unique<TabbyEqAudioProcessor>();
@@ -244,13 +268,22 @@ int main()
         pumpTimers (120);
         check ((int) rv (p->apvts, laneParamId (1, 4, "slope")) == 4, "link: HP/LP slope mirrors to Side");
 
-        // (d) delivery-order last-wins (two edits before a drain).
+        // (d) delivery-order last-wins (two edits of the SAME param before a drain — coalesced).
         splitBell (2, 0);
         p->apvts.state.setProperty (bandId (2, "linkFq"), true, nullptr);
         setRealParam (p->apvts, laneParamId (2, 3, "freq"), 400.0f);
         setRealParam (p->apvts, laneParamId (2, 3, "freq"), 700.0f);
         pumpTimers (120);
         check (near (rv (p->apvts, laneParamId (2, 4, "freq")), 700.0, 1.0), "link: last-delivered edit wins");
+
+        // (d2) interleaved edits of TWO linked lanes before one drain: the drain replays CAPTURED values in
+        // delivery order, so the LAST delivered edit must win on BOTH lanes (a drain-time source re-read
+        // would let the first event's mirror corrupt the second lane's newer edit).
+        setRealParam (p->apvts, laneParamId (2, 3, "freq"), 450.0f);   // Mid edit first...
+        setRealParam (p->apvts, laneParamId (2, 4, "freq"), 820.0f);   // ...then Side — the LAST delivered edit
+        pumpTimers (120);
+        check (near (rv (p->apvts, laneParamId (2, 3, "freq")), 820.0, 1.0), "link: cross-lane last edit wins on Mid");
+        check (near (rv (p->apvts, laneParamId (2, 4, "freq")), 820.0, 1.0), "link: cross-lane last edit wins on Side");
 
         // (e) overflow resync: >256 rapid edits (no drain in between) latch overflow -> resync from active lane.
         splitBell (3, 0);

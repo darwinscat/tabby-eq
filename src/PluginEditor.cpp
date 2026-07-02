@@ -134,6 +134,17 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // Per-point Link FQ / Link Q are now mirrored PROCESSOR-side (host-safe, works with the editor closed);
     // the old editor-only msFreqLink machinery is gone. The View menu edits only the GLOBAL new-split defaults.
 
+    // One-time migration notice: the v2->v3 migration coerced a legacy M/S band's Side type (all 24 slots
+    // were in use, so the Side lane couldn't fission into its own point). Async = non-blocking; removing
+    // the property makes it one-time (the removal is saved with the session).
+    if (proc.apvts.state.hasProperty ("migrationNote"))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "TabbyEQ — session migrated",
+            "An older session's M/S band used a different filter type on its Side lane.\n"
+            "All 24 bands were in use, so that Side lane now uses the band's shared type.");
+        proc.apvts.state.removeProperty ("migrationNote", nullptr);
+    }
+
     setResizable (true, true);
     setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);

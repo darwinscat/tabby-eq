@@ -16,18 +16,28 @@
 #include <vector>
 
 //==============================================================================
-// Bounded lock-free FIFO for the link-mirroring events (band / lane / kind). Producers are ANY thread
-// (parameterValueChanged can fire on the audio thread under host automation); the single consumer is the
-// processor's 30 Hz message-thread timer. This is the classic Vyukov bounded MPSC ring — fixed array, no
-// alloc, no lock, no blocking. On a full ring push() drops the event and latches `overflowed` (the drain
-// then discards the partial stream and resyncs — see PluginProcessor.cpp).
+// One captured link-mirroring edit: which lane param moved (band / lane / field) AND the normalized value
+// the listener saw. Capturing the value at enqueue time is load-bearing: the drain replays CAPTURED values
+// in delivery order — re-reading the source param at drain time would let two linked lanes edited between
+// drains corrupt each other (the first event's mirror overwrites the second lane's newer edit, which the
+// second event would then re-read).
+struct LinkEvent { int band = 0, lane = 0, field = 0; float value = 0.0f; };
+
+// Bounded lock-free FIFO for the link-mirroring events. Producers are ANY thread (parameterValueChanged
+// can fire on the audio thread under host automation); the single consumer is the processor's 30 Hz
+// message-thread timer. This is the classic Vyukov bounded MPSC ring — fixed array, no alloc, no lock, no
+// blocking. On a full ring push() drops the event and latches `overflowed` (the drain then discards the
+// partial stream and resyncs — see PluginProcessor.cpp). Honesty note: the push itself is alloc/lock-free,
+// but JUCE's listener DISPATCH that calls us briefly holds the parameter's listener lock — uncontended
+// except during editor open/close listener churn, and inherent to every JUCE parameter listener or
+// attachment, not added by this design.
 class LinkFifo
 {
 public:
     LinkFifo() { for (unsigned i = 0; i < kCap; ++i) slots_[i].seq.store (i, std::memory_order_relaxed); }
 
     // Any thread. Returns false (and latches overflowed) when full.
-    bool push (int band, int lane, int kind) noexcept
+    bool push (const LinkEvent& ev) noexcept
     {
         unsigned pos = head_.load (std::memory_order_relaxed);
         for (;;)
@@ -39,7 +49,7 @@ public:
             {
                 if (head_.compare_exchange_weak (pos, pos + 1, std::memory_order_relaxed))
                 {
-                    s.band = band; s.lane = lane; s.kind = kind;
+                    s.ev = ev;
                     s.seq.store (pos + 1, std::memory_order_release);
                     return true;
                 }
@@ -50,7 +60,7 @@ public:
     }
 
     // Single consumer (the timer). Returns false when empty.
-    bool pop (int& band, int& lane, int& kind) noexcept
+    bool pop (LinkEvent& out) noexcept
     {
         const unsigned pos = tail_.load (std::memory_order_relaxed);
         Slot& s = slots_[pos & kMask];
@@ -58,7 +68,7 @@ public:
         const int dif = (int) (seq - (pos + 1));
         if (dif == 0)
         {
-            band = s.band; lane = s.lane; kind = s.kind;
+            out = s.ev;
             tail_.store (pos + 1, std::memory_order_relaxed);
             s.seq.store (pos + kCap, std::memory_order_release);
             return true;
@@ -70,7 +80,7 @@ public:
 
 private:
     static constexpr unsigned kCap = 256, kMask = kCap - 1;   // power of two
-    struct Slot { std::atomic<unsigned> seq { 0 }; int band = 0, lane = 0, kind = 0; };
+    struct Slot { std::atomic<unsigned> seq { 0 }; LinkEvent ev; };
     Slot slots_[kCap];
     std::atomic<unsigned> head_ { 0 }, tail_ { 0 };
 };
@@ -79,8 +89,8 @@ private:
 // TabbyEQ — the AudioProcessor. A thin adapter: it owns a teq::EqEngine, packs each band's APVTS atomics
 // (five placement lanes) into teq::BandParams v2 and feeds the engine at the top of processBlock (so
 // setBand/process run on the same thread, satisfying the engine's contract). Per-point Link FQ / Link Q are
-// mirrored processor-side (host-safe: RT-safe listener → bounded FIFO → 30 Hz drain). Versioned state with a
-// v2→v3 migration.
+// mirrored processor-side (host-safe: alloc/lock-free listener body → bounded FIFO → 30 Hz drain; see the
+// LinkFifo honesty note about JUCE's own listener-dispatch lock). Versioned state with a v2→v3 migration.
 //
 // 🔴 Real-time rule: processBlock and callees never allocate, lock, do IO, or throw.
 class TabbyEqAudioProcessor final : public juce::AudioProcessor,
@@ -157,15 +167,16 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    // AudioProcessorParameter::Listener — RT-safe: pushes a link event + wakes the drain. May fire on ANY thread.
+    // AudioProcessorParameter::Listener — may fire on ANY thread. The body only pushes a captured link
+    // event + wakes the drain (alloc/lock-free; JUCE's dispatch itself holds the listener lock — see LinkFifo).
     void parameterValueChanged (int parameterIndex, float newValue) override;
     void parameterGestureChanged (int, bool) override {}
 
     void lpTick();          // message-thread: feed the linear-phase builder + track mode/quality changes
     void onTimer();         // message-thread 30 Hz: drain link mirrors, then lpTick
-    void drainLinkFifo();   // message-thread: replay mirror events (or resync on overflow)
-    void mirrorOne (int band, int lane, int kind);          // mirror one event to the point's other enabled lanes
-    void mirrorField (int band, int srcLane, const char* field);   // copy srcLane's `field` to the enabled others
+    void drainLinkFifo();   // message-thread: replay captured mirror events in delivery order (or resync on overflow)
+    void mirrorEvent (const LinkEvent& ev);                        // replay ONE captured edit onto the point's enabled lanes
+    void applyToEnabledLanes (int band, const char* field, float v01);   // tagged writes; disabled lanes untouched
     void resyncAllLinks();  // idempotent snap of every linked point from its active lane (overflow recovery)
     int  resyncActiveLane (int band) const;                 // active lane from state prop / lowest-enabled fallback
 
@@ -203,11 +214,14 @@ private:
     std::atomic<float> auditionFreq { 1000.0f }, auditionQ { 6.0f };
 
     // Link mirroring: a bounded FIFO fed by parameterValueChanged (any thread), drained on the 30 Hz timer.
+    // Events carry the exact FIELD + captured normalized VALUE; the drain does no type mapping and no
+    // source re-reads (see LinkEvent).
     LinkFifo           linkFifo;
     std::atomic<bool>  linkDirty  { false };                        // "events pending" (spec's dirty flag)
-    std::vector<int8_t> linkKind;                                   // by parameterIndex: -1 none / 0 Freq / 1 Width
+    std::vector<int8_t> linkField;                                  // by parameterIndex: -1 none / 0 freq / 1 q / 2 slope
     std::vector<int16_t> linkBand, linkLaneIdx;                     // by parameterIndex: band + lane of that param
-    static constexpr int kKindFreq = 0, kKindWidth = 1;
+    static constexpr int kFieldFreq = 0, kFieldQ = 1, kFieldSlope = 2;
+    static constexpr const char* kLinkFieldNames[3] = { "freq", "q", "slope" };
 
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
