@@ -125,7 +125,10 @@ namespace tabby::lanemenu
     inline void firstSplitToPair (TabbyEqAudioProcessor& p, int b, int clicked)
     {
         const int pair = (clicked == 1) ? 2 : (clicked == 2) ? 1 : (clicked == 3) ? 4 : 3;   // L<->R, M<->S
-        const double range = (double) p.apvts.state.getProperty ("gainRange", 12.0);   // canvas dB scale (EqCurveDisplay)
+        // The VISIBLE canvas scale (incl. a transient auto-fit widening), falling back to the persisted
+        // user choice: the split-delta must match what the user is looking at, not a stale setting.
+        const double range = (double) p.apvts.state.getProperty ("gainRangeLive",
+                                 p.apvts.state.getProperty ("gainRange", 12.0));
         const float  delta = (float) (0.1 * range);
 
         auto* stG = p.apvts.getParameter (tabby::laneParamId (b, 0, "gain"));

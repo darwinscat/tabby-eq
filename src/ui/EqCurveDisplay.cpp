@@ -576,6 +576,9 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
     for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
     gainRange = snapped;
+    proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range, persist or not —
+                                                                          // the lane menu's split-delta reads what
+                                                                          // the user actually SEES (auto-fit included)
     gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
     if (persist) proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
     positionToolbar();   // dbToY changed → node/strip positions moved
