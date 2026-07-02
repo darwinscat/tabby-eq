@@ -73,6 +73,12 @@ public:
     void setToolbarPlacement (int m) noexcept { toolbarPlace = (ToolbarPlace) juce::jlimit (0, 4, m); lastPlaceSlot = -1; positionToolbar(); repaint(); }
     int  toolbarPlacement() const noexcept { return (int) toolbarPlace; }
 
+    // Node<->strip leader line (View menu; persisted). Governs EVERY placement mode uniformly:
+    // 0 Off (never) · 1 Flash (~1 s fade-out on selection change / strip re-anchor — the default) ·
+    // 2 Always. Collision/Hybrid's previous built-in always-on leader is now just the Always setting.
+    void setLeaderMode (int m) noexcept { leaderOpt = (Leader) juce::jlimit (0, 2, m); repaint(); }
+    int  leaderMode() const noexcept { return (int) leaderOpt; }
+
 private:
     void timerCallback() override;
 
@@ -194,8 +200,9 @@ private:
     enum class AudVisual { Spotlight, Bell };
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
-    static constexpr int kToolbarW    = 256, kToolbarH = 64;   // fixed width; the [M][S] tabs' slot is always reserved
-                                                               // (right of ST) so the strip never resizes on ST toggle
+    static constexpr int kToolbarW    = 218, kToolbarH = 64;   // fixed size = EXACTLY the strip's top-row buttons +
+                                                               // margins (see BandEditStrip::resized) — the strip
+                                                               // never resizes between selections
     static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
     static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
 
@@ -203,7 +210,14 @@ private:
     enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid, FixedLane };
     ToolbarPlace toolbarPlace = ToolbarPlace::Classic;
     int  lastPlaceSlot = -1;                          // hysteresis: last chosen candidate slot (collision/hybrid)
-    bool showLeader = false;                          // draw the node<->toolbar connector (collision/hybrid)
+
+    // Node<->strip leader line (see setLeaderMode) — uniform across every placement mode. Flash shows it
+    // for ~1 s (with a fade tail) whenever the selection changes or the strip re-anchors/jumps.
+    enum class Leader { Off, Flash, Always };
+    Leader leaderOpt = Leader::Flash;
+    juce::uint32 leaderFlashMs = 0;                   // Flash: timestamp of the last selection change / strip jump
+    int  lastLeaderBand = -2, lastLeaderLane = -1;    // selection the leader endpoints were last computed for
+    juce::Point<int> lastToolbarPos { -10000, -10000 };   // jump detection (an anchor hop re-arms the flash)
     juce::Point<float> leaderNode, leaderBar;         // connector endpoints (canvas coords)
 
     // Vertical dB scale (top-right combo, persisted). gainRange is the VISIBLE ± dB window; it auto-zooms out

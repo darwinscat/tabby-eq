@@ -486,11 +486,10 @@ void EqCurveDisplay::positionToolbar()
     if (toolbar == nullptr) return;
     refreshDesigns();   // ensure the cache reflects a just-added/just-toggled band before we test it
     const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
-    if (! show) { toolbar->setVisible (false); showLeader = false; return; }
+    if (! show) { toolbar->setVisible (false); lastLeaderBand = -2; lastToolbarPos = { -10000, -10000 }; return; }
 
     const auto node = nodePos (selBand, selLane);   // lane-aware: place at the actual selected node
     juce::Rectangle<int> b;
-    showLeader = false;
 
     switch (toolbarPlace)
     {
@@ -503,7 +502,6 @@ void EqCurveDisplay::positionToolbar()
             int occl = 0, slot = 0;
             b = bestFloatCandidate (node, occl, slot);
             lastPlaceSlot = slot;
-            showLeader = (slot >= 2);   // 0/1 hug the node (above/below); 2-7 are offset → draw a connector
             break;
         }
 
@@ -511,7 +509,7 @@ void EqCurveDisplay::positionToolbar()
         {
             int occl = 0, slot = 0;
             b = bestFloatCandidate (node, occl, slot);
-            if (occl > 0)   // no clean local slot → dock to the far horizontal edge, leader across
+            if (occl > 0)   // no clean local slot → dock to the far horizontal edge
             {
                 const bool dockTop = node.y > (float) getHeight() * 0.5f;
                 const int W  = kToolbarW;
@@ -519,9 +517,8 @@ void EqCurveDisplay::positionToolbar()
                 const int ty = dockTop ? 2 : stripMaxY();
                 b = { tx, ty, W, kToolbarH };
                 lastPlaceSlot = -2;   // docked
-                showLeader = true;
             }
-            else { lastPlaceSlot = slot; showLeader = (slot >= 2); }
+            else lastPlaceSlot = slot;
             break;
         }
 
@@ -539,7 +536,15 @@ void EqCurveDisplay::positionToolbar()
             break;
     }
 
-    if (showLeader) { leaderNode = node; leaderBar = b.toFloat().getCentre(); }
+    // Leader endpoints are kept for EVERY placement (the View option decides drawing). Flash re-arms on a
+    // selection change or when the strip re-anchors/JUMPS (> 48 px in one step — a slot hop or a dock, not
+    // the small continuous moves of a node drag).
+    leaderNode = node; leaderBar = b.toFloat().getCentre();
+    const bool selChanged = (selBand != lastLeaderBand || selLane != lastLeaderLane);
+    const bool jumped     = lastToolbarPos.x > -9999
+                         && b.getPosition().getDistanceFrom (lastToolbarPos) > 48;
+    if (selChanged || jumped) leaderFlashMs = juce::Time::getMillisecondCounter();
+    lastLeaderBand = selBand; lastLeaderLane = selLane; lastToolbarPos = b.getPosition();
 
     if (toolbar->getBounds() != b) toolbar->setBounds (b);
     if (! toolbar->isVisible()) toolbar->setVisible (true);
@@ -973,13 +978,23 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
     }
 
-    // --- toolbar leader line (Collision / Hybrid placement): a thin connector node -> strip -----------
-    if (showLeader && toolbar != nullptr && toolbar->isVisible())
+    // --- toolbar leader line: a thin node -> strip connector, uniform across every placement mode.
+    //     View option: Off / Flash (~1 s with a fade tail on selection change / strip jump) / Always. ---
+    if (toolbar != nullptr && toolbar->isVisible() && leaderOpt != Leader::Off)
     {
-        g.setColour (tabby::palette::violetLo().withAlpha (0.50f));
-        g.drawLine (leaderNode.x, leaderNode.y, leaderBar.x, leaderBar.y, 1.4f);
-        g.setColour (tabby::palette::violetLo().withAlpha (0.90f));
-        g.fillEllipse (leaderNode.x - 2.5f, leaderNode.y - 2.5f, 5.0f, 5.0f);
+        float env = 1.0f;
+        if (leaderOpt == Leader::Flash)
+        {
+            const juce::uint32 dt = juce::Time::getMillisecondCounter() - leaderFlashMs;
+            env = dt >= 1000 ? 0.0f : dt <= 600 ? 1.0f : 1.0f - (float) (dt - 600) / 400.0f;   // hold 0.6 s, fade 0.4 s
+        }
+        if (env > 0.01f)
+        {
+            g.setColour (tabby::palette::violetLo().withAlpha (0.50f * env));
+            g.drawLine (leaderNode.x, leaderNode.y, leaderBar.x, leaderBar.y, 1.4f);
+            g.setColour (tabby::palette::violetLo().withAlpha (0.90f * env));
+            g.fillEllipse (leaderNode.x - 2.5f, leaderNode.y - 2.5f, 5.0f, 5.0f);
+        }
     }
 
     // --- nodes (one per enabled lane; ≥ 2 lanes -> lane colour + permanent badge) ------------------
@@ -1122,6 +1137,10 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             if (slopeIndex >= 0) setParamGestured (tabby::laneParamId (b, 0, "slope"), (double) slopeIndex);
             setParamGestured (tabby::laneParamId (b, 0, "byp"), 0.0);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);            // point bypass off
+            // Fresh band = defined link state: a recycled slot may carry the previous point's linkFq/linkQ
+            // props; clear them so a later first split re-seeds cleanly from the View defaults.
+            proc.apvts.state.setProperty (tabby::bandId (b, "linkFq"), false, nullptr);
+            proc.apvts.state.setProperty (tabby::bandId (b, "linkQ"),  false, nullptr);
             setParamGestured (tabby::bandId (b, "on"), 1.0);               // point on
             selectBand (b);
             return;
