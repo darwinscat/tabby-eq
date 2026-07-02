@@ -10,7 +10,9 @@
 > AsyncUpdater from the audio thread — FIFO + dirty flag + the 30 Hz timer), shared-FDL warm
 > history for topology switches, lane toggles = documented hard steps (no clickless
 > overclaim), delivery-order mirroring determinism, fission terminology + no-reorder +
-> one-time notice, activeLane load fallback, point-bypass preserves lane state.
+> one-time notice, activeLane load fallback, point-bypass preserves lane state. Round-3 fixes:
+> canonical raw-L/R FDL basis for all topologies (M/S = on-the-fly spectral views), FIFO
+> overflow resync policy. **Codex final verdict: APPROVE-WITH-FIXES, all named fixes applied.**
 > Inspiration: Pro-Q 3 per-band stereo placement — but **multi-select**: one point may live in
 > several placement lanes at once.
 
@@ -169,11 +171,20 @@ Today's core builds exactly 2 IRs (Mid+Side) and always encodes stereo→M/S→c
 the convolution engine swaps a single IR per channel and has **no cross-input routing**. The
 matrix engine therefore adds real new machinery, not just "more IRs":
 
+- **One canonical FDL basis: raw L/R.** The per-channel input FDL always stores raw L/R input
+  spectra. This is what lets every topology share warm history — and it means the M/S-diagonal
+  topology is *today's operator math, re-plumbed*: instead of pre-encoding the time-domain
+  signal to m/s and feeding the convolver (today's plumbing, whose FDL would hold M/S spectra),
+  it forms the M/S spectral views **on the fly from the L/R FDL by linearity of the FFT** —
+  `X_M(k) = (X_L(k)+X_R(k))/2`, `X_S(k) = (X_L(k)−X_R(k))/2`, exact, one complex add + scale
+  per bin — convolves 2 IRs against those views, and decodes the outputs. Equivalent math,
+  same 2-convolution cost, common basis.
 - **Three topologies, picked per snapshot (basis detection):**
   1. *No active L/R lane anywhere* → every `H_band` is of the form `[[a,b],[b,a]]`, product
-     stays that form → diagonal in M/S → **today's 2-IR encode/decode path, unchanged**.
+     stays that form → diagonal in M/S → **2 IRs against the on-the-fly M/S spectral views**
+     (today's operator, new plumbing — see above).
   2. *No active M/S lane anywhere* → `H_eq = diag(H_LL, H_RR)` → **2 IRs convolved directly on
-     L and R** — a *new* (trivial) direct path; today's code has no L/R mode.
+     the L/R FDL** — a *new* (trivial) direct path; today's code has no L/R mode.
   3. *Mixed* → **full matrix: 4 IRs** `h_LL h_LR h_RL h_RR`;
      `yL = h_LL∗xL + h_LR∗xR`, `yR = h_RL∗xL + h_RR∗xR` — a *new* `MatrixConvolver` with
      cross-input sums (2 extra convolutions + 2 adds; ≈ 2× stereo cost).
@@ -184,14 +195,12 @@ matrix engine therefore adds real new machinery, not just "more IRs":
   reconstruction breaks.)
 - **Natural phase:** apply the φ = k·φ_min cepstral blend to each scalar lane response, then
   compose (complex entries, 4 general IRs). Same `k` knob, same latency story as today.
-- **Click-free edits AND topology switches — shared warm history by construction:** all
-  topologies ride **one shared per-channel input FDL** (frequency-domain delay line; the input
-  spectra history depends only on the input and the partition scheme, which are common). An
-  "operator" is then just a set of spectral IR banks + routing *over that shared FDL* — so a
-  freshly engaged topology reads the same warm history as the outgoing one; there is **no
-  cold-start tail**. The atomic **operator swap** crossfades the *outputs* of the old and new
-  operators computed from the same FDL. Never mixes old h_LL with new h_LR; enabling the first
-  L lane mid-playback crossfades cleanly between topologies.
+- **Click-free edits AND topology switches — shared warm history by construction:** with the
+  canonical L/R FDL, an "operator" is just a set of spectral IR banks + routing *over that
+  shared FDL* — a freshly engaged topology reads the same warm history as the outgoing one;
+  there is **no cold-start tail**. The atomic **operator swap** crossfades the *outputs* of the
+  old and new operators computed from the same FDL. Never mixes old h_LL with new h_LR;
+  enabling the first L lane mid-playback crossfades cleanly between topologies.
 - Mono (`nc==1`) in FIR modes: one IR = the **ST-axis composite** (∏ H_ST — the only lanes that
   run on mono; the old code called this the "Mid" IR, same thing under v2 semantics).
 
@@ -229,10 +238,15 @@ band{b}_{k}_byp   Bool    "B{n} {Lane} Bypass"
 
 - `AudioProcessorValueTreeState::Listener::parameterChanged` may fire on **any thread**
   (automation arrives on the audio thread). The listener does **only RT-safe work**: push a
-  `{band, lane, param, value}` event into a **lock-free FIFO** and set an atomic dirty flag —
-  **no `AsyncUpdater`, no posting from the audio thread** (posting a message is not an RT
-  primitive). The FIFO is drained by the processor's **existing 30 Hz message-thread timer**
+  `{band, lane, param, value}` event into a **bounded lock-free FIFO** and set an atomic dirty
+  flag — **no `AsyncUpdater`, no posting from the audio thread** (posting a message is not an
+  RT primitive). The FIFO is drained by the processor's **existing 30 Hz message-thread timer**
   (the `lpTick` pattern) — worst-case mirror latency one timer period, fine for an edit mirror.
+- **Overflow policy (RT-safe, deterministic):** on a full FIFO the listener drops the event and
+  sets an atomic `overflowed` flag — never blocks, never allocates. A drain that sees the flag
+  discards the partial event stream and **resyncs**: for every linked point it re-mirrors from
+  its *active lane's* current parameter values (idempotent snap). Overflow needs an automation
+  storm faster than 30 Hz × FIFO depth; behaviour under it is still defined and deterministic.
 - Mirrored writes go through `setValueNotifyingHost` under a re-entrancy guard (mirror-writes
   are tagged and never re-mirrored). No gesture forwarding — mirrors are plain value changes
   (JUCE `ParameterAttachment` behaves the same way).
@@ -315,7 +329,8 @@ Migration fixtures come from **real v2 session XML** dumped before the schema ch
    proof).
 5. **FIR:** measured complex response == analytic `H_eq` per entry (linear: real signed entries
    after removing the N/2 delay; natural: complex within tolerance); linear-phase symmetry of
-   all 4 IRs; **basis detection**: all-M/S picks the encode/decode path, all-L/R picks the
+   all 4 IRs; **basis detection**: all-M/S picks the spectral-view path (== a time-domain
+   encode/decode reference within epsilon — the linearity re-plumb proven), all-L/R picks the
    direct path, both match the matrix prediction; **operator swap** atomicity incl. a
    mid-playback topology switch (2-IR → 4-IR) — no click, no old/new IR mixing, and the
    incoming topology reads the **shared warm FDL** (its first crossfaded block already carries
@@ -323,9 +338,9 @@ Migration fixtures come from **real v2 session XML** dumped before the schema ch
 6. **Adapter (`tests/`):** v2→v3 migration fixtures from real session XML — plain, ms-split,
    **Mid-bypassed + Side-active**, **`sType ≠ type` (split-to-new-point + pool-full coercion)**,
    **`msFreqLink=true` with diverged freqs (must NOT re-link)**, linked; link mirroring on the
-   message thread incl. HP/LP slope mirroring, the FIFO drain, re-entrancy guard and the
-   lowest-lane-wins determinism rule; display-name uniqueness across all 820 (automated check);
-   group layout sanity; auval in CI as today.
+   message thread incl. HP/LP slope mirroring, the FIFO drain in delivery order
+   (last-delivered-wins), the re-entrancy guard and the overflow resync; display-name
+   uniqueness across all 820 (automated check); group layout sanity; auval in CI as today.
 
 **Live:** standalone smoke per UI PR (screenshots: split point with badges, menu states,
 coincident-node cycling, axes) — same drill as the toolbar branch.
