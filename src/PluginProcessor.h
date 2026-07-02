@@ -205,7 +205,6 @@ private:
     // Link mirroring: a bounded FIFO fed by parameterValueChanged (any thread), drained on the 30 Hz timer.
     LinkFifo           linkFifo;
     std::atomic<bool>  linkDirty  { false };                        // "events pending" (spec's dirty flag)
-    std::atomic<bool>  mirrorGuard { false };                       // re-entrancy tag: our own mirror writes never re-enqueue
     std::vector<int8_t> linkKind;                                   // by parameterIndex: -1 none / 0 Freq / 1 Width
     std::vector<int16_t> linkBand, linkLaneIdx;                     // by parameterIndex: band + lane of that param
     static constexpr int kKindFreq = 0, kKindWidth = 1;

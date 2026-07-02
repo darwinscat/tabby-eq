@@ -426,9 +426,16 @@ void TabbyEqAudioProcessor::lpTick()
 
 //==============================================================================
 // Link mirroring — the RT-safe producer + the message-thread drain.
+// Re-entrancy tag for the mirror writes. THREAD-LOCAL, not a shared atomic: a shared flag would also
+// swallow a GENUINE audio-thread automation event that lands inside the message thread's brief mirror
+// window (the edit itself would apply but its mirror would silently be skipped, desyncing linked lanes
+// until the next edit). Thread-local suppresses exactly the writes made BY the mirroring/migration code
+// on its own thread and nothing else.
+static thread_local bool tlsMirrorWrite = false;
+
 void TabbyEqAudioProcessor::parameterValueChanged (int parameterIndex, float /*newValue*/)
 {
-    if (mirrorGuard.load (std::memory_order_relaxed)) return;                 // our own mirror write — never re-enqueue
+    if (tlsMirrorWrite) return;                                               // our own mirror write — never re-enqueue
     if (parameterIndex < 0 || parameterIndex >= (int) linkKind.size()) return;
     const int8_t kind = linkKind[(size_t) parameterIndex];
     if (kind < 0) return;
@@ -470,9 +477,9 @@ void TabbyEqAudioProcessor::mirrorField (int band, int srcLane, const char* fiel
         if (bands[(size_t) band].lane[L].on->load() <= 0.5f) continue;       // disabled lanes are not written
         if (auto* dst = apvts.getParameter (tabby::laneParamId (band, L, field)))
         {
-            mirrorGuard.store (true, std::memory_order_relaxed);             // tag: this write must not re-enqueue
+            tlsMirrorWrite = true;                                           // tag: this write must not re-enqueue
             dst->setValueNotifyingHost (v01);                               // same range -> a normalized copy is exact
-            mirrorGuard.store (false, std::memory_order_relaxed);
+            tlsMirrorWrite = false;
         }
     }
 }
@@ -550,10 +557,10 @@ void TabbyEqAudioProcessor::setStateInformation (const void* data, int sizeInByt
     const bool legacy = ver <= 2;
 
     // Suppress link-mirror enqueues for the load's own param writes; drop any that slip through afterwards.
-    mirrorGuard.store (true, std::memory_order_relaxed);
+    tlsMirrorWrite = true;
     if (legacy) apvts.replaceState (migrateV2toV3 (incoming, apvts.state.getType()));
     else        apvts.replaceState (incoming);
-    mirrorGuard.store (false, std::memory_order_relaxed);
+    tlsMirrorWrite = false;
 
     int b, l, k; while (linkFifo.pop (b, l, k)) {}
     linkFifo.overflowed.store (false, std::memory_order_relaxed);
