@@ -78,7 +78,8 @@ namespace tabby::venn
         for (int lane = 0; lane < 5; ++lane)                                  // ST first (a wash), others over
             if (enabledMask & (1u << lane))
             {
-                gr.setColour (tabby::palette::text().withAlpha (lane == activeLane ? 0.85f : 0.30f));
+                gr.setColour (tabby::palette::text().withAlpha (lane == activeLane ? 0.30f : 0.12f));   // fills stay
+                // barely above the button tone — shape lives in the outlines (same rule as the menu rows)
                 fillRegion (gr, g, lane);
             }
     }

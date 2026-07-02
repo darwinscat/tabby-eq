@@ -235,9 +235,10 @@ namespace tabby::lanemenu
             else             { g.setColour (tabby::palette::textDim().withAlpha (a)); g.drawRoundedRectangle (box, 3.0f, 1.2f); }
 
             // Venn glyph in NEUTRAL text tones (one attribute = one carrier: the venn carries the SHAPE,
-            // the dot carries the colour — coloured symbols read as mush at this size).
+            // the dot carries the colour). The region FILL is barely above the panel tone — the shape is
+            // carried by the outlines; a bright fill reads as a white blob at this size (Oleh, round 3).
             tabby::venn::drawOne (g, { rf.getX() + 26.0f, rf.getY() + 3.0f, 24.0f, rf.getHeight() - 6.0f },
-                                  L, (on ? tabby::palette::text() : tabby::palette::textDim()).withAlpha (0.85f * a));
+                                  L, tabby::palette::text().withAlpha ((on ? 0.14f : 0.08f) * a));
 
             g.setColour (lc.withAlpha (a));                                    // colour dot — the ONE colour carrier
             g.fillEllipse (rf.getX() + 54.0f, rf.getCentreY() - 3.0f, 6.0f, 6.0f);
