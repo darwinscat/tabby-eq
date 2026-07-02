@@ -63,7 +63,7 @@ endfunction()
 # fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
 include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_FCORE_TAG "v0.1.5" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+set(TABBYEQ_FCORE_TAG "v0.2.0" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 set(FELITRONICS_BUILD_TESTS ${TABBYEQ_BUILD_CORE_TESTS})   # keep the JUCE-free core self-tests in this repo's `ctest` (unless the sanitizer job opts out)
 enable_testing()                  # so this repo's ctest discovers felitronics-core's suites + our adapter test (top-level)
 if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
@@ -208,5 +208,48 @@ tabbyeq_sanitize(TabbyEQ_LifecycleTest
     src/ui/BandEditStrip.cpp)
 
 add_test(NAME tabbyeq_lifecycle_misuse COMMAND TabbyEQ_LifecycleTest)
+
+# ----------------------------------------------------------------------------
+# Adapter schema / v2->v3 migration / link-mirroring harness (v3 placement lanes). Same headless pattern:
+# drives the REAL processor, asserts the parameter schema + migration + processor-side link mirroring.
+# ----------------------------------------------------------------------------
+juce_add_console_app(TabbyEQ_AdapterTest PRODUCT_NAME "TabbyEQ_AdapterTest")
+
+target_sources(TabbyEQ_AdapterTest PRIVATE
+    tests/adapter_schema.cpp
+    src/PluginProcessor.cpp
+    src/Parameters.cpp
+    src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp)
+
+target_include_directories(TabbyEQ_AdapterTest PRIVATE src)
+
+target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1        # runDispatchLoopUntil() — pump the msg loop so the 30 Hz link drain fires
+    JucePlugin_Name="TabbyEQ")
+
+target_link_libraries(TabbyEQ_AdapterTest PRIVATE
+    teq::core
+    felitronics::lineareq
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+# Same sanitizer treatment as the lifecycle harness: the shared src/*.cpp files already carry the
+# sanitizer COMPILE flags directory-wide (set_source_files_properties), so this target's objects are
+# instrumented either way — without the matching LINK options the sanitizer runtimes go unresolved.
+tabbyeq_sanitize(TabbyEQ_AdapterTest
+    tests/adapter_schema.cpp
+    src/PluginProcessor.cpp
+    src/Parameters.cpp
+    src/PluginEditor.cpp
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp)
+
+add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 
 endif()  # TABBYEQ_BUILD_TESTS

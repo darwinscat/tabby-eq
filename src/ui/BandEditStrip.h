@@ -105,18 +105,19 @@ private:
     void rebind();                           // (re)create attachments for the current band
     void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
-    void showTypeMenu();                     // popup with filter-shape icons -> sets the type param
-    juce::String laneId (const juce::String& base) const;   // Mid/Side-aware param id for the current lane
-    int  laneTypeIndex() const;                             // the current lane's filter-type index
+    void showTypeMenu();                     // popup with filter-shape icons -> sets the SHARED point type
+    juce::String laneId (const juce::String& base) const;   // lane-scoped param id (ST / Mid / Side) for freq/Q/gain/slope/byp
+    int  bandTypeIndex() const;                             // the point's SHARED filter-type index
     void setLane (bool side);                               // switch the toolbar to Mid (false) / Side (true)
-    void toggleMs();                                        // flip the band's M/S mode (seeds Side on FIRST split)
-    void copyMidToSide();                                   // seed the Side lane from the Mid lane
-    bool sideIsFresh() const;                               // Side lane still at factory defaults (never configured)
+    void toggleMs();                                        // ST <-> M/S: split enables m+s (seed from st on FIRST split) / unsplit reverses
+    void copyStToMs();                                      // seed the Mid + Side lanes from the ST lane
+    bool msLanesFresh() const;                              // m + s lanes still at factory defaults (never configured)
+    int  activeLaneIndex() const;                           // teq::Lane index for the current (ST / Mid / Side) edit lane
 
     TabbyEqAudioProcessor& proc;
     int  curBand = -1;
-    bool curMs = false;          // selected band is in M/S mode
-    bool editingSide = false;    // the toolbar edits the Side lane (vs the Mid/main lane)
+    bool curMs = false;          // selected band is SPLIT (m or s lane enabled)
+    bool editingSide = false;    // the toolbar edits the Side lane (vs the Mid lane; ignored when unsplit = ST)
 
     juce::Label        title;
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left

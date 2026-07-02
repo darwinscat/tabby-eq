@@ -92,7 +92,18 @@ private:
     // axis so the curve shows the smooth analog INTENT (FabFilter-style) and looks identical at every rate.
     // (The spectrum analyzer still uses the real fsCache — that's true measured content, not a design.)
     double designFs() const noexcept { return juce::jmax (fsCache, 96000.0); }
-    teq::BandParams sideView (int b) const noexcept;        // the band's Side lane as a BandParams (main fields)
+
+    // Two-lane UX helpers: a "point" is unsplit (single ST node) or split (Mid + Side nodes). The `side`
+    // bool identifies a node — false = the ST/Mid node, true = the Side node. laneOf maps (band, side) to a
+    // teq::Lane; splitB reads the paint cache, splitLive reads the live atomics (async menu callbacks).
+    bool       splitB    (int b) const noexcept;            // paramCache: is the point split (Mid or Side lane on)?
+    bool       splitLive (int b) const noexcept;            // live atomics variant
+    bool       laneEnabled (int b, bool side) const noexcept;   // is that node's lane ON? Migration can make {m}-only /
+                                                                // {s}-only points — one node each, never a phantom
+    teq::Lane  laneOf    (int b, bool side) const noexcept; // (band, side) -> ST / Mid / Side (from the cache)
+    teq::Lane  laneOfLive(int b, bool side) const noexcept; // live-atomics variant
+    static const char* laneKeyStr (teq::Lane l) noexcept;   // "st" / "l" / "r" / "m" / "s"
+    juce::String laneParamId (int b, bool side, juce::StringRef base) const;   // node -> APVTS id (type=shared, bypass=lane byp)
     double compositeDb (double f, bool side = false) const noexcept;   // Mid (side=false) or Side composite
     juce::Point<float> nodePos (int band, bool side = false) const noexcept;
     std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b, bool side = false) const noexcept;
