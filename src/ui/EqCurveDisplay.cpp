@@ -1603,8 +1603,9 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 void EqCurveDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
     refreshDesigns();
-    const Hit hit = draggingBand >= 0 ? Hit { draggingBand, draggingLane } : nodeAt (e.position);
-    if (hit.band < 0) return;
+    Hit hit = draggingBand >= 0 ? Hit { draggingBand, draggingLane } : nodeAt (e.position);
+    if (hit.band < 0) hit = { selBand, selLane };      // not over a node -> the SELECTED one (a narrow node
+    if (hit.band < 0) return;                          // — BP on the zero line — is a tiny wheel target)
     auto* qp = proc.apvts.getParameter (laneParamId (hit.band, hit.lane, "q"));
     if (qp == nullptr) return;
     const double cur    = qp->convertFrom0to1 (qp->getValue());   // live value (not the timer cache)
