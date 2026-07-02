@@ -284,8 +284,11 @@ namespace tabby::lanemenu
         void mouseUp (const juce::MouseEvent&) override
         {
             const bool v = ! (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
+            // Snap BEFORE raising the flag: with the link still off, the snap writes aren't re-mirrored
+            // by the processor's drain (pure single writes), and the flag only ever goes true over an
+            // already-converged point.
+            if (v) snapLink (ctx->proc, ctx->band, isFreq);
             ctx->proc.apvts.state.setProperty (tabby::bandId (ctx->band, prop()), v, nullptr);
-            if (v) snapLink (ctx->proc, ctx->band, isFreq);   // enabling a link snaps the existing divergence NOW
             if (ctx->onChanged) ctx->onChanged();
             repaint();
         }
