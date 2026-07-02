@@ -59,10 +59,16 @@ namespace tabby::lanemenu
         if (a >= 0 && a < tabby::kNumLanes && laneOn (p, b, a)) return a;
         return lowestEnabled (p, b);
     }
+    // One-shot gestured write (begin+set+end) — lane toggles are host-visible operator steps; bare
+    // setValueNotifyingHost outside a gesture drops/misgroups DAW automation + undo.
+    inline void setParamGestured (juce::RangedAudioParameter* prm, float v01)
+    {
+        if (prm == nullptr) return;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (v01); prm->endChangeGesture();
+    }
     inline void setLaneOnParam (TabbyEqAudioProcessor& p, int b, int L, bool on)
     {
-        if (auto* prm = p.apvts.getParameter (tabby::laneParamId (b, L, "on")))
-            prm->setValueNotifyingHost (on ? 1.0f : 0.0f);
+        setParamGestured (p.apvts.getParameter (tabby::laneParamId (b, L, "on")), on ? 1.0f : 0.0f);
     }
     // Seed a newly enabled lane's edit fields from the active lane (freq/Q/gain/slope — type is shared).
     inline void seedLane (TabbyEqAudioProcessor& p, int b, int dst, int src)
@@ -72,15 +78,34 @@ namespace tabby::lanemenu
         {
             auto* s = p.apvts.getParameter (tabby::laneParamId (b, src, f));
             auto* d = p.apvts.getParameter (tabby::laneParamId (b, dst, f));
-            if (s != nullptr && d != nullptr) d->setValueNotifyingHost (s->getValue());   // same range -> exact
+            if (s != nullptr && d != nullptr) setParamGestured (d, s->getValue());        // same range -> exact
         }
     }
     // Seed the point's Link FQ / Link Q from the View-menu defaults (a point that just became a split).
+    // Defaults only ever turn a flag ON — they never reset a flag the user explicitly enabled (a
+    // re-split must not silently discard that choice).
     inline void seedLinkDefaults (TabbyEqAudioProcessor& p, int b)
     {
         auto& st = p.apvts.state;
-        st.setProperty (tabby::bandId (b, "linkFq"), (bool) st.getProperty ("defaultLinkFq", false), nullptr);
-        st.setProperty (tabby::bandId (b, "linkQ"),  (bool) st.getProperty ("defaultLinkQ",  false), nullptr);
+        if ((bool) st.getProperty ("defaultLinkFq", false)) st.setProperty (tabby::bandId (b, "linkFq"), true, nullptr);
+        if ((bool) st.getProperty ("defaultLinkQ",  false)) st.setProperty (tabby::bandId (b, "linkQ"),  true, nullptr);
+    }
+    // Turning a link ON must snap the existing divergence NOW (the processor mirrors only future edits):
+    // copy the active lane's field(s) onto every other enabled lane.
+    inline void snapLink (TabbyEqAudioProcessor& p, int b, bool freq)
+    {
+        const int src = activeLaneOf (p, b);
+        for (int L = 0; L < tabby::kNumLanes; ++L)
+        {
+            if (L == src || ! laneOn (p, b, L)) continue;
+            for (const char* f : (freq ? std::initializer_list<const char*> { "freq" }
+                                       : std::initializer_list<const char*> { "q", "slope" }))
+            {
+                auto* sP = p.apvts.getParameter (tabby::laneParamId (b, src, f));
+                auto* dP = p.apvts.getParameter (tabby::laneParamId (b, L, f));
+                if (sP != nullptr && dP != nullptr) setParamGestured (dP, sP->getValue());
+            }
+        }
     }
 
     inline void repaintAll (const std::shared_ptr<Ctx>& c)
@@ -161,7 +186,12 @@ namespace tabby::lanemenu
 
             if (e.mods.isAltDown())                                            // make-only-lane (stays single)
             {
-                if (! laneOn (p, b, L)) { setLaneOnParam (p, b, L, true); seedLane (p, b, L, activeLaneOf (p, b)); }
+                if (! laneOn (p, b, L))
+                {
+                    const int src = activeLaneOf (p, b);                       // source BEFORE enabling the target
+                    seedLane (p, b, L, src);                                   // seed while disabled, THEN enable —
+                    setLaneOnParam (p, b, L, true);                            // the set is never transiently empty
+                }
                 for (int k = 0; k < tabby::kNumLanes; ++k) if (k != L) setLaneOnParam (p, b, k, false);
                 p.setBandActiveLane (b, L);
                 if (ctx->onChanged) ctx->onChanged();
@@ -182,8 +212,9 @@ namespace tabby::lanemenu
                 else
                 {
                     const int wasCount = enabledCount (p, b);
-                    setLaneOnParam (p, b, L, true);
-                    seedLane (p, b, L, activeLaneOf (p, b));                   // seed from the active lane
+                    const int src = activeLaneOf (p, b);                       // source BEFORE the new lane exists
+                    seedLane (p, b, L, src);                                   // seed while still disabled — the
+                    setLaneOnParam (p, b, L, true);                            // engine never sees a half-seeded lane
                     if (wasCount == 1) seedLinkDefaults (p, b);               // first split -> seed link defaults
                 }
                 if (ctx->onChanged) ctx->onChanged();
@@ -195,8 +226,9 @@ namespace tabby::lanemenu
             if (! laneOn (p, b, L))
             {
                 const int wasCount = enabledCount (p, b);
+                const int src = enabledCount (p, b) > 0 ? activeLaneOf (p, b) : 0;
+                seedLane (p, b, L, src);                                       // seed while still disabled
                 setLaneOnParam (p, b, L, true);
-                seedLane (p, b, L, activeLaneOf (p, b));
                 if (wasCount == 1) seedLinkDefaults (p, b);
             }
             p.setBandActiveLane (b, L);
@@ -253,6 +285,7 @@ namespace tabby::lanemenu
         {
             const bool v = ! (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
             ctx->proc.apvts.state.setProperty (tabby::bandId (ctx->band, prop()), v, nullptr);
+            if (v) snapLink (ctx->proc, ctx->band, isFreq);   // enabling a link snaps the existing divergence NOW
             if (ctx->onChanged) ctx->onChanged();
             repaint();
         }
