@@ -8,6 +8,20 @@ namespace tabby
 
 juce::String bandId (int b, juce::StringRef suffix) { return "band" + juce::String (b) + "_" + suffix; }
 
+namespace
+{
+    const char* kLaneKeys[5]  = { "st", "l", "r", "m", "s" };
+    const char* kLaneWords[5] = { "Stereo", "Left", "Right", "Mid", "Side" };
+}
+
+const char* laneKey  (int lane) noexcept { return kLaneKeys [juce::jlimit (0, kNumLanes - 1, lane)]; }
+const char* laneWord (int lane) noexcept { return kLaneWords[juce::jlimit (0, kNumLanes - 1, lane)]; }
+
+juce::String laneParamId (int b, int lane, juce::StringRef field)
+{
+    return bandId (b, juce::String (laneKey (lane)) + "_" + field);
+}
+
 teq::FilterType filterTypeFromChoice (int idx) noexcept
 {
     switch (idx)
@@ -28,54 +42,52 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
 {
     using namespace juce;
     const String n = "B" + String (b + 1) + " ";   // display prefix, e.g. "B1 Freq"
-
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "on"),   1 }, n + "On", false));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "type"), 1 }, n + "Type",
-                                                        StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" }, 0));
-
-    NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);   // matches the canvas range
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "freq"), 1 }, n + "Freq",
-                                                        freqRange, 1000.0f,
-                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                            [] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; })));
-
-    NormalisableRange<float> qRange (0.05f, 40.0f); qRange.setSkewForCentre (1.0f);
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "q"), 1 }, n + "Q", qRange, 1.0f,
-                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                            [] (float v, int) { return juce::String (v, 1); })));
-
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "gain"), 1 }, n + "Gain",
-                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,   // matches the canvas ±24
-                                                        AudioParameterFloatAttributes().withStringFromValueFunction (
-                                                            [] (float v, int) { return juce::String (v, 1) + " dB"; })));
-
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "slope"), 1 }, n + "Slope",
-                                                        StringArray { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1));
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "swept"), 1 }, n + "Swept", false));
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "bypass"), 1 }, n + "Bypass", false));
-
-    // --- M/S dual-mode: mode flag + independent Side lane (Mid/main lane = the params above) ---
-    const StringArray typeItems { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+    const StringArray typeItems  { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
     const StringArray slopeItems { "6 dB/oct", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" };
     auto intHz = [] (float v, int) { return juce::String (juce::roundToInt (v)) + " Hz"; };
     auto one   = [] (float v, int) { return juce::String (v, 1); };
     auto oneDb = [] (float v, int) { return juce::String (v, 1) + " dB"; };
 
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "ms"),     1 }, n + "M/S", false));
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "sOn"),    1 }, n + "Side On", true));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "sType"),  1 }, n + "Side Type", typeItems, 0));
+    // One group per band ("Band 4") holding all 34 of its params — the Pro-Q-style DAW tree. Ids are flat
+    // (band{b}_… / band{b}_{k}_…), so getParameter()/getRawParameterValue() lookups are unchanged by grouping.
+    auto grp = std::make_unique<AudioProcessorParameterGroup> ("band" + String (b), "Band " + String (b + 1), "|");
 
-    NormalisableRange<float> sFreqRange (20.0f, 20000.0f); sFreqRange.setSkewForCentre (1000.0f);
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sFreq"),  1 }, n + "Side Freq",
-                                                        sFreqRange, 1000.0f, AudioParameterFloatAttributes().withStringFromValueFunction (intHz)));
-    NormalisableRange<float> sQRange (0.05f, 40.0f); sQRange.setSkewForCentre (1.0f);
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sQ"),     1 }, n + "Side Q",
-                                                        sQRange, 1.0f, AudioParameterFloatAttributes().withStringFromValueFunction (one)));
-    layout.add (std::make_unique<AudioParameterFloat>  (ParameterID { bandId (b, "sGain"),  1 }, n + "Side Gain",
-                                                        NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,
-                                                        AudioParameterFloatAttributes().withStringFromValueFunction (oneDb)));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "sSlope"), 1 }, n + "Side Slope", slopeItems, 1));
-    layout.add (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "sBypass"), 1 }, n + "Side Bypass", false));
+    // --- point-level (shared across lanes): on / type / swept / bypass ---
+    grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "on"),     1 }, n + "On",     false));
+    grp->addChild (std::make_unique<AudioParameterChoice> (ParameterID { bandId (b, "type"),   1 }, n + "Type",   typeItems, 0));
+    grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "swept"),  1 }, n + "Swept",  false));
+    grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { bandId (b, "bypass"), 1 }, n + "Bypass", false));
+
+    // --- five placement lanes (ST / L / R / M / S), full param set each ---
+    for (int L = 0; L < kNumLanes; ++L)
+    {
+        const bool   isSt = (L == 0);
+        const String word = laneWord (L);
+        // Collision-free display names: the ST lane DROPS the lane word for the point-unique fields
+        // (Freq/Q/Gain/Slope) so unsplit automation reads like a normal EQ, but KEEPS it for On/Bypass
+        // (the point already owns "B4 On" / "B4 Bypass"). Other lanes always carry the word.
+        auto nm = [&] (const char* field, bool dropForSt) -> String
+        {
+            if (isSt && dropForSt) return n + field;              // "B4 Freq"
+            return n + word + " " + field;                        // "B4 Left Freq" / "B4 Stereo On"
+        };
+
+        NormalisableRange<float> freqRange (20.0f, 20000.0f); freqRange.setSkewForCentre (1000.0f);
+        NormalisableRange<float> qRange    (0.05f, 40.0f);    qRange.setSkewForCentre (1.0f);
+
+        grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { laneParamId (b, L, "on"),   1 }, nm ("On", false), isSt));
+        grp->addChild (std::make_unique<AudioParameterFloat>  (ParameterID { laneParamId (b, L, "freq"), 1 }, nm ("Freq", true),
+                                                               freqRange, 1000.0f, AudioParameterFloatAttributes().withStringFromValueFunction (intHz)));
+        grp->addChild (std::make_unique<AudioParameterFloat>  (ParameterID { laneParamId (b, L, "q"), 1 }, nm ("Q", true),
+                                                               qRange, 1.0f, AudioParameterFloatAttributes().withStringFromValueFunction (one)));
+        grp->addChild (std::make_unique<AudioParameterFloat>  (ParameterID { laneParamId (b, L, "gain"), 1 }, nm ("Gain", true),
+                                                               NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,
+                                                               AudioParameterFloatAttributes().withStringFromValueFunction (oneDb)));
+        grp->addChild (std::make_unique<AudioParameterChoice> (ParameterID { laneParamId (b, L, "slope"), 1 }, nm ("Slope", true), slopeItems, 1));
+        grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { laneParamId (b, L, "byp"), 1 }, nm ("Bypass", false), false));
+    }
+
+    layout.add (std::move (grp));
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
@@ -88,11 +100,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                              juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
     // Global phase mode + linear-phase quality (FIR length -> latency). Zero Latency = matched IIR
-    // (minimum-phase, no delay, the track-EQ default). Linear Phase = FIR convolution (no phase shift,
-    // N/2 latency, for surgical band work). "Natural Phase" — the Pro-Q-style low-phase-shift hybrid —
-    // is reserved here but NOT yet implemented; the editor greys it out. Order = increasing
-    // phase-correction/latency, so index 2 is Linear: the DSP treats index 2 as the FIR path, and the
-    // disabled middle (index 1) safely falls through to the IIR path until the hybrid is built.
+    // (minimum-phase, no delay, the track-EQ default). Natural Phase = mixed-phase FIR (φ=k·φ_min).
+    // Linear Phase = FIR convolution (no phase shift, N/2 latency, for surgical band work).
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "phaseMode", 1 }, "Phase",
                                                               juce::StringArray { "Zero Latency", "Natural Phase", "Linear Phase" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "lpQuality", 1 }, "Linear Quality",

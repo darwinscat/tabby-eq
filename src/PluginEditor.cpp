@@ -130,52 +130,16 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
     display.setToolbarPlacement ((int)  proc.apvts.state.getProperty ("toolbarPlace", 0));   // floating edit-strip behaviour
 
-    msFreqLink = (bool) proc.apvts.state.getProperty ("msFreqLink", false);   // M/S Mid<->Side freq lock
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
-    for (int b = 0; b < tabby::kNumBands; ++b)
-    {
-        proc.apvts.addParameterListener (tabby::bandId (b, "freq"),  this);
-        proc.apvts.addParameterListener (tabby::bandId (b, "sFreq"), this);
-    }
+    // Per-point Link FQ / Link Q are now mirrored PROCESSOR-side (host-safe, works with the editor closed);
+    // the old editor-only msFreqLink machinery is gone. The View menu edits only the GLOBAL new-split defaults.
 
     setResizable (true, true);
     setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);
 }
 
-TabbyEqEditor::~TabbyEqEditor()
-{
-    for (int b = 0; b < tabby::kNumBands; ++b)
-    {
-        proc.apvts.removeParameterListener (tabby::bandId (b, "freq"),  this);
-        proc.apvts.removeParameterListener (tabby::bandId (b, "sFreq"), this);
-    }
-}
-
-void TabbyEqEditor::parameterChanged (const juce::String& id, float value)   // M/S freq-link mirror
-{
-    if (! msFreqLink || mirroring) return;
-    const bool isSide = id.endsWith ("_sFreq");
-    const bool isMid  = ! isSide && id.endsWith ("_freq");
-    if (! isSide && ! isMid) return;
-    const int b = id.substring (4).upToFirstOccurrenceOf ("_", false, false).getIntValue();
-    if (b < 0 || b >= tabby::kNumBands) return;
-    if (proc.apvts.getRawParameterValue (tabby::bandId (b, "ms"))->load() < 0.5f) return;   // only while split
-    if (auto* sib = proc.apvts.getParameter (tabby::bandId (b, isSide ? "freq" : "sFreq")))
-    {
-        const juce::ScopedValueSetter<bool> guard (mirroring, true);
-        sib->setValueNotifyingHost (sib->convertTo0to1 (value));
-    }
-}
-
-void TabbyEqEditor::alignLinkedFreqs()   // copy each split band's Mid freq onto its Side
-{
-    for (int b = 0; b < tabby::kNumBands; ++b)
-        if (proc.apvts.getRawParameterValue (tabby::bandId (b, "ms"))->load() >= 0.5f)
-            if (auto* mid = proc.apvts.getParameter (tabby::bandId (b, "freq")))
-                if (auto* side = proc.apvts.getParameter (tabby::bandId (b, "sFreq")))
-                    side->setValueNotifyingHost (mid->getValue());
-}
+TabbyEqEditor::~TabbyEqEditor() = default;
 
 void TabbyEqEditor::updatePhaseUi()
 {
@@ -235,7 +199,11 @@ void TabbyEqEditor::showViewMenu()
     for (int i = 0; i < 4; ++i)
         audMenu.addItem (30 + i, "Q " + juce::String (audQv[i]), true, juce::roundToInt (display.auditionQ()) == audQv[i]);
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
-    m.addItem (40, "M/S: link Mid/Side freq", true, msFreqLink);
+    // Link FQ / Link Q are per-point (mirrored processor-side); here the View menu edits the GLOBAL defaults
+    // for newly split points. Interim (PR D adds the per-point lane menu): toggling ON also links the
+    // currently-selected split band right away.
+    m.addItem (40, "Link FQ (new splits)", true, (bool) proc.apvts.state.getProperty ("defaultLinkFq", false));
+    m.addItem (41, "Link Q (new splits)",  true, (bool) proc.apvts.state.getProperty ("defaultLinkQ", false));
 
     juce::PopupMenu domMenu;
     const int dom = proc.getSpectrumDomain();
@@ -264,8 +232,20 @@ void TabbyEqEditor::showViewMenu()
         if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
         if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }
         if (r >= 30 && r <= 33) { const int qv[] = { 3, 6, 9, 12 }; const float q = (float) qv[r - 30]; d.setAuditionQ (q); st.setProperty ("auditionQ", q, nullptr); }
-        if (r == 40) { safe->msFreqLink = ! safe->msFreqLink; st.setProperty ("msFreqLink", safe->msFreqLink, nullptr);
-                       if (safe->msFreqLink) safe->alignLinkedFreqs(); }   // snap Side->Mid immediately
+        if (r == 40 || r == 41)
+        {
+            const char* gKey = (r == 40) ? "defaultLinkFq" : "defaultLinkQ";
+            const char* bKey = (r == 40) ? "linkFq"        : "linkQ";
+            const bool v = ! (bool) st.getProperty (gKey, false);
+            st.setProperty (gKey, v, nullptr);
+            const int sb = safe->display.selectedBand();
+            if (v && sb >= 0)   // interim: apply immediately to the selected split band
+            {
+                const bool split = safe->proc.apvts.getRawParameterValue (tabby::laneParamId (sb, 3, "on"))->load() > 0.5f
+                                || safe->proc.apvts.getRawParameterValue (tabby::laneParamId (sb, 4, "on"))->load() > 0.5f;
+                if (split) st.setProperty (tabby::bandId (sb, bKey), true, nullptr);
+            }
+        }
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
         if (r >= 70 && r <= 74) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
     });

@@ -43,13 +43,6 @@ namespace
     bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch; }
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
-    // Mid/main vs Side param id: "freq" -> "sFreq", "q" -> "sQ", "gain" -> "sGain", "type" -> "sType", ...
-    juce::String laneParamId (int b, bool side, const juce::String& base)
-    {
-        if (side) return tabby::bandId (b, "s" + base.substring (0, 1).toUpperCase() + base.substring (1));
-        return tabby::bandId (b, base);
-    }
-
     // HP/LP whisker maps to the DISCRETE slope list (steeper = narrower handle) instead of Q.
     constexpr int kSlopeDb[7] = { 6, 12, 24, 36, 48, 72, 96 };
     int    slopeIndexFromDb (int db) noexcept { for (int i = 0; i < 7; ++i) if (kSlopeDb[i] == db) return i; return 1; }
@@ -111,7 +104,8 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
     setGainRange ((double) proc.apvts.state.getProperty ("gainRange", 12.0), false);   // restore saved scale (no re-persist)
     { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
-      for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) mx = juce::jmax (mx, std::abs (paramCache[b].gainDb));
+      for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
+          for (int L = 0; L < teq::kNumLanes; ++L) if (paramCache[b].lanes[L].on) mx = juce::jmax (mx, std::abs (paramCache[b].lanes[L].gainDb));
       while (gainRange < kGainSteps[3] && mx > gainRange) setGainRange (nextGainStep (gainRange), false); }
 
     startTimerHz (30);
@@ -166,24 +160,61 @@ float  EqCurveDisplay::specDbToY (double db) const noexcept
 }
 
 //==============================================================================
+// Two-lane UX (ST <-> Mid/Side) node/lane helpers.
+bool EqCurveDisplay::splitB (int b) const noexcept
+{
+    return paramCache[(size_t) b].lane (teq::Lane::Mid).on || paramCache[(size_t) b].lane (teq::Lane::Side).on;
+}
+bool EqCurveDisplay::splitLive (int b) const noexcept
+{
+    auto* m = proc.apvts.getRawParameterValue (tabby::laneParamId (b, 3, "on"));
+    auto* s = proc.apvts.getRawParameterValue (tabby::laneParamId (b, 4, "on"));
+    return (m != nullptr && m->load() > 0.5f) || (s != nullptr && s->load() > 0.5f);
+}
+teq::Lane EqCurveDisplay::laneOf (int b, bool side) const noexcept
+{
+    if (! splitB (b)) return teq::Lane::Stereo;
+    return side ? teq::Lane::Side : teq::Lane::Mid;
+}
+teq::Lane EqCurveDisplay::laneOfLive (int b, bool side) const noexcept
+{
+    if (! splitLive (b)) return teq::Lane::Stereo;
+    return side ? teq::Lane::Side : teq::Lane::Mid;
+}
+const char* EqCurveDisplay::laneKeyStr (teq::Lane l) noexcept
+{
+    switch (l)
+    {
+        case teq::Lane::Left:  return "l";
+        case teq::Lane::Right: return "r";
+        case teq::Lane::Mid:   return "m";
+        case teq::Lane::Side:  return "s";
+        case teq::Lane::Stereo:
+        default:               return "st";
+    }
+}
+juce::String EqCurveDisplay::laneParamId (int b, bool side, juce::StringRef base) const
+{
+    const juce::String bs (base);
+    if (bs == "type") return tabby::bandId (b, "type");   // one SHARED type per point (decision #2)
+    if (bs == "on")   return tabby::bandId (b, "on");     // point exists
+    const juce::String field = (bs == "bypass") ? "byp" : bs;   // node double-click toggles the LANE ghost
+    return tabby::bandId (b, juce::String (laneKeyStr (laneOfLive (b, side))) + "_" + field);
+}
+
+//==============================================================================
 void EqCurveDisplay::refreshDesigns()
 {
     fsCache = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 44100.0;
     const double dfs = designFs();   // oversampled display rate (see designFs) — the curve shows the analog intent
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
-        paramCache[b]  = proc.readBand (b);
-        designCache[b] = paramCache[b].on ? teq::designBand (paramCache[b], dfs) : teq::BandDesign {};
-        designCacheSide[b] = (paramCache[b].on && paramCache[b].ms) ? teq::designBand (sideView (b), dfs) : teq::BandDesign {};
+        paramCache[b] = proc.readBand (b);
+        // designCache = the ST/Mid node's lane; designCacheSide = the Side node's lane (split points only).
+        // laneView() packs the chosen lane into the primary design slot so designBand() serves every lane.
+        designCache[b]     = paramCache[b].on ? teq::designBand (teq::laneView (paramCache[b], laneOf (b, false)), dfs) : teq::BandDesign {};
+        designCacheSide[b] = (paramCache[b].on && splitB (b)) ? teq::designBand (teq::laneView (paramCache[b], teq::Lane::Side), dfs) : teq::BandDesign {};
     }
-}
-
-teq::BandParams EqCurveDisplay::sideView (int b) const noexcept   // the Side lane as a plain BandParams
-{
-    teq::BandParams v = paramCache[(size_t) b];
-    v.type = v.sType; v.freq = v.sFreq; v.Q = v.sQ; v.gainDb = v.sGainDb; v.slope = v.sSlope;
-    v.on = v.sOn; v.bypass = v.sBypass; v.swept = false; v.ms = false;
-    return v;
 }
 
 double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
@@ -196,16 +227,10 @@ double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
         if (! paramCache[b].on) continue;
-        if (paramCache[b].ms && side)   // Side composite: an M/S band contributes its Side lane
-        {
-            if (paramCache[b].sOn && ! paramCache[b].sBypass)
-                for (int s = 0; s < designCacheSide[b].n; ++s) h *= teq::evalCoeffs (designCacheSide[b].sec[s], w);
-        }
-        else                            // Mid composite, or a Stereo band (which affects both M and S)
-        {
-            if (! paramCache[b].bypass)
-                for (int s = 0; s < designCache[b].n; ++s) h *= teq::evalCoeffs (designCache[b].sec[s], w);
-        }
+        const teq::Lane l = laneOf (b, side);                       // Side axis uses the Side lane of a split point,
+        if (! teq::laneActive (paramCache[b], l)) continue;         // else the ST/Mid lane (which folds into both axes)
+        const auto& d = (side && splitB (b)) ? designCacheSide[b] : designCache[b];
+        for (int s = 0; s < d.n; ++s) h *= teq::evalCoeffs (d.sec[s], w);
     }
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
 }
@@ -215,29 +240,27 @@ juce::Point<float> EqCurveDisplay::nodePos (int b, bool side) const noexcept
     // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor). HP/LP, notch and all-pass are
     // gain-less (cut/surgical/phase) so they always rest on the 0 dB line and never drag vertically; only
     // band-pass rides the composite at its corner.
-    const auto& bp = paramCache[(size_t) b];
-    const bool   S = bp.ms && side;
-    const auto   t = S ? bp.sType : bp.type;
-    const double f = S ? bp.sFreq : bp.freq;
-    const double g = S ? bp.sGainDb : bp.gainDb;
+    const auto&  lp = paramCache[(size_t) b].lane (laneOf (b, side));
+    const auto   t  = paramCache[(size_t) b].type;              // shared point type
+    const double f  = lp.freq;
+    const double g  = lp.gainDb;
     double db;
     if (hasGain (t))                                                                    db = g;
     else if (isCut (t) || t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
-    else                                                                                db = compositeDb (f, S);
+    else                                                                                db = compositeDb (f, side && splitB (b));
     return { freqToX (f), dbToY (db) };
 }
 
 std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (int b, bool side) const noexcept
 {
-    const auto& bp = paramCache[(size_t) b];
-    const bool   S = bp.ms && side;
-    const auto  pos = nodePos (b, side);
-    const double f0 = S ? bp.sFreq : bp.freq;
-    const auto   t  = S ? bp.sType : bp.type;
-    const int    sl = S ? bp.sSlope : bp.slope;
-    const double qv = S ? bp.sQ : bp.Q;
-    const double bw = slopeWhisker (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
-    const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
+    const auto&  lp  = paramCache[(size_t) b].lane (laneOf (b, side));
+    const auto   pos = nodePos (b, side);
+    const double f0  = lp.freq;
+    const auto   t   = paramCache[(size_t) b].type;             // shared point type
+    const int    sl  = lp.slope;
+    const double qv  = lp.Q;
+    const double bw  = slopeWhisker (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
+    const float dx   = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
 
@@ -250,8 +273,7 @@ juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
 
 double EqCurveDisplay::bandDb (int b, double f, bool side) const noexcept
 {
-    const bool   S = paramCache[(size_t) b].ms && side;
-    const auto&  d = S ? designCacheSide[(size_t) b] : designCache[(size_t) b];
+    const auto&  d = (side && splitB (b)) ? designCacheSide[(size_t) b] : designCache[(size_t) b];
     const double dfs = designFs();   // oversampled (see compositeDb) so LP/BP dive smoothly, no Nyquist flatten
     const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * dfs) / dfs;
     std::complex<double> h { 1.0, 0.0 };
@@ -267,7 +289,7 @@ EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
         {
             const float dm = p.getDistanceSquaredFrom (nodePos (b, false));
             if (dm < bestD) { bestD = dm; best = { b, false }; }
-            if (paramCache[b].ms)
+            if (splitB (b))
             {
                 const float ds = p.getDistanceSquaredFrom (nodePos (b, true));
                 if (ds < bestD) { bestD = ds; best = { b, true }; }
@@ -399,7 +421,7 @@ juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
     {
         if (! (b == selBand && ! selSide))              others[no++] = nodePos (b, false);
-        if (paramCache[b].ms && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
+        if (splitB (b) && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
     }
 
     const juce::Rectangle<float> canvas (0.0f, 0.0f, (float) getWidth(), (float) getHeight());
@@ -530,10 +552,11 @@ void EqCurveDisplay::stepSelection (int dir)
     int idx[tabby::kNumBands]; int n = 0;
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) idx[n++] = b;
     if (n == 0) return;
+    auto mainFreq = [this] (int b) { return paramCache[(size_t) b].lane (laneOf (b, false)).freq; };   // ST/Mid node freq
     for (int i = 1; i < n; ++i)                       // insertion sort by frequency (n <= 24)
     {
         const int k = idx[i]; int j = i - 1;
-        while (j >= 0 && paramCache[idx[j]].freq > paramCache[k].freq) { idx[j + 1] = idx[j]; --j; }
+        while (j >= 0 && mainFreq (idx[j]) > mainFreq (k)) { idx[j + 1] = idx[j]; --j; }
         idx[j + 1] = k;
     }
     int cur = -1;
@@ -544,15 +567,16 @@ void EqCurveDisplay::stepSelection (int dir)
 
 juce::String EqCurveDisplay::readoutText (int b) const
 {
-    const auto& p = paramCache[(size_t) b];
-    const double f = p.freq;
+    const auto&  lp = paramCache[(size_t) b].lane (laneOf (b, false));   // the ST/Mid node
+    const auto   t  = paramCache[(size_t) b].type;
+    const double f  = lp.freq;
     juce::String s = f >= 1000.0 ? juce::String (f / 1000.0, 2) + " kHz"
                                  : juce::String (juce::roundToInt (f)) + " Hz";
-    if (hasGain (p.type))
-        s << "   " << (p.gainDb >= 0.0 ? "+" : "") << juce::String (p.gainDb, 1) << " dB";
-    const bool showsQ = p.type != teq::FilterType::Tilt;                                 // tilt ignores Q (shelves now resonant)
+    if (hasGain (t))
+        s << "   " << (lp.gainDb >= 0.0 ? "+" : "") << juce::String (lp.gainDb, 1) << " dB";
+    const bool showsQ = t != teq::FilterType::Tilt;                                 // tilt ignores Q (shelves now resonant)
     if (showsQ)
-        s << "   Q " << juce::String (p.Q, 1);
+        s << "   Q " << juce::String (lp.Q, 1);
     return s;
 }
 
@@ -655,8 +679,9 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
     if (audVisual == AudVisual::Bell)
     {
         teq::BandParams bp;
-        bp.on = true; bp.type = teq::FilterType::Bell; bp.freq = f0;
-        bp.Q = juce::jmax (0.5, qc); bp.gainDb = 20.0;                       // a tall narrow bell = what you hear
+        bp.on = true; bp.type = teq::FilterType::Bell;
+        auto& st = bp.lane (teq::Lane::Stereo);
+        st.freq = f0; st.Q = juce::jmax (0.5, qc); st.gainDb = 20.0;         // a tall narrow bell = what you hear
         const float y0 = dbToY (0.0);
         juce::Path line, fill; bool started = false;
         for (float x = 0.0f; x <= w; x += 3.0f)
@@ -773,8 +798,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
     {
-        curveXs[nCurveX++] = freqToX (paramCache[b].freq);
-        if (paramCache[b].ms) curveXs[nCurveX++] = freqToX (paramCache[b].sFreq);
+        curveXs[nCurveX++] = freqToX (paramCache[b].lane (laneOf (b, false)).freq);
+        if (splitB (b)) curveXs[nCurveX++] = freqToX (paramCache[b].lane (teq::Lane::Side).freq);
     }
     std::sort (curveXs, curveXs + nCurveX);
     // Below the graph floor, let the curve DIVE off the bottom axis (it's clipped to the plot area, below)
@@ -791,8 +816,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const float y0 = dbToY (0.0);
         auto drawLane = [&] (int b, bool side)
         {
-            const bool laneByp = side ? (paramCache[b].sBypass || ! paramCache[b].sOn) : paramCache[b].bypass;
-            if (laneByp) return;
+            const auto& lp = paramCache[b].lane (laneOf (b, side));
+            if (paramCache[b].bypass || lp.bypass || ! lp.on) return;    // point/lane bypass or disabled lane -> no curve
             juce::Path bc, bf;
             bf.startNewSubPath (0.0f, y0);
             for (int i = 0; i < nCurveX; ++i)
@@ -813,7 +838,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             if (paramCache[b].on && (solo < 0 || solo == b))
             {
                 drawLane (b, false);
-                if (paramCache[b].ms) drawLane (b, true);
+                if (splitB (b)) drawLane (b, true);
             }
     }
 
@@ -867,7 +892,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         // Side composite (when any band is M/S): a second curve in light violet. The orange line above
         // is then the Mid composite; together they show what L/R become.
         bool anyMs = false;
-        for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on && paramCache[b].ms) { anyMs = true; break; }
+        for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on && splitB (b)) { anyMs = true; break; }
         if (anyMs)
         {
             juce::Path sline; bool st = false;
@@ -909,7 +934,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const auto pos = nodePos (b, side);
         const auto col = bandColour (b);
         const auto numR = juce::Rectangle<float> (pos.x - kNodeR, pos.y - kNodeR, kNodeR * 2, kNodeR * 2);
-        const bool byp = side ? (paramCache[b].sBypass || ! paramCache[b].sOn) : paramCache[b].bypass;
+        const bool byp = paramCache[b].bypass || paramCache[b].lane (laneOf (b, side)).bypass;   // point or lane bypass -> ghost
         if (byp)   // ghost: dim hollow ring — still hit-tested, so it's clickable back on
         {
             g.setColour (col.withAlpha (0.45f));
@@ -935,7 +960,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (paramCache[b].on)
         {
             drawNode (b, false);
-            if (paramCache[b].ms) drawNode (b, true);
+            if (splitB (b)) drawNode (b, true);
         }
 
     // --- selection highlight (the focused lane's node) --------------------
@@ -948,7 +973,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.drawEllipse (pos.x - kNodeR - 3, pos.y - kNodeR - 3, (kNodeR + 3) * 2, (kNodeR + 3) * 2, 1.5f);
 
         // Whiskers (Neutron-style): drag an end handle to set bandwidth/Q (HP/LP -> discrete slope)
-        const auto laneType = (paramCache[(size_t) rb].ms && rside) ? paramCache[(size_t) rb].sType : paramCache[(size_t) rb].type;
+        const auto laneType = paramCache[(size_t) rb].type;   // shared point type
         if (whiskerRelevant (laneType))
         {
             const auto wk  = whiskerEnds (rb, rside);
@@ -970,7 +995,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     if (auditioning)
         drawListenVisual (g, (double) audFreq, (double) audQ, "LISTEN");
     else if (solo >= 0 && solo < tabby::kNumBands && paramCache[(size_t) solo].on)
-        drawListenVisual (g, paramCache[(size_t) solo].freq, (double) audQSetting, "SOLO");   // width from the Listen-Q config
+        drawListenVisual (g, paramCache[(size_t) solo].lane (laneOf (solo, false)).freq, (double) audQSetting, "SOLO");   // width from the Listen-Q config
 
     // --- add-band affordance: live press-drag preview, or the hovering "+" near a trigger line ---
     if (placing)
@@ -1021,15 +1046,20 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         if (! paramCache[b].on)
         {
             const auto ft = tabby::filterTypeFromChoice (typeIndex);
-            setParamGestured (tabby::bandId (b, "type"), typeIndex);
-            setParamGestured (tabby::bandId (b, "freq"), juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x)));
+            setParamGestured (tabby::bandId (b, "type"), typeIndex);        // shared point type
+            // A fresh band is an unsplit ST lane. Force the split lanes off (a vacated slot may carry stale
+            // on flags), and edit the ST lane's fields.
+            setParamGestured (tabby::laneParamId (b, 0, "on"), 1.0);
+            for (int L = 1; L < teq::kNumLanes; ++L) setParamGestured (tabby::laneParamId (b, L, "on"), 0.0);
+            setParamGestured (tabby::laneParamId (b, 0, "freq"), juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x)));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
-                setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
-            setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
-                                                       || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
-            if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
-            setParamGestured (tabby::bandId (b, "bypass"), 0.0);
-            setParamGestured (tabby::bandId (b, "on"), 1.0);
+                setParamGestured (tabby::laneParamId (b, 0, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
+            setParamGestured (tabby::laneParamId (b, 0, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
+                                                              || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
+            if (slopeIndex >= 0) setParamGestured (tabby::laneParamId (b, 0, "slope"), (double) slopeIndex);
+            setParamGestured (tabby::laneParamId (b, 0, "byp"), 0.0);
+            setParamGestured (tabby::bandId (b, "bypass"), 0.0);            // point bypass off
+            setParamGestured (tabby::bandId (b, "on"), 1.0);               // point on
             selectBand (b);
             return;
         }
@@ -1039,14 +1069,15 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
 {
     const auto ft = tabby::filterTypeFromChoice (s.typeIndex);
 
+    const double f0    = juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x));   // preview a placeable band (≤ 20k)
+    const double gain  = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
+    const int    slDb  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
+
     teq::BandParams bp;
-    bp.on     = true;
-    bp.type   = ft;
-    bp.freq   = juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x));   // preview a placeable band (≤ 20k), matching the commit
-    bp.Q      = isCut (ft) ? 0.707 : 1.0;
-    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
-    bp.gainDb = gain;
-    bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
+    bp.on   = true;
+    bp.type = ft;
+    { auto& st = bp.lane (teq::Lane::Stereo);
+      st.freq = f0; st.Q = isCut (ft) ? 0.707 : 1.0; st.gainDb = gain; st.slope = slDb; }
 
     const auto col = tabby::palette::violetLo();
 
@@ -1054,7 +1085,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     // at the plot floor exactly like the committed curves, not diving past it or jittering).
     juce::Path path;
     const float wpx = (float) getWidth();
-    const float xf0 = freqToX (bp.freq);
+    const float xf0 = freqToX (f0);
     bool started = false, placedF0 = false;
     const double dfs = designFs();   // oversampled (see compositeDb) so a preview LP/BP dives smoothly past Nyquist
     auto emit = [&] (float x)
@@ -1081,17 +1112,17 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     if (hasGain (ft)) nodeDb = gain;
     else if (! (isCut (ft) || ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
         nodeDb = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (
-                     teq::bandResponse (bp, dfs, 2.0 * juce::MathConstants<double>::pi * bp.freq / dfs))));
-    const float nx = freqToX (bp.freq), ny = dbToY (nodeDb);
+                     teq::bandResponse (bp, dfs, 2.0 * juce::MathConstants<double>::pi * f0 / dfs))));
+    const float nx = freqToX (f0), ny = dbToY (nodeDb);
     g.setColour (col.withAlpha (0.9f));
     g.drawEllipse (nx - kNodeR, ny - kNodeR, kNodeR * 2.0f, kNodeR * 2.0f, 1.5f);
 
     // type icon + label
     const char* names[] = { "Bell", "Low Shelf", "High Shelf", "HPF", "LPF", "Band Pass", "Notch", "All Pass", "Tilt" };
     juce::String label = names[juce::jlimit (0, 8, s.typeIndex)];
-    if (isCut (ft)) label << " " << juce::String (bp.slope);
-    label << "   " << (bp.freq >= 1000.0 ? juce::String (bp.freq / 1000.0, 2) + " kHz"
-                                         : juce::String (juce::roundToInt (bp.freq)) + " Hz");
+    if (isCut (ft)) label << " " << juce::String (slDb);
+    label << "   " << (f0 >= 1000.0 ? juce::String (f0 / 1000.0, 2) + " kHz"
+                                    : juce::String (juce::roundToInt (f0)) + " Hz");
     if (! isCut (ft) && s.hasGainCtrl) label << "   " << (gain >= 0.0 ? "+" : "") << juce::String (gain, 1) << " dB";
 
     const float lblW = (float) label.length() * 6.6f + 22.0f, lblH = 16.0f;
@@ -1170,15 +1201,15 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
                 it.itemID = i + 1;
                 it.text   = names[i];
                 it.setImage (tabby::shapes::icon (tabby::filterTypeFromChoice (i), tabby::palette::violetLo()));
-                it.setTicked ((side ? paramCache[b].sType : paramCache[b].type) == tabby::filterTypeFromChoice (i));
+                it.setTicked (paramCache[b].type == tabby::filterTypeFromChoice (i));   // shared point type
                 m.addItem (it);
             }
             m.addSeparator();
             m.addItem (100, "Remove band");
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, side] (int r) {
                 if (safe == nullptr || r == 0) return;
-                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);   // remove the whole band
-                else          safe->setParamGestured (laneParamId (b, side, "type"), r - 1);   // set this lane's type
+                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);   // remove the whole band (point off)
+                else          safe->setParamGestured (safe->laneParamId (b, side, "type"), r - 1);   // set the SHARED point type
             });
         }
         else          // empty: add a band here, if a slot is free
@@ -1224,9 +1255,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     }
 
     // A drag on the selected lane's Q-whisker handle sets Q (Neutron-style), keeping the selection.
-    const auto selType = (selBand < 0) ? teq::FilterType::Bell
-                       : ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
-                                                                       : paramCache[(size_t) selBand].type);
+    const auto selType = (selBand < 0) ? teq::FilterType::Bell : paramCache[(size_t) selBand].type;   // shared point type
     if (selBand >= 0 && b < 0 && paramCache[(size_t) selBand].on && whiskerRelevant (selType))
     {
         const auto wk = whiskerEnds (selBand, selSide);
@@ -1238,8 +1267,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             whiskerSlope = slopeWhisker (selType);   // HP/LP + Notch step the discrete slope; others set Q
             if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selSide, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
-            lastDragFreq = (float) ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sFreq
-                                                                                 : paramCache[(size_t) selBand].freq);
+            lastDragFreq = (float) paramCache[(size_t) selBand].lane (laneOf (selBand, selSide)).freq;
             grabKeyboardFocus();
             if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
             return;
@@ -1251,8 +1279,8 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     draggingBand = b; draggingSide = side;
     if (b >= 0)
     {
-        const bool S  = paramCache[b].ms && side;
-        const auto lt = S ? paramCache[b].sType : paramCache[b].type;
+        const auto& lp = paramCache[b].lane (laneOf (b, side));
+        const auto  lt = paramCache[b].type;                                     // shared point type
         pressBand = b; pressPos = e.position; pressMs = juce::Time::getMillisecondCounter(); pressMoved = false;
         if (auto* fp = proc.apvts.getParameter (laneParamId (b, side, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (lt);
@@ -1260,9 +1288,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         {
             if (auto* gp = proc.apvts.getParameter (laneParamId (b, side, "gain"))) gp->beginChangeGesture();
             gainDragRefY    = (double) e.position.y;                              // relative-drag anchor...
-            gainDragRefGain = S ? paramCache[b].sGainDb : paramCache[b].gainDb;   // ...at the node's current gain
+            gainDragRefGain = lp.gainDb;                                          // ...at the node's current gain
         }
-        lastDragFreq = (float) (S ? paramCache[b].sFreq : paramCache[b].freq);
+        lastDragFreq = (float) lp.freq;
         grabKeyboardFocus();
         if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
     }
@@ -1284,8 +1312,7 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     if (draggingBand < 0) return;
     if (pressBand >= 0 && e.position.getDistanceFrom (pressPos) > 4.0f) pressMoved = true;   // a real drag cancels long-press
     const bool lockY = e.mods.isAltDown() && audLockGain;                                     // Alt+lock -> sweep freq only
-    const bool S = paramCache[(size_t) draggingBand].ms && draggingSide;                      // which lane is being dragged
-    const double laneF0 = S ? paramCache[(size_t) draggingBand].sFreq : paramCache[(size_t) draggingBand].freq;
+    const double laneF0 = paramCache[(size_t) draggingBand].lane (laneOf (draggingBand, draggingSide)).freq;   // the dragged lane
     lastDragFreq = (float) (draggingQ ? laneF0 : xToFreq (e.position.x));
     driveAudition (e.mods.isAltDown(), lastDragFreq, audQSetting);                            // Alt = narrow band-listen
     if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
@@ -1373,13 +1400,12 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         }
 
         refreshDesigns();
-        const auto& p  = paramCache[(size_t) selBand];
-        const bool   S  = p.ms && selSide;                       // act on the focused lane
-        const auto   lt = S ? p.sType   : p.type;
-        const double lf = S ? p.sFreq   : p.freq;
-        const double lg = S ? p.sGainDb : p.gainDb;
-        const double lq = S ? p.sQ      : p.Q;
-        const int    ls = S ? p.sSlope  : p.slope;
+        const auto&  lp = paramCache[(size_t) selBand].lane (laneOf (selBand, selSide));   // the focused lane
+        const auto   lt = paramCache[(size_t) selBand].type;     // shared point type
+        const double lf = lp.freq;
+        const double lg = lp.gainDb;
+        const double lq = lp.Q;
+        const int    ls = lp.slope;
 
         if (! alt)
         {
@@ -1433,12 +1459,11 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[(size_t) b].on)
     {
         if (hoverPos.getDistanceFrom (nodePos (b, false)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
-        if (paramCache[(size_t) b].ms && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+        if (splitB (b) && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
     }
 
     // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)
-    const auto selType = (selBand >= 0 && paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
-                       : (selBand >= 0 ? paramCache[(size_t) selBand].type : teq::FilterType::Bell);
+    const auto selType = (selBand >= 0) ? paramCache[(size_t) selBand].type : teq::FilterType::Bell;   // shared point type
     if (selBand >= 0 && paramCache[(size_t) selBand].on && whiskerRelevant (selType))
     {
         const auto wk = whiskerEnds (selBand, selSide);
@@ -1460,8 +1485,7 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
     const Hit hit = nodeAt (e.position);
     if (hit.band >= 0)                                            // on a node -> toggle that lane's bypass (ghost)
     {
-        const bool byp = (paramCache[(size_t) hit.band].ms && hit.side) ? paramCache[(size_t) hit.band].sBypass
-                                                                        : paramCache[(size_t) hit.band].bypass;
+        const bool byp = paramCache[(size_t) hit.band].lane (laneOf (hit.band, hit.side)).bypass;
         setParamGestured (laneParamId (hit.band, hit.side, "bypass"), byp ? 0.0 : 1.0);
         selectBand (hit.band, hit.side);
     }

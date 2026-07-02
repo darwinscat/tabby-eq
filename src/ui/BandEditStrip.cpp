@@ -8,6 +8,9 @@
 namespace
 {
     const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+
+    // Lane indices (teq::Lane order): ST=0, L=1, R=2, M=3, S=4. The two-lane UX uses ST / M / S only.
+    enum { LaneSt = 0, LaneM = 3, LaneS = 4 };
 }
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
@@ -21,7 +24,7 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     onButton.onClick = [this]
     {
         if (bypassAtt != nullptr)
-            bypassAtt->setValueAsCompleteGesture (onButton.getToggleState() ? 1.0f : 0.0f);   // lit -> bypass it
+            bypassAtt->setValueAsCompleteGesture (onButton.getToggleState() ? 1.0f : 0.0f);   // lit -> bypass the point
     };
     addAndMakeVisible (onButton);
 
@@ -30,8 +33,8 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     soloButton.onClick = [this] { proc.setSoloBand (soloButton.getToggleState() ? curBand : -1); };
     addAndMakeVisible (soloButton);
 
-    // Type: a button (showing the current type) that opens a menu whose items carry shape icons —
-    // a plain ComboBox can't render per-item images, so we drive the menu ourselves.
+    // Type: a button (showing the current type) that opens a menu whose items carry shape icons. The type is
+    // SHARED by all of the point's lanes (decision #2), so this edits band{b}_type regardless of the edit lane.
     typeButton.onClick = [this] { showTypeMenu(); };
     addAndMakeVisible (typeButton);
 
@@ -44,7 +47,7 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     sideTab.setColour (juce::TextButton::buttonOnColourId, tabby::palette::orange());
     midTab.onClick  = [this] { setLane (false); };
     sideTab.onClick = [this] { setLane (true); };
-    addChildComponent (midTab);                                 // shown only in M/S
+    addChildComponent (midTab);                                 // shown only when split
     addChildComponent (sideTab);
 
     prevButton.onClick = [this] { if (onStep) onStep (-1); };   // editor maps these to display.stepSelection
@@ -87,11 +90,18 @@ void BandEditStrip::mouseUp    (const juce::MouseEvent&) { updateOpacity(); }
 
 BandEditStrip::~BandEditStrip() { proc.setSoloBand (-1); }   // never leave audio stuck in solo
 
+int BandEditStrip::activeLaneIndex() const
+{
+    return curMs ? (editingSide ? LaneS : LaneM) : LaneSt;
+}
+
 void BandEditStrip::setBand (int band)
 {
     curBand = band;
     const bool has = curBand >= 0;
-    curMs = has && proc.apvts.getRawParameterValue (tabby::bandId (curBand, "ms"))->load() > 0.5f;
+    // "split" (the two-lane UX's M/S mode) = the Mid or Side lane is enabled.
+    curMs = has && (proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneM, "on"))->load() > 0.5f
+                 || proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, LaneS, "on"))->load() > 0.5f);
     if (! curMs) editingSide = false;
 
     title.setText (has ? juce::String (curBand + 1) : juce::String ("—"), juce::dontSendNotification);
@@ -106,26 +116,27 @@ void BandEditStrip::setBand (int band)
     midTab.setToggleState (! editingSide, juce::dontSendNotification);
     sideTab.setToggleState (editingSide, juce::dontSendNotification);
 
-    typeButton.setType (tabby::filterTypeFromChoice (laneTypeIndex()));
+    typeButton.setType (tabby::filterTypeFromChoice (bandTypeIndex()));
 
-    rebind();   // (re)creates the lane attachments + bypass attachment (drives the power button)
+    rebind();   // (re)creates the lane attachments + point-bypass attachment (drives the power button)
     updateForType();
     soloButton.setToggleState (has && proc.getSoloBand() == curBand, juce::dontSendNotification);
-    resized();   // top-row layout depends on M/S
+    if (has) proc.setBandActiveLane (curBand, activeLaneIndex());
+    resized();   // top-row layout depends on split
     repaint();
 }
 
-juce::String BandEditStrip::laneId (const juce::String& base) const
+juce::String BandEditStrip::laneId (const juce::String& base) const   // lane-scoped id (ST / Mid / Side)
 {
-    if (curMs && editingSide)   // Side lane: "freq" -> "sFreq", "q" -> "sQ", "type" -> "sType", ...
-        return tabby::bandId (curBand, "s" + base.substring (0, 1).toUpperCase() + base.substring (1));
-    return tabby::bandId (curBand, base);
+    const int lane = activeLaneIndex();
+    const juce::String field = (base == "bypass") ? "byp" : base;
+    return tabby::laneParamId (curBand, lane, field);
 }
 
-int BandEditStrip::laneTypeIndex() const
+int BandEditStrip::bandTypeIndex() const   // the point's SHARED filter type
 {
     if (curBand < 0) return 0;
-    if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (laneId ("type"))))
+    if (auto* prm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (tabby::bandId (curBand, "type"))))
         return juce::jlimit (0, 8, prm->getIndex());
     return 0;
 }
@@ -135,9 +146,10 @@ void BandEditStrip::setActiveLane (bool side)
     editingSide = side;
     midTab.setToggleState (! side, juce::dontSendNotification);
     sideTab.setToggleState (side, juce::dontSendNotification);
-    typeButton.setType (tabby::filterTypeFromChoice (laneTypeIndex()));
+    typeButton.setType (tabby::filterTypeFromChoice (bandTypeIndex()));
     rebind();
     updateForType();
+    if (curBand >= 0) proc.setBandActiveLane (curBand, activeLaneIndex());
     repaint();
 }
 
@@ -147,40 +159,58 @@ void BandEditStrip::setLane (bool side)   // tab click: switch lane AND tell the
     if (onLaneChanged) onLaneChanged (side);
 }
 
-void BandEditStrip::copyMidToSide()   // seed Side from Mid so enabling M/S "splits" the band into two equals
+void BandEditStrip::copyStToMs()   // seed Mid + Side from the ST lane so a first split makes two equals
 {
     if (curBand < 0) return;
-    auto copy = [this] (const char* mid, const char* side)
+    auto copyField = [this] (const char* field)
     {
-        auto* m = proc.apvts.getParameter (tabby::bandId (curBand, mid));
-        auto* s = proc.apvts.getParameter (tabby::bandId (curBand, side));
-        if (m != nullptr && s != nullptr) s->setValueNotifyingHost (m->getValue());   // normalised (same ranges)
+        auto* st = proc.apvts.getParameter (tabby::laneParamId (curBand, LaneSt, field));
+        auto* m  = proc.apvts.getParameter (tabby::laneParamId (curBand, LaneM,  field));
+        auto* s  = proc.apvts.getParameter (tabby::laneParamId (curBand, LaneS,  field));
+        if (st == nullptr) return;
+        const float v = st->getValue();                       // normalised (all lanes share the same range)
+        if (m != nullptr) m->setValueNotifyingHost (v);
+        if (s != nullptr) s->setValueNotifyingHost (v);
     };
-    copy ("type", "sType"); copy ("freq", "sFreq"); copy ("q", "sQ");
-    copy ("gain", "sGain"); copy ("slope", "sSlope");
-    if (auto* s = proc.apvts.getParameter (tabby::bandId (curBand, "sOn")))     s->setValueNotifyingHost (1.0f);
-    if (auto* s = proc.apvts.getParameter (tabby::bandId (curBand, "sBypass"))) s->setValueNotifyingHost (0.0f);
+    copyField ("freq"); copyField ("q"); copyField ("gain"); copyField ("slope");   // type is shared, no copy
 }
 
 void BandEditStrip::toggleMs()
 {
     if (curBand < 0) return;
-    auto* msPrm = proc.apvts.getParameter (tabby::bandId (curBand, "ms"));
-    if (msPrm == nullptr) return;
-    const bool newMs = ! (msPrm->getValue() > 0.5f);
-    if (newMs && sideIsFresh()) copyMidToSide();           // seed Side from Mid only on the FIRST split;
-    msPrm->setValueNotifyingHost (newMs ? 1.0f : 0.0f);    // afterwards Side persists across ST<->M/S
-    if (! newMs) editingSide = false;
-    setBand (curBand);                                     // refresh mode / tabs / lane / layout
+    auto setLaneOn = [this] (int lane, bool on)
+    {
+        if (auto* prm = proc.apvts.getParameter (tabby::laneParamId (curBand, lane, "on")))
+            prm->setValueNotifyingHost (on ? 1.0f : 0.0f);
+    };
+
+    if (! curMs)   // ST -> split: enable m+s (seed from st on the FIRST split), disable st
+    {
+        if (msLanesFresh()) copyStToMs();                     // afterwards m/s persist across ST<->M/S
+        setLaneOn (LaneM, true); setLaneOn (LaneS, true); setLaneOn (LaneSt, false);
+        proc.apvts.state.setProperty (tabby::bandId (curBand, "linkFq"),                     // seed per-band link from the View defaults
+                                      (bool) proc.apvts.state.getProperty ("defaultLinkFq", false), nullptr);
+        proc.apvts.state.setProperty (tabby::bandId (curBand, "linkQ"),
+                                      (bool) proc.apvts.state.getProperty ("defaultLinkQ", false), nullptr);
+    }
+    else           // split -> ST: enable st, disable m+s (their params persist for the next split)
+    {
+        setLaneOn (LaneSt, true); setLaneOn (LaneM, false); setLaneOn (LaneS, false);
+        editingSide = false;
+    }
+    setBand (curBand);                                        // refresh mode / tabs / lane / layout
 }
 
-bool BandEditStrip::sideIsFresh() const   // Side lane untouched (factory defaults) -> safe to seed from Mid
+bool BandEditStrip::msLanesFresh() const   // Mid + Side lanes untouched (factory defaults) -> safe to seed from ST
 {
     if (curBand < 0) return false;
-    auto raw = [this] (const char* id) { return proc.apvts.getRawParameterValue (tabby::bandId (curBand, id))->load(); };
-    return std::abs (raw ("sFreq") - 1000.0f) < 0.5f && std::abs (raw ("sGain")) < 0.01f
-        && std::abs (raw ("sQ") - 1.0f) < 0.001f && (int) raw ("sType") == 0 && (int) raw ("sSlope") == 1
-        && raw ("sBypass") < 0.5f && raw ("sOn") > 0.5f;
+    auto raw = [this] (int lane, const char* f) { return proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, lane, f))->load(); };
+    auto fresh = [&] (int lane)
+    {
+        return std::abs (raw (lane, "freq") - 1000.0f) < 0.5f && std::abs (raw (lane, "gain")) < 0.01f
+            && std::abs (raw (lane, "q") - 1.0f) < 0.001f && (int) raw (lane, "slope") == 1 && raw (lane, "byp") < 0.5f;
+    };
+    return fresh (LaneM) && fresh (LaneS);   // ignore `on` (that's what we're toggling)
 }
 
 void BandEditStrip::rebind()
@@ -189,14 +219,13 @@ void BandEditStrip::rebind()
     slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset();
     if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); return; }
 
-    slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, laneId ("slope"), slopeBox);   // Mid or Side lane
+    slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, laneId ("slope"), slopeBox);   // ST / Mid / Side lane
     freqAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("freq"),  freq);
     qAtt     = std::make_unique<SliderAtt> (proc.apvts, laneId ("q"),     q);
     gainAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("gain"),  gain);
 
-    // Power button mirrors the lane's bypass param — single source of truth (node double-click + button
-    // both write it; this keeps the button's lit state in sync however it's toggled).
-    if (auto* bp = proc.apvts.getParameter (laneId ("bypass")))
+    // Power button mirrors the POINT bypass param — single source of truth (the whole point, not one lane).
+    if (auto* bp = proc.apvts.getParameter (tabby::bandId (curBand, "bypass")))
     {
         bypassAtt = std::make_unique<juce::ParameterAttachment> (*bp,
             [this] (float v) { onButton.setToggleState (v < 0.5f, juce::dontSendNotification); onButton.repaint(); });
@@ -207,7 +236,7 @@ void BandEditStrip::rebind()
 void BandEditStrip::showTypeMenu()
 {
     if (curBand < 0) return;
-    const int cur = laneTypeIndex();
+    const int cur = bandTypeIndex();
 
     juce::PopupMenu m;
     for (int i = 0; i < 9; ++i)
@@ -225,7 +254,7 @@ void BandEditStrip::showTypeMenu()
                      [safe] (int r)
                      {
                          if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
-                         if (auto* prm = safe->proc.apvts.getParameter (safe->laneId ("type")))
+                         if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "type")))   // SHARED point type
                              prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
                          safe->typeButton.setType (tabby::filterTypeFromChoice (r - 1));
                          safe->updateForType();
@@ -236,13 +265,12 @@ void BandEditStrip::updateForType()
 {
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
-    const auto t       = tabby::filterTypeFromChoice (laneTypeIndex());
+    const auto t       = tabby::filterTypeFromChoice (bandTypeIndex());
     const bool isCut   = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass);
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
-    // The Notch rides a variable ORDER now (felitronics-core v0.1.5, slope->order like HP/LP), so it takes the
-    // slope combo in octaves too — not a Q box — matching its slope-whisker on the curve.
+    // The Notch rides a variable ORDER (slope->order like HP/LP), so it takes the slope combo in octaves too.
     const bool usesSlope = isCut || (t == teq::FilterType::Notch);
 
     slopeBox.setVisible (usesSlope);                   // HP/LP + Notch -> the slope combo (octaves) replaces Q
@@ -265,17 +293,17 @@ void BandEditStrip::resized()
     auto r = getLocalBounds().reduced (8, 6);
 
     // top row: power · < index > · type-icon · solo · ST · [M][S].  The < index > nav is ALWAYS present; the
-    // M/S lane tabs (when split) sit to the RIGHT of ST — they no longer hijack the nav slot. The strip has a
-    // fixed width (EqCurveDisplay::kToolbarW) that always reserves the [M][S] slot, so ST never resizes it.
+    // M/S lane tabs (when split) sit to the RIGHT of ST. The strip has a fixed width that always reserves the
+    // [M][S] slot, so ST never resizes it.
     auto top = r.removeFromTop (22);
     r.removeFromTop (8);
-    onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
+    onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (point enable/bypass)
     top.removeFromLeft (6);
     prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));    // < index > nav — always
     title.setBounds (top.removeFromLeft (18));
     nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
     top.removeFromLeft (8);
-    typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
+    typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only (shared type)
     top.removeFromLeft (8);
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
     top.removeFromLeft (6);
@@ -289,8 +317,8 @@ void BandEditStrip::resized()
     }
 
     // bottom row (one line), adapts to the type:
-    //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
-    //   band-pass/notch/all-pass -> FREQ + Q · tilt -> FREQ + GAIN
+    //   HP/LP/Notch -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
+    //   band-pass/all-pass -> FREQ + Q · tilt -> FREQ + GAIN
     auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
     if (slopeBox.isVisible())
     {

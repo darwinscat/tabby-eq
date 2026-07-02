@@ -192,11 +192,20 @@ int main()
         for (int b = 0; b < tabby::kNumBands; ++b)
         {
             setChoice (p->apvts, tabby::bandId (b, "on"),   1);
-            setChoice (p->apvts, tabby::bandId (b, "type"), b % 9);        // Bell..Tilt
-            setChoice (p->apvts, tabby::bandId (b, "slope"), b % 7);        // 6..96 dB/oct
-            setFloat  (p->apvts, tabby::bandId (b, "freq"), 20.0f + (float) b * 800.0f);
-            setFloat  (p->apvts, tabby::bandId (b, "gain"), (b % 2 == 0 ? 24.0f : -24.0f));
-            setFloat  (p->apvts, tabby::bandId (b, "q"),    (b % 2 == 0 ? 40.0f : 0.05f));
+            setChoice (p->apvts, tabby::bandId (b, "type"), b % 9);        // Bell..Tilt (shared point type)
+            setChoice (p->apvts, tabby::laneParamId (b, 0, "slope"), b % 7);   // ST lane: 6..96 dB/oct
+            setFloat  (p->apvts, tabby::laneParamId (b, 0, "freq"), 20.0f + (float) b * 800.0f);
+            setFloat  (p->apvts, tabby::laneParamId (b, 0, "gain"), (b % 2 == 0 ? 24.0f : -24.0f));
+            setFloat  (p->apvts, tabby::laneParamId (b, 0, "q"),    (b % 2 == 0 ? 40.0f : 0.05f));
+            if (b % 3 == 0)   // exercise the split (M/S delta-fold) path on a third of the bands
+            {
+                setChoice (p->apvts, tabby::laneParamId (b, 0, "on"), 0);       // ST off
+                setChoice (p->apvts, tabby::laneParamId (b, 3, "on"), 1);       // Mid on
+                setChoice (p->apvts, tabby::laneParamId (b, 4, "on"), 1);       // Side on
+                setFloat  (p->apvts, tabby::laneParamId (b, 3, "gain"), 6.0f);
+                setFloat  (p->apvts, tabby::laneParamId (b, 4, "gain"), -6.0f);
+                setFloat  (p->apvts, tabby::laneParamId (b, 4, "freq"), 20.0f + (float) b * 850.0f);
+            }
         }
         for (int mode = 0; mode <= 2; ++mode)
         {
@@ -225,8 +234,7 @@ int main()
             auto child = state.getChild (i);
             const auto id = child.getProperty ("id").toString();
             if (id == "phaseMode" || id == "lpQuality"
-                || id.endsWith ("_slope") || id.endsWith ("_sSlope")
-                || id.endsWith ("_type")  || id.endsWith ("_sType"))
+                || id.endsWith ("_slope") || id.endsWith ("_type"))   // per-lane slopes + the shared point type
                 child.setProperty ("value", 999.0, nullptr);
         }
         p->apvts.replaceState (state);
