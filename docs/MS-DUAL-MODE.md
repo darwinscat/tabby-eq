@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 # TabbyEQ — Per-band Stereo ↔ M/S dual-mode (design + plan)
 
+> **SUPERSEDED by `LANES.md`** (2026-07-02): the dual-mode shipped, and the model generalizes to
+> per-band placement lanes ST/L/R/M/S. Kept for the shipped-state rationale and panel history.
+
 > Started 2026-06-28. Decided after a design panel (Codex + DeepSeek, both independently
 > recommended **Architecture A**). Inspiration: **Steinberg Frequency 2** (per-band ST / M-S split).
 
