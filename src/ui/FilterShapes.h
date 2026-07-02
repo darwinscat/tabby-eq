@@ -30,7 +30,7 @@ namespace tabby::shapes
             case FT::BandPass:  p.startNewSubPath (x0, bot); p.quadraticTo (cx - w * 0.10f, bot, cx, top);
                                 p.quadraticTo (cx + w * 0.10f, bot, x1, bot); break;
             case FT::Notch:     p.startNewSubPath (x0, top); p.quadraticTo (cx - w * 0.10f, top, cx, bot);
-                                p.quadraticTo (cx + w * 0.10f, top, x1, bot); break;
+                                p.quadraticTo (cx + w * 0.10f, top, x1, top); break;
             case FT::LowShelf:  p.startNewSubPath (x0, top); p.lineTo (cx - w * 0.12f, top);
                                 p.quadraticTo (cx, top, cx + w * 0.05f, mid); p.lineTo (x1, mid); break;
             case FT::HighShelf: p.startNewSubPath (x0, mid); p.lineTo (cx - w * 0.05f, mid);
