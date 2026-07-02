@@ -66,6 +66,12 @@ public:
     void  setAuditionLockGain (bool v) noexcept { audLockGain = v; }   // Alt-drag changes only freq (sweep)
     bool  auditionLockGain() const noexcept { return audLockGain; }
 
+    // Floating-toolbar placement strategy (View menu; persisted). 0 Classic (centered above/below — the
+    // original) · 1 Anchor-to-open-side · 2 Collision-aware (+leader line) · 3 Hybrid (float, else dock to an
+    // edge when the graph is crowded). (In the design discussion these were labelled 0 / 1 / 2 / 7.)
+    void setToolbarPlacement (int m) noexcept { toolbarPlace = (ToolbarPlace) juce::jlimit (0, 4, m); lastPlaceSlot = -1; positionToolbar(); repaint(); }
+    int  toolbarPlacement() const noexcept { return (int) toolbarPlace; }
+
 private:
     void timerCallback() override;
 
@@ -74,11 +80,18 @@ private:
     double xToFreq (float x)  const noexcept;
     float  dbToY   (double db) const noexcept;     // curve gain scale (± kGainRange around centre)
     double yToDb   (float y)   const noexcept;
-    float  specDbToY (double db) const noexcept;   // spectrum dBFS scale
+    float  specDbToY (double db) const noexcept;   // spectrum dBFS scale (always full height)
+    int    plotBottomY() const noexcept;           // bottom of the curve/node area — above the Fixed-lane strip
 
     struct Hit { int band = -1; bool side = false; };   // a node hit: which band + which lane (M/S)
 
     void   refreshDesigns();                       // pull the bands into the cache + design both lanes
+    // The curve is DESIGNED + evaluated at an oversampled "display" rate (>= 96k), not the real fs. A matched
+    // biquad's magnitude is even about fs/2, so at low real rates (44.1/48k) an LP/BP would visibly FLATTEN
+    // as it nears Nyquist (slope -> 0) and then kink; oversampling pushes that flattening far past the 28k
+    // axis so the curve shows the smooth analog INTENT (FabFilter-style) and looks identical at every rate.
+    // (The spectrum analyzer still uses the real fsCache — that's true measured content, not a design.)
+    double designFs() const noexcept { return juce::jmax (fsCache, 96000.0); }
     teq::BandParams sideView (int b) const noexcept;        // the band's Side lane as a BandParams (main fields)
     double compositeDb (double f, bool side = false) const noexcept;   // Mid (side=false) or Side composite
     juce::Point<float> nodePos (int band, bool side = false) const noexcept;
@@ -103,7 +116,14 @@ private:
     void    driveAudition (bool on, float freqHz = 1000.0f, float q = 6.0f);   // proc listen + spotlight state
     void   pushSpectrum();
     void   selectBand (int newSel, bool side = false);   // update selection + fire onBandSelected
-    void   positionToolbar();                        // float the toolbar near the selected node
+    void   positionToolbar();                        // float the toolbar near the selected node (per toolbarPlace)
+    juce::Rectangle<int> placeClassic    (juce::Point<float> node) const noexcept;   // 0: centered above/below + clamp
+    juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
+    juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
+    int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
+    void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
+    static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
+    int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
     juce::String readoutText (int b) const;          // "1.24 kHz  +3.5 dB  Q 2.0" for the node bubble
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
 
@@ -126,6 +146,7 @@ private:
     int  draggingBand = -1;
     bool draggingSide = false;   // the node being dragged is the Side lane
     bool draggingGain = false;
+    double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     bool whiskerSlope = false;   // the dragged whisker sets slope (HP/LP) rather than Q
@@ -146,7 +167,7 @@ private:
     bool perBandFill   = false;                     // fill under each band's curve (off by default)
     bool longPressSolo = true;                      // hold the mouse on a node to solo it
 
-    AddLine addLine = AddLine::Both;                 // which line surfaces "+" (View option)
+    AddLine addLine = AddLine::ZeroLine;             // which line surfaces "+" (View option) — default: the 0 dB line only
     bool    placing    = false;                      // press-drag add in progress
     bool    placeMoved = false;                      // moved enough to take the gain from the drag Y
     AddSpec placeSpec;                               // type/slope locked at press
@@ -159,14 +180,32 @@ private:
     enum class AudVisual { Spotlight, Bell };
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
-    static constexpr int kToolbarW = 220, kToolbarH = 64;
+    static constexpr int kToolbarW    = 256, kToolbarH = 64;   // fixed width; the [M][S] tabs' slot is always reserved
+                                                               // (right of ST) so the strip never resizes on ST toggle
+    static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
+    static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
+
+    // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.
+    enum class ToolbarPlace { Classic, AnchorSide, Collision, Hybrid, FixedLane };
+    ToolbarPlace toolbarPlace = ToolbarPlace::Classic;
+    int  lastPlaceSlot = -1;                          // hysteresis: last chosen candidate slot (collision/hybrid)
+    bool showLeader = false;                          // draw the node<->toolbar connector (collision/hybrid)
+    juce::Point<float> leaderNode, leaderBar;         // connector endpoints (canvas coords)
+
+    // Vertical dB scale (top-right combo, persisted). gainRange is the VISIBLE ± dB window; it auto-zooms out
+    // while dragging a node past the edge (kGainSteps), so a node never gets stranded under the floating strip.
+    double gainRange = 12.0;                          // visible ± dB (curve y-axis); NOT the gain clamp (that's kGainMax)
+    juce::uint32 lastZoomMs = 0;                      // rate-limit for drag auto-zoom (one step per interval)
+    juce::ComboBox gainScaleCombo;                    // vertical-scale picker (±3/6/12/30 dB) — top-right overlay
 
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)
     bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)
 
-    static constexpr double kFreqMin   = 20.0, kFreqMax = 20000.0;
-    static constexpr double kGainRange = 24.0;          // ± dB (curve y-axis)
+    static constexpr double kFreqMin   = 20.0, kFreqMax = 28000.0;   // AXIS range: top runs ~½-oct past 20k so the >20k rolloff is visible
+    static constexpr double kFreqPlaceMax = 20000.0;                 // bands can only be PLACED up to here (= the freq param max); 20k–28k is display-only
+    static constexpr double kGainMax   = 24.0;          // ± dB — the real gain-param clamp (drag / keyboard)
+    static constexpr double kGainSteps[4] = { 3.0, 6.0, 12.0, 30.0 };   // selectable vertical-scale steps (visible ± dB)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = 6.0f;
     static constexpr float  kAddThreshold = 36.0f;       // px from the curve to surface the "+" add button

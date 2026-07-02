@@ -101,8 +101,8 @@ void BandEditStrip::setBand (int band)
 
     modeButton.setButtonText (curMs ? "M/S" : "ST");
     modeButton.setColour (juce::TextButton::textColourOffId, curMs ? tabby::palette::orange() : tabby::palette::text());
-    midTab.setVisible (curMs);   sideTab.setVisible (curMs);
-    prevButton.setVisible (! curMs);  nextButton.setVisible (! curMs);  title.setVisible (! curMs);
+    midTab.setVisible (curMs);   sideTab.setVisible (curMs);                    // M/S lane tabs — RIGHT of ST
+    prevButton.setVisible (true); nextButton.setVisible (true); title.setVisible (true);   // < index > nav — always
     midTab.setToggleState (! editingSide, juce::dontSendNotification);
     sideTab.setToggleState (editingSide, juce::dontSendNotification);
 
@@ -241,10 +241,13 @@ void BandEditStrip::updateForType()
     const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
     const bool isTilt  = (t == teq::FilterType::Tilt);
     const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
+    // The Notch rides a variable ORDER now (felitronics-core v0.1.5, slope->order like HP/LP), so it takes the
+    // slope combo in octaves too — not a Q box — matching its slope-whisker on the curve.
+    const bool usesSlope = isCut || (t == teq::FilterType::Notch);
 
-    slopeBox.setVisible (isCut);                       // HP/LP -> the slope combo replaces Q
+    slopeBox.setVisible (usesSlope);                   // HP/LP + Notch -> the slope combo (octaves) replaces Q
     gain.setVisible (hasGain);   gain.setEnabled (hasGain);
-    q.setVisible (! isCut && ! isTilt);   q.setEnabled (! isCut && ! isTilt);   // no Q for HP/LP or tilt
+    q.setVisible (! usesSlope && ! isTilt);   q.setEnabled (! usesSlope && ! isTilt);   // no Q for HP/LP/Notch or tilt
     resized();                                         // visibility changed -> re-lay the bottom row
 }
 
@@ -261,29 +264,29 @@ void BandEditStrip::resized()
 {
     auto r = getLocalBounds().reduced (8, 6);
 
-    // top row: power · < index > · type-icon · solo · route
+    // top row: power · < index > · type-icon · solo · ST · [M][S].  The < index > nav is ALWAYS present; the
+    // M/S lane tabs (when split) sit to the RIGHT of ST — they no longer hijack the nav slot. The strip has a
+    // fixed width (EqCurveDisplay::kToolbarW) that always reserves the [M][S] slot, so ST never resizes it.
     auto top = r.removeFromTop (22);
     r.removeFromTop (8);
     onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (enable)
     top.removeFromLeft (6);
-    if (curMs)   // M/S: Mid | Side lane tabs take the nav slot
-    {
-        midTab.setBounds  (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
-        top.removeFromLeft (2);
-        sideTab.setBounds (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
-    }
-    else         // Stereo: < index > navigation
-    {
-        prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
-        title.setBounds (top.removeFromLeft (18));
-        nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
-    }
+    prevButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));    // < index > nav — always
+    title.setBounds (top.removeFromLeft (18));
+    nextButton.setBounds (top.removeFromLeft (12).withSizeKeepingCentre (10, 14));
     top.removeFromLeft (8);
     typeButton.setBounds (top.removeFromLeft (30).withSizeKeepingCentre (30, 22));    // icon only
     top.removeFromLeft (8);
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
     top.removeFromLeft (6);
     modeButton.setBounds (top.removeFromLeft (34).withSizeKeepingCentre (34, 22));    // ST <-> M/S
+    if (curMs)   // Mid | Side lane tabs — to the RIGHT of ST
+    {
+        top.removeFromLeft (6);
+        midTab.setBounds  (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+        top.removeFromLeft (2);
+        sideTab.setBounds (top.removeFromLeft (21).withSizeKeepingCentre (21, 20));
+    }
 
     // bottom row (one line), adapts to the type:
     //   HP/LP -> FREQ + SLOPE combo (no Q) · bell/shelf -> FREQ + Q + GAIN
@@ -291,22 +294,22 @@ void BandEditStrip::resized()
     auto row = r.withSizeKeepingCentre (r.getWidth(), 22);
     if (slopeBox.isVisible())
     {
-        slopeBox.setBounds (row.removeFromRight (96).withSizeKeepingCentre (96, 22));
+        slopeBox.setBounds (row.removeFromRight (104).withSizeKeepingCentre (104, 22));
         row.removeFromRight (8);
-        freq.setBounds (row);
+        freq.setBounds (row);                                          // FREQ fills the rest
     }
     else
     {
         if (gain.isVisible())
         {
-            gain.setBounds (row.removeFromRight (60).withSizeKeepingCentre (60, 22));
+            gain.setBounds (row.removeFromRight (68).withSizeKeepingCentre (68, 22));
             row.removeFromRight (8);
         }
         if (q.isVisible())
         {
-            freq.setBounds (row.removeFromLeft (70).withSizeKeepingCentre (70, 22));
+            freq.setBounds (row.removeFromLeft (84).withSizeKeepingCentre (84, 22));
             row.removeFromLeft (8);
-            q.setBounds (row);
+            q.setBounds (row);                                         // Q fills the middle
         }
         else
             freq.setBounds (row);

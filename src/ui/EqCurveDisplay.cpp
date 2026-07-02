@@ -36,6 +36,11 @@ namespace
     }
 
     bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
+
+    // Whiskers that encode the discrete SLOPE (octaves) via the Neutron-style handle spread, not a continuous
+    // Q. HP/LP have always done this; the Notch joins them now that felitronics-core v0.1.5 gives it a variable
+    // ORDER (slope->order, 6..96 dB/oct, like HP/LP). Its Q stays the -3 dB width (edited in the strip).
+    bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch; }
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
     // Mid/main vs Side param id: "freq" -> "sFreq", "q" -> "sQ", "gain" -> "sGain", "type" -> "sType", ...
@@ -94,6 +99,21 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     specPeak.fill (-120.0f);
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
+
+    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB.
+    for (int i = 0; i < 4; ++i) gainScaleCombo.addItem (juce::String ((int) kGainSteps[i]) + " dB", i + 1);
+    gainScaleCombo.setColour (juce::ComboBox::textColourId,       tabby::palette::text());
+    gainScaleCombo.setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel().withAlpha (0.85f));
+    gainScaleCombo.setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
+    gainScaleCombo.setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
+    gainScaleCombo.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (gainScaleCombo);
+    gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
+    setGainRange ((double) proc.apvts.state.getProperty ("gainRange", 12.0), false);   // restore saved scale (no re-persist)
+    { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
+      for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on) mx = juce::jmax (mx, std::abs (paramCache[b].gainDb));
+      while (gainRange < kGainSteps[3] && mx > gainRange) setGainRange (nextGainStep (gainRange), false); }
+
     startTimerHz (30);
 }
 
@@ -118,14 +138,25 @@ double EqCurveDisplay::xToFreq (float x) const noexcept
     return std::pow (10.0, lo + t * (hi - lo));
 }
 
+// Bottom of the curve/node plotting area. In Fixed-lane mode it stops above the reserved bottom strip, so
+// nodes (whose Y comes from dbToY) can never fall into the lane; every other mode uses the full height.
+int    EqCurveDisplay::plotBottomY() const noexcept
+{
+    // The NOMINAL +/-gainRange scale (dbToY, node positions, the drag-to-rescale boundary) stops a strip short
+    // of the window bottom. Below that invisible -gainRange line the curves OVERSHOOT (a deep cut / notch dives
+    // on down to the very bottom of the window), the spectrum shows, and in Fixed-lane the edit strip slides.
+    // The curve *clip* uses the full window height (see paint), so curves reach the bottom edge, not this line.
+    return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH)
+                                                   : juce::jmax (40, getHeight() - kBottomAxisH);
+}
 float  EqCurveDisplay::dbToY (double db) const noexcept
 {
-    return (float) ((0.5 - db / (2.0 * kGainRange)) * (double) getHeight());
+    return (float) ((0.5 - db / (2.0 * gainRange)) * (double) plotBottomY());
 }
 
 double EqCurveDisplay::yToDb (float y) const noexcept
 {
-    return (0.5 - (double) y / (double) juce::jmax (1, getHeight())) * (2.0 * kGainRange);
+    return (0.5 - (double) y / (double) juce::jmax (1, plotBottomY())) * (2.0 * gainRange);
 }
 
 float  EqCurveDisplay::specDbToY (double db) const noexcept
@@ -138,11 +169,12 @@ float  EqCurveDisplay::specDbToY (double db) const noexcept
 void EqCurveDisplay::refreshDesigns()
 {
     fsCache = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 44100.0;
+    const double dfs = designFs();   // oversampled display rate (see designFs) — the curve shows the analog intent
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
         paramCache[b]  = proc.readBand (b);
-        designCache[b] = paramCache[b].on ? teq::designBand (paramCache[b], fsCache) : teq::BandDesign {};
-        designCacheSide[b] = (paramCache[b].on && paramCache[b].ms) ? teq::designBand (sideView (b), fsCache) : teq::BandDesign {};
+        designCache[b] = paramCache[b].on ? teq::designBand (paramCache[b], dfs) : teq::BandDesign {};
+        designCacheSide[b] = (paramCache[b].on && paramCache[b].ms) ? teq::designBand (sideView (b), dfs) : teq::BandDesign {};
     }
 }
 
@@ -156,7 +188,10 @@ teq::BandParams EqCurveDisplay::sideView (int b) const noexcept   // the Side la
 
 double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 {
-    const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
+    // Evaluated at the oversampled designFs() (the cache was designed there too), so the whole 20..28k axis
+    // stays well below that Nyquist — no near-Nyquist flattening, LP/BP dive off the corner smoothly.
+    const double dfs = designFs();
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * dfs) / dfs;
     std::complex<double> h { 1.0, 0.0 };
     for (int b = 0; b < tabby::kNumBands; ++b)
     {
@@ -177,17 +212,18 @@ double EqCurveDisplay::compositeDb (double f, bool side) const noexcept
 
 juce::Point<float> EqCurveDisplay::nodePos (int b, bool side) const noexcept
 {
-    // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor); notch/all-pass are
-    // surgical / phase-only so they sit on the 0 dB line; HP/LP/BP ride the composite at the corner.
+    // bells/shelves/tilt sit at their OWN gain (a drag tracks the cursor). HP/LP, notch and all-pass are
+    // gain-less (cut/surgical/phase) so they always rest on the 0 dB line and never drag vertically; only
+    // band-pass rides the composite at its corner.
     const auto& bp = paramCache[(size_t) b];
     const bool   S = bp.ms && side;
     const auto   t = S ? bp.sType : bp.type;
     const double f = S ? bp.sFreq : bp.freq;
     const double g = S ? bp.sGainDb : bp.gainDb;
     double db;
-    if (hasGain (t))                                                       db = g;
-    else if (t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
-    else                                                                   db = compositeDb (f, S);
+    if (hasGain (t))                                                                    db = g;
+    else if (isCut (t) || t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
+    else                                                                                db = compositeDb (f, S);
     return { freqToX (f), dbToY (db) };
 }
 
@@ -200,7 +236,7 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
     const auto   t  = S ? bp.sType : bp.type;
     const int    sl = S ? bp.sSlope : bp.slope;
     const double qv = S ? bp.sQ : bp.Q;
-    const double bw = isCut (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
+    const double bw = slopeWhisker (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
     const float dx  = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
     return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
 }
@@ -214,8 +250,10 @@ juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
 
 double EqCurveDisplay::bandDb (int b, double f, bool side) const noexcept
 {
-    const auto& d = (paramCache[(size_t) b].ms && side) ? designCacheSide[(size_t) b] : designCache[(size_t) b];
-    const double w = 2.0 * juce::MathConstants<double>::pi * f / fsCache;
+    const bool   S = paramCache[(size_t) b].ms && side;
+    const auto&  d = S ? designCacheSide[(size_t) b] : designCache[(size_t) b];
+    const double dfs = designFs();   // oversampled (see compositeDb) so LP/BP dive smoothly, no Nyquist flatten
+    const double w = 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, 0.499 * dfs) / dfs;
     std::complex<double> h { 1.0, 0.0 };
     for (int s = 0; s < d.n; ++s) h *= teq::evalCoeffs (d.sec[s], w);
     return 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (h)));
@@ -313,27 +351,174 @@ void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
     if (t != nullptr) addChildComponent (t);         // hidden until a band is selected
 }
 
+// 0 — Classic: the original. Centre the strip on the node, above it (below if it'd clip the top), clamp.
+juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) const noexcept
+{
+    const int W = kToolbarW;
+    int tx = (int) (node.x - (float) W * 0.5f);
+    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);            // above the node...
+    if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);               // ...or below if no room
+    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - W - 2), tx);
+    ty = juce::jlimit (2, stripMaxY(), ty);
+    return { tx, ty, W, kToolbarH };
+}
+
+// 1 — Anchor-to-open-side: don't straddle the node. Sit it just inside one horizontal end and extend into the
+// larger canvas gap, so it covers (at most) the neighbours on the emptier side instead of both sides at once.
+juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) const noexcept
+{
+    const int   W     = kToolbarW;
+    const bool right = node.x < (float) getWidth() * 0.5f;           // more room to the right → extend right
+    int tx = right ? (int) (node.x - (float) W * 0.12f)
+                   : (int) (node.x - (float) W * 0.88f);
+    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);
+    if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);
+    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - W - 2), tx);
+    ty = juce::jlimit (2, stripMaxY(), ty);
+    return { tx, ty, W, kToolbarH };
+}
+
+// 2/3 core — score 8 candidate slots around the node (above/below/left/right + diagonals) by how many OTHER
+// band nodes they'd cover, then off-canvas overhang, then closeness; a light bonus keeps the last slot (no
+// flicker while dragging). Returns the clamped winner + its post-clamp occlusion + slot index.
+juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept
+{
+    const float gap = kNodeR + 12.0f, W = (float) kToolbarW, H = (float) kToolbarH;
+    const juce::Point<float> cand[8] = {
+        { node.x - W * 0.5f,  node.y - gap - H },   // 0 above-center
+        { node.x - W * 0.5f,  node.y + gap     },   // 1 below-center
+        { node.x + gap,       node.y - H * 0.5f },  // 2 right
+        { node.x - gap - W,   node.y - H * 0.5f },  // 3 left
+        { node.x + gap,       node.y - gap - H },   // 4 above-right
+        { node.x - gap - W,   node.y - gap - H },   // 5 above-left
+        { node.x + gap,       node.y + gap     },   // 6 below-right
+        { node.x - gap - W,   node.y + gap     },   // 7 below-left
+    };
+
+    juce::Point<float> others[tabby::kNumBands * 2]; int no = 0;     // every OTHER visible node centre
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
+    {
+        if (! (b == selBand && ! selSide))              others[no++] = nodePos (b, false);
+        if (paramCache[b].ms && ! (b == selBand && selSide)) others[no++] = nodePos (b, true);
+    }
+
+    const juce::Rectangle<float> canvas (0.0f, 0.0f, (float) getWidth(), (float) getHeight());
+    int best = 0; float bestScore = 1.0e30f;
+    for (int s = 0; s < 8; ++s)
+    {
+        const juce::Rectangle<float> r (cand[s].x, cand[s].y, W, H);
+        int occl = 0; for (int i = 0; i < no; ++i) if (r.contains (others[i])) ++occl;
+        const float over = juce::jmax (0.0f, canvas.getX() - r.getX())
+                         + juce::jmax (0.0f, r.getRight()  - canvas.getRight())
+                         + juce::jmax (0.0f, canvas.getY() - r.getY())
+                         + juce::jmax (0.0f, r.getBottom() - canvas.getBottom());
+        float score = (float) occl * 1000.0f + over * 20.0f + r.getCentre().getDistanceFrom (node) * 0.05f;
+        if (s == lastPlaceSlot) score -= 40.0f;                     // hysteresis: prefer the last slot
+        if (score < bestScore) { bestScore = score; best = s; }
+    }
+    slotOut = best;
+    const int tx = juce::jlimit (2, juce::jmax (2, getWidth()  - (int) W - 2), (int) cand[best].x);
+    const int ty = juce::jlimit (2, stripMaxY(), (int) cand[best].y);
+    const juce::Rectangle<float> rc ((float) tx, (float) ty, W, H);
+    occlOut = 0; for (int i = 0; i < no; ++i) if (rc.contains (others[i])) ++occlOut;
+    return { tx, ty, (int) W, kToolbarH };
+}
+
 void EqCurveDisplay::positionToolbar()
 {
     if (toolbar == nullptr) return;
     refreshDesigns();   // ensure the cache reflects a just-added/just-toggled band before we test it
     const bool show = selBand >= 0 && selBand < tabby::kNumBands && paramCache[(size_t) selBand].on;
-    if (! show) { toolbar->setVisible (false); return; }
+    if (! show) { toolbar->setVisible (false); showLeader = false; return; }
 
-    const auto pos = nodePos (selBand);
-    int tx = (int) (pos.x - kToolbarW * 0.5f);
-    int ty = (int) (pos.y - kNodeR - 12.0f - kToolbarH);              // above the node...
-    if (ty < 2) ty = (int) (pos.y + kNodeR + 12.0f);                  // ...or below if no room
-    tx = juce::jlimit (2, juce::jmax (2, getWidth()  - kToolbarW - 2), tx);
-    ty = juce::jlimit (2, juce::jmax (2, getHeight() - kToolbarH - 2), ty);
+    const auto node = nodePos (selBand, selSide);   // lane-aware (M/S: place at the actual selected node)
+    juce::Rectangle<int> b;
+    showLeader = false;
 
-    const juce::Rectangle<int> b (tx, ty, kToolbarW, kToolbarH);
+    switch (toolbarPlace)
+    {
+        case ToolbarPlace::AnchorSide:
+            b = placeAnchorSide (node);
+            break;
+
+        case ToolbarPlace::Collision:
+        {
+            int occl = 0, slot = 0;
+            b = bestFloatCandidate (node, occl, slot);
+            lastPlaceSlot = slot;
+            showLeader = (slot >= 2);   // 0/1 hug the node (above/below); 2-7 are offset → draw a connector
+            break;
+        }
+
+        case ToolbarPlace::Hybrid:
+        {
+            int occl = 0, slot = 0;
+            b = bestFloatCandidate (node, occl, slot);
+            if (occl > 0)   // no clean local slot → dock to the far horizontal edge, leader across
+            {
+                const bool dockTop = node.y > (float) getHeight() * 0.5f;
+                const int W  = kToolbarW;
+                const int tx = juce::jlimit (2, juce::jmax (2, getWidth() - W - 2), (int) (node.x - (float) W * 0.5f));
+                const int ty = dockTop ? 2 : stripMaxY();
+                b = { tx, ty, W, kToolbarH };
+                lastPlaceSlot = -2;   // docked
+                showLeader = true;
+            }
+            else { lastPlaceSlot = slot; showLeader = (slot >= 2); }
+            break;
+        }
+
+        case ToolbarPlace::FixedLane:
+            // FabFilter-style: the strip lives in the reserved bottom lane and only slides horizontally to
+            // track the selected band's frequency. Nodes can't enter the lane (dbToY squeezes them above it),
+            // so the strip can never occlude a node; it sits at the lane top, clear of the freq axis below it.
+            b = { juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - (float) kToolbarW * 0.5f)),
+                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), kToolbarW, kToolbarH };
+            break;
+
+        case ToolbarPlace::Classic:
+        default:
+            b = placeClassic (node);
+            break;
+    }
+
+    if (showLeader) { leaderNode = node; leaderBar = b.toFloat().getCentre(); }
+
     if (toolbar->getBounds() != b) toolbar->setBounds (b);
     if (! toolbar->isVisible()) toolbar->setVisible (true);
     toolbar->toFront (false);
 }
 
-void EqCurveDisplay::resized() { positionToolbar(); }
+void EqCurveDisplay::resized()
+{
+    gainScaleCombo.setBounds (getWidth() - 82, 6, 74, 22);   // top-right overlay, above the dB scale
+    positionToolbar();
+}
+
+// Lowest allowed toolbar TOP: keeps the strip's bottom above the freq-axis label strip at the very bottom.
+int EqCurveDisplay::stripMaxY() const noexcept { return juce::jmax (2, getHeight() - kToolbarH - kBottomAxisH); }
+
+double EqCurveDisplay::nextGainStep (double r) noexcept   // smallest step strictly greater than r (clamps at the max)
+{
+    for (double s : kGainSteps) if (s > r + 0.01) return s;
+    return kGainSteps[3];
+}
+int EqCurveDisplay::gainStepIndex() const noexcept
+{
+    int best = 0; double bd = 1.0e9;
+    for (int i = 0; i < 4; ++i) { const double d = std::abs (kGainSteps[i] - gainRange); if (d < bd) { bd = d; best = i; } }
+    return best;
+}
+void EqCurveDisplay::setGainRange (double r, bool persist)
+{
+    double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
+    for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
+    gainRange = snapped;
+    gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
+    if (persist) proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    positionToolbar();   // dbToY changed → node/strip positions moved
+    repaint();
+}
 
 void EqCurveDisplay::clearSelection() { selectBand (-1); }
 
@@ -476,8 +661,9 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
         juce::Path line, fill; bool started = false;
         for (float x = 0.0f; x <= w; x += 3.0f)
         {
-            const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
-            const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
+            const double dfs = designFs();
+            const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * dfs) / dfs;
+            const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, dfs, wd))));
             const float  y  = dbToY (db);
             if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
             else           { line.lineTo (x, y); fill.lineTo (x, y); }
@@ -536,10 +722,15 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.drawText (f >= 1000.0 ? juce::String (f / 1000.0, (f == 1000.0 ? 0 : 0)) + "k" : juce::String ((int) f),
                     (int) x + 2, (int) h - 14, 34, 12, juce::Justification::left);
     }
-    for (double db : { -18.0, -12.0, -6.0, 0.0, 6.0, 12.0, 18.0 })
+    // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
+    const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
+    for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
     {
+        if (std::abs (std::abs (db) - gainRange) < 0.01) continue;   // skip the outermost ticks — they sit ON the top/bottom
+                                                                     // edge and read as a frame the curves "bump into"
         const float y = dbToY (db);
-        if (db == 0.0)
+        const bool zero = std::abs (db) < 0.01;
+        if (zero)
         {
             g.setColour (tabby::palette::violetLo().withAlpha (0.05f));   // soft glow on the 0 dB line
             g.fillRect (0.0f, y - 2.5f, w, 5.0f);
@@ -548,7 +739,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         else
             g.setColour (tabby::palette::grid());
         g.drawHorizontalLine ((int) y, 0.0f, w);
+        if (! zero && y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // dB value on the right (below the scale combo)
+        {
+            g.setColour (tabby::palette::axisText());
+            g.drawText ((db > 0.0 ? "+" : "") + juce::String ((int) db), (int) w - 32, (int) y - 6, 28, 12, juce::Justification::right);
+        }
     }
+
+    // (The beyond-Nyquist fog is drawn LAST — over the curve so it dissolves into it, see the end of paint.)
 
     // --- spectrum (filled) ------------------------------------------------
     {
@@ -561,11 +759,35 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
     }
 
+    // Fixed-lane placement: mark the reserved bottom lane — nodes stay above this line, spectrum still shows below.
+    if (toolbarPlace == ToolbarPlace::FixedLane)
+    {
+        g.setColour (tabby::palette::gridZero());
+        g.drawHorizontalLine (plotBottomY(), 0.0f, w);
+    }
+
+    // Shared curve sample grid: a uniform log-x grid PLUS an exact sample at every active band's centre freq,
+    // so a notch's -inf null (and bell peaks) are hit dead-on — the drawn tip no longer jitters between grid
+    // points as you drag. cy() clamps dB to the plot floor so nulls bottom out cleanly and consistently.
+    float curveXs[400]; int nCurveX = 0;
+    for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
+    {
+        curveXs[nCurveX++] = freqToX (paramCache[b].freq);
+        if (paramCache[b].ms) curveXs[nCurveX++] = freqToX (paramCache[b].sFreq);
+    }
+    std::sort (curveXs, curveXs + nCurveX);
+    // Below the graph floor, let the curve DIVE off the bottom axis (it's clipped to the plot area, below)
+    // instead of clamping it flat ONTO the bottom line — a deep cut / notch / LP slope should read as a
+    // dive off the bottom, not a smear of every curve along the bottom edge.
+    auto cy = [&] (double db) { return dbToY (juce::jmax (-2.5 * gainRange, db)); };
+
     // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the
     //     selected band's own curve is lifted ------------------------------------------------------
     if (perBandCurves || solo >= 0)
     {
-        constexpr int pts = 240;
+        juce::Graphics::ScopedSaveState bandClip (g);
+        g.reduceClipRegion (0, 0, (int) w, getHeight());   // curves dive to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = dbToY (0.0);
         auto drawLane = [&] (int b, bool side)
         {
@@ -573,10 +795,10 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             if (laneByp) return;
             juce::Path bc, bf;
             bf.startNewSubPath (0.0f, y0);
-            for (int i = 0; i <= pts; ++i)
+            for (int i = 0; i < nCurveX; ++i)
             {
-                const float x = (float) i / (float) pts * w;
-                const float y = dbToY (bandDb (b, xToFreq (x), side));
+                const float x = curveXs[i];
+                const float y = cy (bandDb (b, xToFreq (x), side));
                 if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
                 bf.lineTo (x, y);
             }
@@ -597,14 +819,15 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
-        constexpr int pts = 240;
+        juce::Graphics::ScopedSaveState compositeClip (g);
+        g.reduceClipRegion (0, 0, (int) w, getHeight());   // composite dives to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
-        for (int i = 0; i <= pts; ++i)
+        for (int i = 0; i < nCurveX; ++i)
         {
-            const float x = (float) i / (float) pts * w;
-            const float y = dbToY (compositeDb (xToFreq (x)));
+            const float x = curveXs[i];
+            const float y = cy (compositeDb (xToFreq (x)));
             if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
             fill.lineTo (x, y);
         }
@@ -648,10 +871,10 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (anyMs)
         {
             juce::Path sline; bool st = false;
-            for (int i = 0; i <= pts; ++i)
+            for (int i = 0; i < nCurveX; ++i)
             {
-                const float x = (float) i / (float) pts * w;
-                const float y = dbToY (compositeDb (xToFreq (x), true));
+                const float x = curveXs[i];
+                const float y = cy (compositeDb (xToFreq (x), true));
                 if (! st) { sline.startNewSubPath (x, y); st = true; } else sline.lineTo (x, y);
             }
             g.setColour (tabby::palette::violetLo().withAlpha (dim ? 0.40f : 0.95f));
@@ -669,6 +892,15 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             g.setColour (bandColour (hb.band).withAlpha (0.22f));
             g.fillEllipse (hp.x - kNodeR - 7, hp.y - kNodeR - 7, (kNodeR + 7) * 2, (kNodeR + 7) * 2);
         }
+    }
+
+    // --- toolbar leader line (Collision / Hybrid placement): a thin connector node -> strip -----------
+    if (showLeader && toolbar != nullptr && toolbar->isVisible())
+    {
+        g.setColour (tabby::palette::violetLo().withAlpha (0.50f));
+        g.drawLine (leaderNode.x, leaderNode.y, leaderBar.x, leaderBar.y, 1.4f);
+        g.setColour (tabby::palette::violetLo().withAlpha (0.90f));
+        g.fillEllipse (leaderNode.x - 2.5f, leaderNode.y - 2.5f, 5.0f, 5.0f);
     }
 
     // --- nodes (Mid/main always; Side too for M/S bands) ------------------
@@ -750,13 +982,33 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const auto addBtn = addButtonAt();
         if (addBtn.x >= 0.0f)
         {
-            drawAddPreview (g, predictAdd (addBtn), addBtn, false);   // ghost of what a click adds (default gain)
+            drawAddPreview (g, predictAdd (addBtn), addBtn, true);    // ghost passes THROUGH the cursor (gain from its Y)
             const float r = kNodeR + 2.0f;
             g.setColour (tabby::palette::panel().withAlpha (0.92f));    g.fillEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2);
             g.setColour (tabby::palette::violetLo().withAlpha (0.95f)); g.drawEllipse (addBtn.x - r, addBtn.y - r, r * 2, r * 2, 1.5f);
             g.setColour (tabby::palette::text());
             g.drawLine (addBtn.x - 4.0f, addBtn.y, addBtn.x + 4.0f, addBtn.y, 1.6f);
             g.drawLine (addBtn.x, addBtn.y - 4.0f, addBtn.x, addBtn.y + 4.0f, 1.6f);
+        }
+    }
+
+    // --- beyond-Nyquist fog (drawn LAST, OVER the curve so the phantom tail dissolves) ------------
+    // Below fs/2 the (oversampled, see designFs) curve ~= the real response; above it there is no real
+    // signal — the curve is pure analog intent, so let it fade into fog toward the right edge. A gradient
+    // (clear at Nyquist -> near-opaque at 28k) thickens across the phantom zone; a hairline marks fs/2.
+    // At 88.2/96k Nyquist sits past the 28k axis, so xNyq is off-screen and nothing draws; at 44.1/48k it
+    // fogs the top sliver (the curve dissolves right at the edge); at low rates it fogs most of the top.
+    if (fsCache > 0.0)
+    {
+        const float xNyq = freqToX (0.499 * fsCache);
+        if (xNyq < w - 1.0f)
+        {
+            const auto fog = tabby::palette::bg().darker (0.35f);
+            g.setGradientFill (juce::ColourGradient (fog.withAlpha (0.0f),  xNyq, 0.0f,
+                                                     fog.withAlpha (0.94f), w,    0.0f, false));
+            g.fillRect (xNyq, 0.0f, w - xNyq, h);
+            g.setColour (tabby::palette::violetLo().withAlpha (0.5f));   // hairline at Nyquist — where real signal ends
+            g.drawVerticalLine ((int) xNyq, 0.0f, h);
         }
     }
 }
@@ -770,9 +1022,9 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         {
             const auto ft = tabby::filterTypeFromChoice (typeIndex);
             setParamGestured (tabby::bandId (b, "type"), typeIndex);
-            setParamGestured (tabby::bandId (b, "freq"), xToFreq (at.x));
+            setParamGestured (tabby::bandId (b, "freq"), juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x)));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
-                setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)));
+                setParamGestured (tabby::bandId (b, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
             setParamGestured (tabby::bandId (b, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
                                                        || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
             if (slopeIndex >= 0) setParamGestured (tabby::bandId (b, "slope"), (double) slopeIndex);
@@ -790,34 +1042,46 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     teq::BandParams bp;
     bp.on     = true;
     bp.type   = ft;
-    bp.freq   = juce::jlimit (kFreqMin, kFreqMax, xToFreq (at.x));
+    bp.freq   = juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x));   // preview a placeable band (≤ 20k), matching the commit
     bp.Q      = isCut (ft) ? 0.707 : 1.0;
-    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainRange, kGainRange, yToDb (at.y)) : s.gainDb) : 0.0;
+    const double gain = s.hasGainCtrl ? (dragging ? juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)) : s.gainDb) : 0.0;
     bp.gainDb = gain;
     bp.slope  = kSlopeDb[juce::jlimit (0, 6, s.slopeIndex < 0 ? 1 : s.slopeIndex)];
 
     const auto col = tabby::palette::violetLo();
 
-    // ghost response curve
+    // ghost response curve — floor-clamped + sampled dead-on at f0 (so a preview notch bottoms out cleanly
+    // at the plot floor exactly like the committed curves, not diving past it or jittering).
     juce::Path path;
     const float wpx = (float) getWidth();
-    bool started = false;
+    const float xf0 = freqToX (bp.freq);
+    bool started = false, placedF0 = false;
+    const double dfs = designFs();   // oversampled (see compositeDb) so a preview LP/BP dives smoothly past Nyquist
+    auto emit = [&] (float x)
+    {
+        const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * dfs) / dfs;
+        const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, dfs, wd))));
+        const float  y  = dbToY (juce::jmax (-2.5 * gainRange, db));   // dive off the bottom (match the composite/per-band cy)
+        if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
+    };
     for (float x = 0.0f; x <= wpx; x += 3.0f)
     {
-        const double wd = 2.0 * juce::MathConstants<double>::pi * xToFreq (x) / fsCache;
-        const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, fsCache, wd))));
-        const float  y  = dbToY (db);
-        if (! started) { path.startNewSubPath (x, y); started = true; } else path.lineTo (x, y);
+        if (! placedF0 && x > xf0) { emit (xf0); placedF0 = true; }
+        emit (x);
     }
-    g.setColour (col.withAlpha (0.5f));
-    g.strokePath (path, juce::PathStrokeType (1.4f));
+    {
+        juce::Graphics::ScopedSaveState ghostClip (g);
+        g.reduceClipRegion (0, 0, (int) wpx, getHeight());   // ghost dives to the window bottom too (match the curves)
+        g.setColour (col.withAlpha (0.5f));
+        g.strokePath (path, juce::PathStrokeType (1.4f));
+    }
 
-    // node dot (matches nodePos: hasGain -> own gain; notch/all-pass -> 0; cut -> its own corner)
+    // node dot (matches nodePos: hasGain -> own gain; HP/LP/notch/all-pass -> 0; only band-pass its corner)
     double nodeDb = 0.0;
     if (hasGain (ft)) nodeDb = gain;
-    else if (! (ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
+    else if (! (isCut (ft) || ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
         nodeDb = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (
-                     teq::bandResponse (bp, fsCache, 2.0 * juce::MathConstants<double>::pi * bp.freq / fsCache))));
+                     teq::bandResponse (bp, dfs, 2.0 * juce::MathConstants<double>::pi * bp.freq / dfs))));
     const float nx = freqToX (bp.freq), ny = dbToY (nodeDb);
     g.setColour (col.withAlpha (0.9f));
     g.drawEllipse (nx - kNodeR, ny - kNodeR, kNodeR * 2.0f, kNodeR * 2.0f, 1.5f);
@@ -844,39 +1108,36 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
 
 EqCurveDisplay::AddSpec EqCurveDisplay::predictAdd (juce::Point<float> at) const noexcept
 {
-    const double f      = xToFreq (at.x);
-    const bool   above0 = yToDb (at.y) >= 0.0;                                       // side of the 0 dB line
-    const double frac   = std::log (f / kFreqMin) / std::log (kFreqMax / kFreqMin);  // 0 (20 Hz) .. 1 (20 kHz)
-    const bool   left   = frac < (1.0 / 3.0);                                        // freq thirds (log axis)
-    const bool   right  = frac > (2.0 / 3.0);
-
-    bool hasHP = false, hasLP = false, hasLowShelf = false, hasHighShelf = false;
-    for (int b = 0; b < tabby::kNumBands; ++b)
-        if (paramCache[b].on)
-        {
-            const auto t = paramCache[b].type;
-            hasHP        = hasHP        || t == teq::FilterType::HighPass;
-            hasLP        = hasLP        || t == teq::FilterType::LowPass;
-            hasLowShelf  = hasLowShelf  || t == teq::FilterType::LowShelf;
-            hasHighShelf = hasHighShelf || t == teq::FilterType::HighShelf;
-        }
-
+    const double f  = xToFreq (at.x);
+    const double db = yToDb (at.y);
     AddSpec s;
-    s.gainDb = above0 ? 2.0 : -2.0;                          // default boost/cut by side of 0 dB
 
-    if (left)
+    // The bottom quarter of the display (a deep cut) is entirely filters, split at 4 kHz: left → HPF, right → LPF
+    // (24 dB/oct, no gain). Drag a node low = "I want a filter", regardless of the finer freq bands.
+    if (db < -gainRange * 0.9375)  // the very bottom 1/32 → a surgical Notch (band-reject, 12 dB/oct default), any frequency
     {
-        if (! above0 && ! hasHP) { s.typeIndex = 3; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }  // HPF 24
-        else if (! hasLowShelf)  { s.typeIndex = 1; }                                                           // Low Shelf +-2
-        else                     { s.typeIndex = 0; }                                                           // Bell +-2
+        s.typeIndex = 6; s.slopeIndex = 1; s.gainDb = 0.0; s.hasGainCtrl = false;
+        return s;
     }
-    else if (right)
+    if (db < -gainRange * 0.75)    // the bottom 1/8 → a filter split at 4 kHz (left → HPF, right → LPF)
     {
-        if (! above0 && ! hasLP) { s.typeIndex = 4; s.slopeIndex = 1; s.gainDb = 0.0; s.hasGainCtrl = false; }  // LPF 12
-        else if (! hasHighShelf) { s.typeIndex = 2; }                                                           // High Shelf +-2
-        else                     { s.typeIndex = 0; }                                                           // Bell +-2
+        s.typeIndex = (f < 4000.0) ? 3 : 4;   // HPF : LPF
+        s.slopeIndex = 2;                     // 24 dB/oct
+        s.gainDb = 0.0; s.hasGainCtrl = false;
+        return s;
     }
-    else                         { s.typeIndex = 0; }                                                           // middle -> Bell +-2
+
+    // Otherwise pick the type by frequency band (along the 0 line); shelf/bell boost-or-cut follows the side of
+    // 0 the cursor is on. Purely positional (no de-dup) — you can stack the same type if you want.
+    const bool   above0 = db >= 0.0;
+    const double amt    = juce::jmax (0.5, gainRange / 6.0);   // default "amount" scales with the view (looks the same at any zoom)
+    s.gainDb = above0 ? amt : -amt;
+
+    if      (f <    30.0) { s.typeIndex = 3; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }   // < 30 Hz  → HPF 24
+    else if (f <   100.0) { s.typeIndex = 1; }                                                            // 30–100   → Low Shelf
+    else if (f <  8000.0) { s.typeIndex = 0; }                                                            // 100–8k   → Bell (dome)
+    else if (f < 19000.0) { s.typeIndex = 2; }                                                            // 8k–19k   → High Shelf
+    else                  { s.typeIndex = 4; s.slopeIndex = 2; s.gainDb = 0.0; s.hasGainCtrl = false; }   // > 19 kHz → LPF 24
 
     return s;
 }
@@ -885,8 +1146,7 @@ void EqCurveDisplay::smartAdd (juce::Point<float> at)
 {
     refreshDesigns();
     const AddSpec s = predictAdd (at);
-    if (s.hasGainCtrl) addBandOfType (s.typeIndex, { at.x, dbToY (s.gainDb) }, s.slopeIndex);   // default +-2 by side
-    else               addBandOfType (s.typeIndex, at, s.slopeIndex);                            // cut: gain ignored
+    addBandOfType (s.typeIndex, at, s.slopeIndex);   // freq + gain both come from the cursor (filters ignore gain)
 }
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
@@ -975,7 +1235,7 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (onLeft || onRight)
         {
             draggingBand = selBand; draggingSide = selSide; draggingQ = true; qDragSide = onRight ? 1 : -1;
-            whiskerSlope = isCut (selType);
+            whiskerSlope = slopeWhisker (selType);   // HP/LP + Notch step the discrete slope; others set Q
             if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selSide, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
             lastDragFreq = (float) ((paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sFreq
@@ -997,7 +1257,11 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         if (auto* fp = proc.apvts.getParameter (laneParamId (b, side, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (lt);
         if (draggingGain)
+        {
             if (auto* gp = proc.apvts.getParameter (laneParamId (b, side, "gain"))) gp->beginChangeGesture();
+            gainDragRefY    = (double) e.position.y;                              // relative-drag anchor...
+            gainDragRefGain = S ? paramCache[b].sGainDb : paramCache[b].gainDb;   // ...at the node's current gain
+        }
         lastDragFreq = (float) (S ? paramCache[b].sFreq : paramCache[b].freq);
         grabKeyboardFocus();
         if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
@@ -1040,7 +1304,25 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     }
     setParam (laneParamId (draggingBand, draggingSide, "freq"), xToFreq (e.position.x));
     if (draggingGain && ! lockY)   // latched at mouseDown; Alt+lock sweeps frequency only (gain frozen)
-        setParam (laneParamId (draggingBand, draggingSide, "gain"), juce::jlimit (-kGainRange, kGainRange, yToDb (e.position.y)));
+    {
+        // Relative gain drag from an anchor (set at mouseDown, re-based on auto-zoom). Absolute mapping used to
+        // snap the gain to the cursor, which — at the physical edge — read as the NEW scale's max and cascaded
+        // ±3→30 instantly. Relative + re-anchor keeps the node's gain across a zoom.
+        const double sens = 2.0 * gainRange / (double) juce::jmax (1, plotBottomY());   // dB per pixel at this scale
+        const double g = juce::jlimit (-kGainMax, kGainMax, gainDragRefGain + sens * (gainDragRefY - (double) e.position.y));
+        setParam (laneParamId (draggingBand, draggingSide, "gain"), g);
+        // At the visible edge, widen ONE step (rate-limited) and KEEP g: the node lands at its value on the new
+        // scale (e.g. +3 → mid-upper on ±6), not at the edge. Re-anchor so the cursor no longer reads as the new
+        // max → no cascade; a further deliberate drag escalates the next step, up to ±30 where ±24 always fits.
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (std::abs (g) >= gainRange - 0.05 && gainRange < kGainSteps[3] && now - lastZoomMs > 140)
+        {
+            lastZoomMs = now;
+            setGainRange (nextGainStep (gainRange));
+            gainDragRefGain = g;                    // keep the gain...
+            gainDragRefY    = (double) e.position.y; // ...and re-base the anchor at the cursor on the new scale
+        }
+    }
     positionToolbar();   // follow the node while dragging it by mouse (cursor is on the node, not the bar)
 }
 
@@ -1051,10 +1333,10 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
     {
         if (getLocalBounds().toFloat().contains (e.position))
         {
-            if (placeGainFromDrag && placeSpec.hasGainCtrl)
-                addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from drag Y
+            if (placeSpec.hasGainCtrl && (placeGainFromDrag || ! placeMoved))
+                addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from the cursor (plain click or free drag)
             else
-                addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // freq from X, default gain
+                addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // filter, or Alt-locked default gain
         }
         placing = false; placeMoved = false; repaint();
         return;   // the new band's selectBand() already placed the toolbar
@@ -1107,7 +1389,7 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && hasGain (lt))
             {
                 setParamGestured (laneParamId (selBand, selSide, "gain"),
-                                  juce::jlimit (-kGainRange, kGainRange, lg + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
+                                  juce::jlimit (-kGainMax, kGainMax, lg + (code == juce::KeyPress::upKey ? 0.5 : -0.5)));
                 positionToolbar();
                 return true;                                                            // gain +/- 0.5 dB
             }
@@ -1117,7 +1399,7 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
             if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 const int d = (code == juce::KeyPress::upKey) ? +1 : -1;
-                if (isCut (lt))                                                         // HP/LP -> step the slope (octaves)
+                if (slopeWhisker (lt))                                                  // HP/LP + Notch -> step the slope (octaves)
                     setParamGestured (laneParamId (selBand, selSide, "slope"), (double) juce::jlimit (0, 6, slopeIndexFromDb ((int) ls) + d));
                 else                                                                    // others -> Q +/- 0.1
                     setParamGestured (laneParamId (selBand, selSide, "q"), juce::jlimit (0.05, 40.0, lq + 0.1 * d));
@@ -1144,7 +1426,15 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
 {
     if (addLine == AddLine::Off)                          return { -1.0f, -1.0f };
     if (hoverPos.x < 0.0f || draggingBand >= 0 || placing) return { -1.0f, -1.0f };
-    if (nodeAt (hoverPos).band >= 0)                     return { -1.0f, -1.0f };   // on a node -> no "+"
+    if (hoverPos.x > freqToX (kFreqPlaceMax))              return { -1.0f, -1.0f };   // no add in the 20k–28k display-only headroom
+
+    // keep the "+" clear of anything grabbable: a margin around every node (both lanes) so reaching for a node
+    // never pops the add-affordance under the cursor.
+    for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[(size_t) b].on)
+    {
+        if (hoverPos.getDistanceFrom (nodePos (b, false)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+        if (paramCache[(size_t) b].ms && hoverPos.getDistanceFrom (nodePos (b, true)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+    }
 
     // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)
     const auto selType = (selBand >= 0 && paramCache[(size_t) selBand].ms && selSide) ? paramCache[(size_t) selBand].sType
@@ -1161,15 +1451,7 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
     for (int i = 0; i < tabby::kNumBands; ++i) if (! paramCache[(size_t) i].on) { anyFree = true; break; }
     if (! anyFree)                                        return { -1.0f, -1.0f };   // all bands used
 
-    // surface "+" when the cursor is within reach of an enabled trigger line (0 dB and/or the curve)
-    const float yZero  = dbToY (0.0);
-    const float yCurve = dbToY (compositeDb (xToFreq (hoverPos.x)));
-    float best = kAddThreshold;
-    bool  hit  = false;
-    if (addLine == AddLine::ZeroLine || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yZero);  if (d < best) { best = d; hit = true; } }
-    if (addLine == AddLine::Curve    || addLine == AddLine::Both) { const float d = std::abs (hoverPos.y - yCurve); if (d < best) { best = d; hit = true; } }
-    if (! hit)                                            return { -1.0f, -1.0f };
-    return hoverPos;   // "+" sits at the cursor; predictAdd reads its Y for above/below 0
+    return hoverPos;   // "+" follows the cursor across the WHOLE graph (min→max); predictAdd + the preview read its X/Y
 }
 
 void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
