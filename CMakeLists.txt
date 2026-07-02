@@ -179,7 +179,8 @@ target_sources(TabbyEQ PRIVATE
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp)
+    src/ui/VersionInfo.cpp
+    src/UpdateChecker.cpp)             # opt-in GitHub update check (drives the (i) badge)
 
 target_include_directories(TabbyEQ PRIVATE src "${TABBY_VERSION_DIR}")   # "Parameters.h", "Vocab.h", generated TabbyVersion.h
 add_dependencies(TabbyEQ TabbyVersionGen)                                # bake TabbyVersion.h before compiling
@@ -227,7 +228,8 @@ target_sources(TabbyEQ_LifecycleTest PRIVATE
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
+    src/ui/VersionInfo.cpp              # TabbyEqEditor holds an InfoButton → must link it
+    src/UpdateChecker.cpp)              # the processor owns an UpdateChecker → must link it
 
 target_include_directories(TabbyEQ_LifecycleTest PRIVATE src "${TABBY_VERSION_DIR}")
 add_dependencies(TabbyEQ_LifecycleTest TabbyVersionGen)
@@ -254,7 +256,8 @@ tabbyeq_sanitize(TabbyEQ_LifecycleTest
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp)
+    src/ui/VersionInfo.cpp
+    src/UpdateChecker.cpp)
 
 add_test(NAME tabbyeq_lifecycle_misuse COMMAND TabbyEQ_LifecycleTest)
 
@@ -271,7 +274,8 @@ target_sources(TabbyEQ_AdapterTest PRIVATE
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
+    src/ui/VersionInfo.cpp              # TabbyEqEditor holds an InfoButton → must link it
+    src/UpdateChecker.cpp)              # the processor owns an UpdateChecker → must link it
 
 target_include_directories(TabbyEQ_AdapterTest PRIVATE src "${TABBY_VERSION_DIR}")
 add_dependencies(TabbyEQ_AdapterTest TabbyVersionGen)
@@ -300,7 +304,8 @@ tabbyeq_sanitize(TabbyEQ_AdapterTest
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp)
+    src/ui/VersionInfo.cpp
+    src/UpdateChecker.cpp)
 
 add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 
@@ -319,5 +324,14 @@ add_executable(TabbyEQ_VersionTest tests/version_header.cpp)
 target_include_directories(TabbyEQ_VersionTest PRIVATE "${TABBY_VERSION_DIR}")
 add_dependencies(TabbyEQ_VersionTest TabbyVersionGen)
 add_test(NAME tabbyeq_version_header COMMAND TabbyEQ_VersionTest)
+
+# ----------------------------------------------------------------------------
+# JUCE-free unit for the opt-in update-check compare rule (src/UpdateCompare.h): clean-release builds
+# compare by numeric semver; a dev build (untagged / commits-ahead / dirty) counts OLDER than any
+# release. Pure header, so no JUCE and no version-generator dependency — rides the same core-tests ctest.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_UpdateCompareTest tests/update_compare.cpp)
+target_include_directories(TabbyEQ_UpdateCompareTest PRIVATE src)   # UpdateCompare.h
+add_test(NAME tabbyeq_update_compare COMMAND TabbyEQ_UpdateCompareTest)
 
 endif()  # TABBYEQ_BUILD_CORE_TESTS

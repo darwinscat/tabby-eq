@@ -3,6 +3,7 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "ui/VersionInfo.h"   // tabby::currentDescribe() — the running build's kDescribe stamp
 
 #include <cmath>
 
@@ -187,7 +188,8 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PARAMS", tabby::createParameterLayout())
+      apvts (*this, nullptr, "PARAMS", tabby::createParameterLayout()),
+      updateCheckerInstance (tabby::currentDescribe(), appPreferencesInstance)   // compares kDescribe → latest release
 {
     // Wire the per-band / per-lane atomic parameter pointers, and build the link-mirror index maps.
     const int numParams = getParameters().size();
