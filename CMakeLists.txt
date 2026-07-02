@@ -239,6 +239,17 @@ target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
+# Same sanitizer treatment as the lifecycle harness: the shared src/*.cpp files already carry the
+# sanitizer COMPILE flags directory-wide (set_source_files_properties), so this target's objects are
+# instrumented either way — without the matching LINK options the sanitizer runtimes go unresolved.
+tabbyeq_sanitize(TabbyEQ_AdapterTest
+    tests/adapter_schema.cpp
+    src/PluginProcessor.cpp
+    src/Parameters.cpp
+    src/PluginEditor.cpp
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp)
+
 add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 
 endif()  # TABBYEQ_BUILD_TESTS
