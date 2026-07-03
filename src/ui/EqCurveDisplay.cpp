@@ -41,7 +41,8 @@ namespace
     // Whiskers that encode the discrete SLOPE (octaves) via the Neutron-style handle spread, not a continuous
     // Q. HP/LP have always done this; the Notch joins them now that felitronics-core v0.1.5 gives it a variable
     // ORDER (slope->order, 6..96 dB/oct, like HP/LP). Its Q stays the -3 dB width (edited in the strip).
-    bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch; }
+    bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch
+                                                          || t == teq::FilterType::BandPass; }   // v0.2.1: BP has order too
     bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
 
     // HP/LP whisker maps to the DISCRETE slope list (steeper = narrower handle) instead of Q.

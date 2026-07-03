@@ -262,7 +262,7 @@ void BandEditStrip::updateForType()
     // bandwidth-shaped types (Notch + BandPass): BW = (2/ln2)·asinh(1/(2Q)), exact and invertible.
     const bool isNotch   = (t == teq::FilterType::Notch);
     const bool isBw      = isNotch || (t == teq::FilterType::BandPass);
-    const bool usesSlope = isCut || isNotch;
+    const bool usesSlope = isCut || isBw;   // core v0.2.1: BandPass rides a variable order too (FabFilter model)
 
     slopeBox.setVisible (usesSlope);
     gain.setVisible (hasGain);   gain.setEnabled (hasGain);
