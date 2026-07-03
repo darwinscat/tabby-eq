@@ -130,6 +130,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setAuditionQ      ((float) (double) proc.apvts.state.getProperty ("auditionQ", 6.0));
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
     display.setToolbarPlacement ((int)  proc.apvts.state.getProperty ("toolbarPlace", 0));   // floating edit-strip behaviour
+    display.setLeaderMode       ((int)  proc.apvts.state.getProperty ("leaderMode",   1));   // node<->strip leader: default Flash
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
     // Per-point Link FQ / Link Q are now mirrored PROCESSOR-side (host-safe, works with the editor closed);
@@ -212,9 +213,9 @@ void TabbyEqEditor::showViewMenu()
         audMenu.addItem (30 + i, "Q " + juce::String (audQv[i]), true, juce::roundToInt (display.auditionQ()) == audQv[i]);
     m.addSubMenu ("Audition (Alt-drag)", audMenu);
     // Link FQ / Link Q are per-point (edited in the lane dropdown, mirrored processor-side). Here the View
-    // menu edits ONLY the GLOBAL defaults seeded into newly split points.
-    m.addItem (40, "New splits: Link FQ default", true, (bool) proc.apvts.state.getProperty ("defaultLinkFq", false));
-    m.addItem (41, "New splits: Link Q default",  true, (bool) proc.apvts.state.getProperty ("defaultLinkQ", false));
+    // menu edits ONLY the GLOBAL defaults seeded into newly split points (both default ON).
+    m.addItem (40, "New splits: Link FQ default", true, (bool) proc.apvts.state.getProperty ("defaultLinkFq", true));
+    m.addItem (41, "New splits: Link Q default",  true, (bool) proc.apvts.state.getProperty ("defaultLinkQ", true));
 
     juce::PopupMenu domMenu;
     const int dom = proc.getSpectrumDomain();
@@ -228,6 +229,12 @@ void TabbyEqEditor::showViewMenu()
                                  "Hybrid (dock when crowded)", "Fixed lane (FabFilter)" };
     for (int i = 0; i < 5; ++i) placeMenu.addItem (70 + i, placeNames[i], true, tp == i);
     m.addSubMenu ("Edit-strip placement", placeMenu);
+
+    juce::PopupMenu leadMenu;    // node<->strip leader line — governs every placement mode uniformly
+    const int lm = display.leaderMode();
+    const char* leadNames[] = { "Off", "Flash", "Always" };
+    for (int i = 0; i < 3; ++i) leadMenu.addItem (50 + i, leadNames[i], true, lm == i);
+    m.addSubMenu ("Leader line", leadMenu);
 
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
@@ -246,8 +253,9 @@ void TabbyEqEditor::showViewMenu()
         if (r == 40 || r == 41)   // GLOBAL new-split default only (per-point linking lives in the lane dropdown)
         {
             const char* gKey = (r == 40) ? "defaultLinkFq" : "defaultLinkQ";
-            st.setProperty (gKey, ! (bool) st.getProperty (gKey, false), nullptr);
+            st.setProperty (gKey, ! (bool) st.getProperty (gKey, true), nullptr);
         }
+        if (r >= 50 && r <= 52) { const int lv = r - 50; d.setLeaderMode (lv); st.setProperty ("leaderMode", lv, nullptr); }
         if (r >= 60 && r <= 62) { const int dn = r - 60; safe->proc.setSpectrumDomain (dn); st.setProperty ("specDomain", dn, nullptr); }
         if (r >= 70 && r <= 74) { const int mp = r - 70; d.setToolbarPlacement (mp); st.setProperty ("toolbarPlace", mp, nullptr); }
     });

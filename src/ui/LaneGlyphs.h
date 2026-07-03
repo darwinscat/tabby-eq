@@ -52,7 +52,9 @@ namespace tabby::venn
         }
     }
 
-    // One lane's glyph: dim outline circles + the lane's region filled in `col`.
+    // One lane's glyph: dim outline circles + the lane's region filled in `col`. Callers pass NEUTRAL
+    // text tones (one attribute = one carrier: the venn carries the SHAPE, the colour dot the colour —
+    // coloured symbols read as mush at this size).
     inline void drawOne (juce::Graphics& gr, juce::Rectangle<float> area, int lane, juce::Colour col,
                          juce::Colour outline = tabby::palette::textDim())
     {
@@ -64,8 +66,9 @@ namespace tabby::venn
         gr.strokePath (circle (g.rc, g.r), juce::PathStrokeType (0.9f));
     }
 
-    // The strip button's composite: dim outline circles + every enabled lane's region washed in its
-    // colour (the active lane brighter). Single-ST reads as a faint orange "both discs" = stereo.
+    // The strip button's composite: dim outline circles + every enabled lane's region washed in NEUTRAL
+    // text tones (the active lane brighter). The colour lives solely in the button's active-lane dot
+    // (and the canvas badges) — the venn only carries the enabled set's shape.
     inline void drawSet (juce::Graphics& gr, juce::Rectangle<float> area, unsigned enabledMask, int activeLane)
     {
         const Geom g = geom (area);
@@ -75,7 +78,8 @@ namespace tabby::venn
         for (int lane = 0; lane < 5; ++lane)                                  // ST first (a wash), others over
             if (enabledMask & (1u << lane))
             {
-                gr.setColour (tabby::palette::lane (lane).withAlpha (lane == activeLane ? 0.85f : 0.38f));
+                gr.setColour (tabby::palette::text().withAlpha (lane == activeLane ? 0.30f : 0.12f));   // fills stay
+                // barely above the button tone — shape lives in the outlines (same rule as the menu rows)
                 fillRegion (gr, g, lane);
             }
     }

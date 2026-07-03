@@ -127,7 +127,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseEnter (const juce::MouseEvent&) override;   // opaque on hover / edit, translucent otherwise
+    void mouseEnter (const juce::MouseEvent&) override;   // background opaque on hover / edit, faint otherwise
     void mouseExit  (const juce::MouseEvent&) override;
     void mouseUp    (const juce::MouseEvent&) override;
 
@@ -136,7 +136,7 @@ private:
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     void rebind();                           // (re)create attachments for the current band + active lane
-    void updateOpacity();                    // 1.0 when the mouse is over (or dragging) it, else translucent
+    void updateEngaged();                    // hover/edit state -> the BACKGROUND's opacity (text stays opaque)
     void updateForType();                    // slope shown only for HP/LP; gain/Q enabled by type
     void showTypeMenu();                     // popup with filter-shape icons -> sets the SHARED point type
     void showLaneMenu();                     // the placement-lane dropdown (checkbox set + Link FQ/Q)
@@ -146,13 +146,15 @@ private:
     juce::String laneId (const juce::String& base) const;   // active-lane-scoped param id for freq/Q/gain/slope/byp
     int  bandTypeIndex() const;                             // the point's SHARED filter-type index
     bool laneOn (int lane) const;                           // is lane `lane` enabled on the current band?
-    int  enabledLaneCount() const;                          // # enabled lanes on the current band
     unsigned enabledMask() const;                           // bit set of enabled lanes
     bool stereoBus() const;                                 // the processor's bus is stereo (L/R/M/S usable)
 
     TabbyEqAudioProcessor& proc;
     int  curBand = -1;
     int  activeLane = 0;         // teq::Lane index (0..4) currently edited by the strip
+    bool engaged = false;        // mouse over / editing -> the background paints fully opaque
+
+    static constexpr float kCorner = 10.0f;   // panel corner radius (FabFilter-esque rounding)
 
     juce::Label        title;
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left

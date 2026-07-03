@@ -23,8 +23,12 @@
 //   checkbox click  -> toggle the lane (menu stays open; last enabled refuses with a shake/flash)
 //   name click      -> enable-if-needed + set ACTIVE lane + close
 //   Alt-click       -> make-only-lane (enable this, disable the rest)  [an edit; stays open]
-//   newly enabled lanes SEED freq/Q/gain/slope from the active lane; a new split seeds Link FQ/Q from
-//   the View defaults. Non-stereo bus -> the four domain rows are dimmed ("stereo only").
+//   newly enabled lanes SEED freq/Q/slope from the active lane with gain at its 0 dB default (enabling a
+//   lane is audibly neutral until dragged); a new split seeds Link FQ/Q from the View defaults.
+//   FIRST-TRANSITION rule: clicking a DOMAIN lane on a plain {ST} point splits into that lane's natural
+//   PAIR (M+S or L+R, ST off) — never the confusing transient ST+Mid hybrid; the pair's gains fan out
+//   from ST's by ±0.1 × the canvas dB scale so the two appearing nodes never stack.
+//   Non-stereo bus -> the four domain rows are dimmed ("stereo only").
 namespace tabby::lanemenu
 {
     //== shared context for one open menu (kept alive by the rows via shared_ptr) ==================
@@ -59,6 +63,12 @@ namespace tabby::lanemenu
         if (a >= 0 && a < tabby::kNumLanes && laneOn (p, b, a)) return a;
         return lowestEnabled (p, b);
     }
+    // The point's enabled set is exactly the plain {ST} — the same predicate as the canvas badge rule
+    // and the strip's lane-letter readout (a single non-ST lane is NOT plain: it touches one domain only).
+    inline bool plainSt (TabbyEqAudioProcessor& p, int b)
+    {
+        return laneOn (p, b, 0) && enabledCount (p, b) == 1;
+    }
     // One-shot gestured write (begin+set+end) — lane toggles are host-visible operator steps; bare
     // setValueNotifyingHost outside a gesture drops/misgroups DAW automation + undo.
     inline void setParamGestured (juce::RangedAudioParameter* prm, float v01)
@@ -70,7 +80,8 @@ namespace tabby::lanemenu
     {
         setParamGestured (p.apvts.getParameter (tabby::laneParamId (b, L, "on")), on ? 1.0f : 0.0f);
     }
-    // Seed a newly enabled lane's edit fields from the active lane (freq/Q/gain/slope — type is shared).
+    // Seed a lane's FULL edit-field set from another lane (freq/Q/gain/slope — type is shared). Used by
+    // Alt make-only-lane, where the new lane REPLACES the point's sound (so it inherits the gain too).
     inline void seedLane (TabbyEqAudioProcessor& p, int b, int dst, int src)
     {
         if (dst == src) return;
@@ -81,14 +92,78 @@ namespace tabby::lanemenu
             if (s != nullptr && d != nullptr) setParamGestured (d, s->getValue());        // same range -> exact
         }
     }
+    // Seed a newly ADDED lane: freq/Q/slope from the active lane, but gain to its 0 dB DEFAULT — written
+    // explicitly (the lane may hold a stale value from a past life). Enabling a lane must be audibly
+    // neutral until dragged; the engine's hard enable step is then silent by construction.
+    inline void seedLaneNeutral (TabbyEqAudioProcessor& p, int b, int dst, int src)
+    {
+        if (dst != src)
+            for (const char* f : { "freq", "q", "slope" })
+            {
+                auto* s = p.apvts.getParameter (tabby::laneParamId (b, src, f));
+                auto* d = p.apvts.getParameter (tabby::laneParamId (b, dst, f));
+                if (s != nullptr && d != nullptr) setParamGestured (d, s->getValue());    // same range -> exact
+            }
+        if (auto* g = p.apvts.getParameter (tabby::laneParamId (b, dst, "gain")))
+            setParamGestured (g, g->getDefaultValue());                                   // 0 dB
+    }
     // Seed the point's Link FQ / Link Q from the View-menu defaults (a point that just became a split).
     // Defaults only ever turn a flag ON — they never reset a flag the user explicitly enabled (a
-    // re-split must not silently discard that choice).
+    // re-split must not silently discard that choice). The defaults themselves default to ON.
+    // Inheritance semantics: an ABSENT per-band link prop means "inherit the View default"; an explicit
+    // prop (user toggled, or materialized at first split) always wins, in BOTH directions.
+    inline bool effectiveLink (TabbyEqAudioProcessor& p, int b, const char* prop, const char* defProp)
+    {
+        auto& st = p.apvts.state;
+        const auto id = tabby::bandId (b, prop);
+        if (st.hasProperty (id)) return (bool) st.getProperty (id, false);
+        return (bool) st.getProperty (defProp, true);
+    }
+    // First split MATERIALIZES the inherited defaults into explicit band props (the processor's mirror
+    // reads the band props directly) — but never overrides a prop the user already set pre-split.
     inline void seedLinkDefaults (TabbyEqAudioProcessor& p, int b)
     {
         auto& st = p.apvts.state;
-        if ((bool) st.getProperty ("defaultLinkFq", false)) st.setProperty (tabby::bandId (b, "linkFq"), true, nullptr);
-        if ((bool) st.getProperty ("defaultLinkQ",  false)) st.setProperty (tabby::bandId (b, "linkQ"),  true, nullptr);
+        if (! st.hasProperty (tabby::bandId (b, "linkFq")))
+            st.setProperty (tabby::bandId (b, "linkFq"), (bool) st.getProperty ("defaultLinkFq", true), nullptr);
+        if (! st.hasProperty (tabby::bandId (b, "linkQ")))
+            st.setProperty (tabby::bandId (b, "linkQ"), (bool) st.getProperty ("defaultLinkQ", true), nullptr);
+    }
+    // FIRST-TRANSITION rule: a plain {ST} point clicked on a DOMAIN lane splits into that lane's natural
+    // PAIR — Mid/Side or Left/Right — with ST off, killing the confusing transient ST+Mid hybrid state.
+    // Both new lanes seed freq/Q/slope from ST; the CLICKED lane gets ST's gain +delta, its pair −delta,
+    // delta = 0.1 × the canvas's visible dB range (the persisted vertical-scale state), so the two
+    // appearing nodes separate vertically instead of stacking. Order: seed both while disabled → enable
+    // both → disable ST (the set is never transiently empty) → active = clicked → link defaults.
+    inline void firstSplitToPair (TabbyEqAudioProcessor& p, int b, int clicked)
+    {
+        const int pair = (clicked == 1) ? 2 : (clicked == 2) ? 1 : (clicked == 3) ? 4 : 3;   // L<->R, M<->S
+        // The VISIBLE canvas scale (incl. a transient auto-fit widening), falling back to the persisted
+        // user choice: the split-delta must match what the user is looking at, not a stale setting.
+        const double range = (double) p.apvts.state.getProperty ("gainRangeLive",
+                                 p.apvts.state.getProperty ("gainRange", 12.0));
+        const float  delta = (float) (0.1 * range);
+
+        auto* stG = p.apvts.getParameter (tabby::laneParamId (b, 0, "gain"));
+        const float stGain = stG != nullptr ? stG->convertFrom0to1 (stG->getValue()) : 0.0f;
+
+        for (const int L : { clicked, pair })
+        {
+            for (const char* f : { "freq", "q", "slope" })
+            {
+                auto* s = p.apvts.getParameter (tabby::laneParamId (b, 0, f));
+                auto* d = p.apvts.getParameter (tabby::laneParamId (b, L, f));
+                if (s != nullptr && d != nullptr) setParamGestured (d, s->getValue());
+            }
+            if (auto* g = p.apvts.getParameter (tabby::laneParamId (b, L, "gain")))
+                setParamGestured (g, g->convertTo0to1 (juce::jlimit (-24.0f, 24.0f,
+                                       stGain + (L == clicked ? delta : -delta))));
+        }
+        setLaneOnParam (p, b, clicked, true);
+        setLaneOnParam (p, b, pair,    true);
+        setLaneOnParam (p, b, 0,       false);
+        p.setBandActiveLane (b, clicked);
+        seedLinkDefaults (p, b);                                                       // first split
     }
     // Turning a link ON must snap the existing divergence NOW (the processor mirrors only future edits):
     // copy the active lane's field(s) onto every other enabled lane.
@@ -159,10 +234,13 @@ namespace tabby::lanemenu
                                g.strokePath (tick, juce::PathStrokeType (1.6f)); }
             else             { g.setColour (tabby::palette::textDim().withAlpha (a)); g.drawRoundedRectangle (box, 3.0f, 1.2f); }
 
+            // Venn glyph in NEUTRAL text tones (one attribute = one carrier: the venn carries the SHAPE,
+            // the dot carries the colour). The region FILL is barely above the panel tone — the shape is
+            // carried by the outlines; a bright fill reads as a white blob at this size (Oleh, round 3).
             tabby::venn::drawOne (g, { rf.getX() + 26.0f, rf.getY() + 3.0f, 24.0f, rf.getHeight() - 6.0f },
-                                  L, lc.withAlpha (a));
+                                  L, tabby::palette::text().withAlpha ((on ? 0.14f : 0.08f) * a));
 
-            g.setColour (lc.withAlpha (a));                                    // colour dot
+            g.setColour (lc.withAlpha (a));                                    // colour dot — the ONE colour carrier
             g.fillEllipse (rf.getX() + 54.0f, rf.getCentreY() - 3.0f, 6.0f, 6.0f);
 
             g.setColour ((active ? tabby::palette::text() : tabby::palette::textDim()).withAlpha (a));
@@ -209,11 +287,13 @@ namespace tabby::lanemenu
                     setLaneOnParam (p, b, L, false);
                     p.setBandActiveLane (b, activeLaneOf (p, b));              // clamp active to a live lane
                 }
+                else if (plainSt (p, b) && L != 0)                             // plain {ST} + domain lane clicked
+                    firstSplitToPair (p, b, L);                                // -> split into the M/S or L/R pair
                 else
                 {
                     const int wasCount = enabledCount (p, b);
                     const int src = activeLaneOf (p, b);                       // source BEFORE the new lane exists
-                    seedLane (p, b, L, src);                                   // seed while still disabled — the
+                    seedLaneNeutral (p, b, L, src);                            // seed while still disabled — the
                     setLaneOnParam (p, b, L, true);                            // engine never sees a half-seeded lane
                     if (wasCount == 1) seedLinkDefaults (p, b);               // first split -> seed link defaults
                 }
@@ -225,11 +305,16 @@ namespace tabby::lanemenu
             // name click: enable-if-needed + set active + close
             if (! laneOn (p, b, L))
             {
-                const int wasCount = enabledCount (p, b);
-                const int src = enabledCount (p, b) > 0 ? activeLaneOf (p, b) : 0;
-                seedLane (p, b, L, src);                                       // seed while still disabled
-                setLaneOnParam (p, b, L, true);
-                if (wasCount == 1) seedLinkDefaults (p, b);
+                if (plainSt (p, b) && L != 0)                                  // plain {ST} + domain lane clicked
+                    firstSplitToPair (p, b, L);                                // (sets active = clicked already)
+                else
+                {
+                    const int wasCount = enabledCount (p, b);
+                    const int src = wasCount > 0 ? activeLaneOf (p, b) : 0;
+                    seedLaneNeutral (p, b, L, src);                            // seed while still disabled
+                    setLaneOnParam (p, b, L, true);
+                    if (wasCount == 1) seedLinkDefaults (p, b);
+                }
             }
             p.setBandActiveLane (b, L);
             if (ctx->onActivate) ctx->onActivate (L);
@@ -263,7 +348,7 @@ namespace tabby::lanemenu
         void paint (juce::Graphics& g) override
         {
             auto rf = getLocalBounds().toFloat();
-            const bool on = (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
+            const bool on = effectiveLink (ctx->proc, ctx->band, prop(), isFreq ? "defaultLinkFq" : "defaultLinkQ");
             if (isItemHighlighted()) { g.setColour (juce::Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (rf.reduced (2.0f, 1.0f), 4.0f); }
 
             auto box = juce::Rectangle<float> (rf.getX() + 7.0f, rf.getCentreY() - 6.0f, 12.0f, 12.0f);
@@ -283,7 +368,7 @@ namespace tabby::lanemenu
 
         void mouseUp (const juce::MouseEvent&) override
         {
-            const bool v = ! (bool) ctx->proc.apvts.state.getProperty (tabby::bandId (ctx->band, prop()), false);
+            const bool v = ! effectiveLink (ctx->proc, ctx->band, prop(), isFreq ? "defaultLinkFq" : "defaultLinkQ");
             // Snap BEFORE raising the flag: with the link still off, the snap writes aren't re-mirrored
             // by the processor's drain (pure single writes), and the flag only ever goes true over an
             // already-converged point.
