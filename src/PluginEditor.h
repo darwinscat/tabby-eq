@@ -10,6 +10,7 @@
 #include "ui/BandEditStrip.h"
 #include "ui/LevelMeter.h"
 #include "ui/CorrelationMeter.h"
+#include "ui/VersionInfo.h"
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
@@ -49,6 +50,7 @@ private:
     juce::TextButton viewButton;
     juce::TextButton resetButton;
     juce::TextButton fullButton;
+    tabby::InfoButton infoButton { proc.updateChecker() };   // (i) — build/version + update-check popover, top-bar right (near POST)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)

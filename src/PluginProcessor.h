@@ -10,6 +10,8 @@
 #include "Parameters.h"
 #include "LinearPhase.h"
 #include "NaturalPhase.h"
+#include "AppPreferences.h"
+#include "UpdateChecker.h"
 
 #include <array>
 #include <atomic>
@@ -166,6 +168,10 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Opt-in update check. Owned here (not the editor) so it survives the window closing, is one per
+    // plugin instance, and shares the single global PropertiesFile; the (i) button drives + reads it.
+    tabby::UpdateChecker& updateChecker() { return updateCheckerInstance; }
+
 private:
     // AudioProcessorParameter::Listener — may fire on ANY thread. The body only pushes a captured link
     // event + wakes the drain (alloc/lock-free; JUCE's dispatch itself holds the listener lock — see LinkFifo).
@@ -179,6 +185,12 @@ private:
     void applyToEnabledLanes (int band, const char* field, float v01);   // tagged writes; disabled lanes untouched
     void resyncAllLinks();  // idempotent snap of every linked point from its active lane (overflow recovery)
     int  resyncActiveLane (int band) const;                 // active lane from state prop / lowest-enabled fallback
+
+    // appPreferencesInstance MUST precede updateCheckerInstance: the checker takes it by reference,
+    // so it has to be constructed first (members init in declaration order). SharedResourcePointer =
+    // ONE AppPreferences per host process, shared by every TabbyEQ instance (see AppPreferences.h).
+    juce::SharedResourcePointer<tabby::AppPreferences> appPreferencesInstance;   // process-wide PropertiesFile owner
+    tabby::UpdateChecker updateCheckerInstance;                                  // version + opt-in update check (built in the ctor)
 
     teq::EqEngine engine;
 

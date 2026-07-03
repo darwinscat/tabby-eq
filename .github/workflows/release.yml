@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# TabbyEQ release — cut on pushing a `v*` tag. Builds the four macOS formats in Release, gates on
+# ctest + auval, zips the bundles, and publishes a GitHub Release with the zip attached.
+#
+# ⚠️  TODO — CODESIGNING / NOTARIZATION IS OUT OF SCOPE HERE (see the "package" step). The zip ships
+#     UNSIGNED + UN-NOTARIZED: Gatekeeper will quarantine it on other Macs until a Developer-ID sign
+#     + `xcrun notarytool` + staple step is added (needs the signing identity + Apple ID secrets).
+#     Do NOT distribute this artefact publicly until that lands.
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write        # gh release create needs to write Releases
+
+env:
+  TABBYEQ_BUILDER: ci    # stamp TabbyVersion.h kBuilder as "ci"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      # Gate: only CLEAN vX.Y.Z tags may publish. The in-plugin update check treats every published
+      # release as authoritative (its compare rule parses a numeric semver out of the tag), so a
+      # suffixed tag (v1.2.3-rc1 etc.) must never become the /releases/latest answer.
+      - name: Gate — the tag must be clean semver (vX.Y.Z)
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a clean vX.Y.Z release tag — refusing to publish. Use a plain vX.Y.Z tag (pre-release/suffixed tags are not supported by the in-plugin update check)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0                 # full history + tags so `git describe --tags` resolves the release tag
+
+      - name: Configure (Release; all four formats; JUCE fetched)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test (core suites + adapter version stamp)
+        run: ctest --test-dir build --output-on-failure
+
+      # auval finds the AU because juce_add_plugin(COPY_PLUGIN_AFTER_BUILD TRUE) installs the .component
+      # into ~/Library/Audio/Plug-Ins/Components at build time. TbEq/Dcat = PLUGIN_CODE / MANUFACTURER.
+      - name: Validate the Audio Unit (auval)
+        run: auval -v aufx TbEq Dcat
+
+      # TODO(codesign/notarize): the bundles copied here are UNSIGNED. Before public distribution, add a
+      # step that `codesign --deep --options runtime --sign "Developer ID Application: …"` each bundle,
+      # then `xcrun notarytool submit … --wait` the zip and `xcrun stapler staple` it. Requires secrets
+      # (signing cert .p12 + password, APPLE_ID / TEAM_ID / app-specific password). OUT OF SCOPE for now.
+      - name: Package the bundles into a zip
+        run: |
+          set -euo pipefail
+          ART="$(find build -type d -name 'TabbyEQ_artefacts' | head -1)"
+          if [ -z "$ART" ]; then echo "::error::TabbyEQ_artefacts dir not found"; exit 1; fi
+          echo "Artefacts root: $ART"
+          STAGE="dist/TabbyEQ"
+          mkdir -p "$STAGE"
+          # Collect the four format bundles (VST3/AU/CLAP/Standalone) wherever the generator placed them.
+          find "$ART" -maxdepth 3 \( \
+              -name 'TabbyEQ.vst3' -o -name 'TabbyEQ.component' \
+              -o -name 'TabbyEQ.clap' -o -name 'TabbyEQ.app' \) -print0 \
+            | while IFS= read -r -d '' bundle; do
+                echo "  + $bundle"
+                cp -R "$bundle" "$STAGE/"
+              done
+          COUNT="$(find "$STAGE" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')"
+          echo "Staged $COUNT bundle(s)."
+          if [ "$COUNT" -lt 4 ]; then
+            echo "::error::expected 4 bundles (VST3/AU/CLAP/Standalone), found $COUNT"; exit 1
+          fi
+          ZIP="TabbyEQ-${GITHUB_REF_NAME}-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$ZIP"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "Built $ZIP"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" "${ZIP}" \
+            --title "TabbyEQ ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "Unsigned / un-notarized macOS build (VST3 · AU · CLAP · Standalone). See workflow TODO before public distribution."
