@@ -240,8 +240,14 @@ void BandEditStrip::showTypeMenu()
                      [safe] (int r)
                      {
                          if (safe == nullptr || r <= 0 || safe->curBand < 0) return;
+                         const int oldChoice = safe->bandTypeIndex();
                          if (auto* prm = safe->proc.apvts.getParameter (tabby::bandId (safe->curBand, "type")))   // SHARED point type
+                         {
+                             prm->beginChangeGesture();   // gestured like every other strip edit — touch-automation hosts record it
                              prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
+                             prm->endChangeGesture();
+                         }
+                         tabby::snapQOnTypeSwitch (safe->proc.apvts, safe->curBand, oldChoice, r - 1);   // untouched Q follows the new type's default
                          safe->typeButton.setType (tabby::filterTypeFromChoice (r - 1));
                          safe->updateForType();
                      });

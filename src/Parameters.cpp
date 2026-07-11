@@ -38,6 +38,64 @@ teq::FilterType filterTypeFromChoice (int idx) noexcept
     }
 }
 
+double defaultQFor (teq::FilterType t) noexcept
+{
+    return (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass
+         || t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf) ? 0.707 : 1.0;
+}
+
+void snapQOnTypeSwitch (juce::AudioProcessorValueTreeState& apvts, int band, int oldChoiceIdx, int newChoiceIdx)
+{
+    const double oldDef = defaultQFor (filterTypeFromChoice (oldChoiceIdx));
+    const double newDef = defaultQFor (filterTypeFromChoice (newChoiceIdx));
+    if (juce::approximatelyEqual (oldDef, newDef))
+        return;
+
+    // "Still at the old default" — 1e-4 covers the skewed Q range's set/get float roundtrip while a
+    // deliberate near-default hand edit (0.71 typed against 0.707) stays out of "untouched".
+    auto atOldDef = [&apvts, band, oldDef] (int lane)
+    {
+        auto* raw = apvts.getRawParameterValue (laneParamId (band, lane, "q"));
+        return raw != nullptr && std::abs (raw->load() - (float) oldDef) < 1.0e-4f;
+    };
+    auto laneEnabled = [&apvts, band] (int lane)
+    {
+        auto* on = apvts.getRawParameterValue (laneParamId (band, lane, "on"));
+        return on != nullptr && on->load() > 0.5f;
+    };
+    auto write = [&apvts, band] (int lane, double v)
+    {
+        if (auto* q = apvts.getParameter (laneParamId (band, lane, "q")))
+        {
+            q->beginChangeGesture();
+            q->setValueNotifyingHost (q->convertTo0to1 ((float) v));
+            q->endChangeGesture();
+        }
+    };
+
+    // ENABLED lanes only: a split COPIES freq/q/slope from the source lane (see LaneMenu), so a
+    // dormant lane's stored Q never survives into a split — snapping it would only spray the host
+    // with parameter edits.
+    if ((bool) apvts.state.getProperty (bandId (band, "linkQ"), false))
+    {
+        // Linked Q = ONE logical width. Snap only when EVERY enabled lane still sits at the old
+        // default, and write a SINGLE lane — the processor's link mirror propagates it. Per-lane
+        // writes here would enqueue snap events into the same mirror FIFO as a just-made hand edit
+        // and replay the default OVER it at the 30 Hz drain; that hand edit's raw value is already
+        // visible on its own lane, so this all-at-default gate sees it and backs off race-free.
+        for (int L = 0; L < kNumLanes; ++L)
+            if (laneEnabled (L) && ! atOldDef (L))
+                return;
+        for (int L = 0; L < kNumLanes; ++L)
+            if (laneEnabled (L)) { write (L, newDef); return; }
+        return;
+    }
+
+    for (int L = 0; L < kNumLanes; ++L)
+        if (laneEnabled (L) && atOldDef (L))
+            write (L, newDef);
+}
+
 static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout, int b)
 {
     using namespace juce;

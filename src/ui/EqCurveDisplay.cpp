@@ -1136,8 +1136,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             setParamGestured (tabby::laneParamId (b, 0, "freq"), juce::jlimit (kFreqMin, kFreqPlaceMax, xToFreq (at.x)));
             if (ft == teq::FilterType::Bell || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf)
                 setParamGestured (tabby::laneParamId (b, 0, "gain"), juce::jlimit (-kGainMax, kGainMax, yToDb (at.y)));
-            setParamGestured (tabby::laneParamId (b, 0, "q"), (ft == teq::FilterType::HighPass  || ft == teq::FilterType::LowPass
-                                                              || ft == teq::FilterType::LowShelf || ft == teq::FilterType::HighShelf) ? 0.707 : 1.0);
+            setParamGestured (tabby::laneParamId (b, 0, "q"), tabby::defaultQFor (ft));
             if (slopeIndex >= 0) setParamGestured (tabby::laneParamId (b, 0, "slope"), (double) slopeIndex);
             setParamGestured (tabby::laneParamId (b, 0, "byp"), 0.0);
             setParamGestured (tabby::bandId (b, "bypass"), 0.0);            // point bypass off
@@ -1164,7 +1163,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     bp.on   = true;
     bp.type = ft;
     { auto& st = bp.lane (teq::Lane::Stereo);
-      st.freq = f0; st.Q = isCut (ft) ? 0.707 : 1.0; st.gainDb = gain; st.slope = slDb; }
+      st.freq = f0; st.Q = tabby::defaultQFor (ft); st.gainDb = gain; st.slope = slDb; }   // = the committed default, so the ghost matches the band it becomes
 
     const auto col = tabby::palette::violetLo();
 
@@ -1302,7 +1301,12 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, lane] (int r) {
                 if (safe == nullptr || r <= 0 || r >= 1000) return;                     // ignore the lane rows' own ids
                 if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);    // remove the whole band (point off)
-                else if (r <= 9) safe->setParamGestured (safe->laneParamId (b, lane, "type"), r - 1);   // SHARED point type
+                else if (r <= 9)
+                {
+                    const int oldChoice = (int) std::lround (safe->proc.apvts.getRawParameterValue (tabby::bandId (b, "type"))->load());
+                    safe->setParamGestured (safe->laneParamId (b, lane, "type"), r - 1);   // SHARED point type
+                    tabby::snapQOnTypeSwitch (safe->proc.apvts, b, oldChoice, r - 1);      // untouched Q follows the new type's default
+                }
             });
         }
         else          // empty: add a band here, if a slot is free
