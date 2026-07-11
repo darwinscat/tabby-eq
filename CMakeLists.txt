@@ -78,6 +78,24 @@ else()
 endif()
 FetchContent_MakeAvailable(felitronics_core)
 
+# felitronics-appkit — the family's shared APP-SIDE JUCE infrastructure (UpdateChecker lives there
+# now; src/UpdateChecker.h is a thin adapter, src/UpdateCompare.h an alias shim). Same hybrid
+# consumption as felitronics-core above. Header-only INTERFACE target — it never links JUCE itself,
+# so the core-tests tier (plugin OFF, no JUCE) can still run the UpdateCompare unit against it.
+set(TABBYEQ_APPKIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-appkit" CACHE PATH "Local felitronics-appkit checkout (used if present); else the pinned release is fetched")
+set(TABBYEQ_APPKIT_TAG "v0.1.0" CACHE STRING "felitronics-appkit git tag to fetch when no local checkout is present")
+if(TABBYEQ_APPKIT_DIR AND EXISTS "${TABBYEQ_APPKIT_DIR}/CMakeLists.txt")
+    message(STATUS "felitronics-appkit: local checkout — ${TABBYEQ_APPKIT_DIR}")
+    FetchContent_Declare(felitronics_appkit SOURCE_DIR "${TABBYEQ_APPKIT_DIR}")
+else()
+    message(STATUS "felitronics-appkit: fetching ${TABBYEQ_APPKIT_TAG} from GitHub")
+    FetchContent_Declare(felitronics_appkit
+        GIT_REPOSITORY https://github.com/darwinscat/felitronics-appkit.git
+        GIT_TAG        ${TABBYEQ_APPKIT_TAG}
+        GIT_SHALLOW    TRUE)
+endif()
+FetchContent_MakeAvailable(felitronics_appkit)
+
 # JUCE is fetched when EITHER the plugin OR the headless adapter test is built (both link it); a pure
 # core build (-DTABBYEQ_BUILD_PLUGIN=OFF with tests off) never pulls it. Pinned like orbitcab.
 if(TABBYEQ_BUILD_PLUGIN OR TABBYEQ_BUILD_TESTS)
@@ -179,8 +197,7 @@ target_sources(TabbyEQ PRIVATE
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp
-    src/UpdateChecker.cpp)             # opt-in GitHub update check (drives the (i) badge)
+    src/ui/VersionInfo.cpp)            # the (i) badge — its UpdateChecker is now felitronics-appkit (header-only)
 
 target_include_directories(TabbyEQ PRIVATE src "${TABBY_VERSION_DIR}")   # "Parameters.h", "Vocab.h", generated TabbyVersion.h
 add_dependencies(TabbyEQ TabbyVersionGen)                                # bake TabbyVersion.h before compiling
@@ -194,6 +211,7 @@ target_compile_definitions(TabbyEQ PUBLIC
 target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
     felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
+    felitronics::appkit                 # shared UpdateChecker/UpdateCompare (header-only; JUCE comes from us)
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
     juce::juce_dsp                      # (legacy link; the FFT/convolution are now core — JUCE-dsp-free in src)
     juce::juce_recommended_config_flags
@@ -228,8 +246,7 @@ target_sources(TabbyEQ_LifecycleTest PRIVATE
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp              # TabbyEqEditor holds an InfoButton → must link it
-    src/UpdateChecker.cpp)              # the processor owns an UpdateChecker → must link it
+    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
 
 target_include_directories(TabbyEQ_LifecycleTest PRIVATE src "${TABBY_VERSION_DIR}")
 add_dependencies(TabbyEQ_LifecycleTest TabbyVersionGen)
@@ -243,6 +260,7 @@ target_compile_definitions(TabbyEQ_LifecycleTest PRIVATE
 target_link_libraries(TabbyEQ_LifecycleTest PRIVATE
     teq::core
     felitronics::lineareq
+    felitronics::appkit
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags
@@ -256,8 +274,7 @@ tabbyeq_sanitize(TabbyEQ_LifecycleTest
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp
-    src/UpdateChecker.cpp)
+    src/ui/VersionInfo.cpp)
 
 add_test(NAME tabbyeq_lifecycle_misuse COMMAND TabbyEQ_LifecycleTest)
 # Prefs isolation: the harness constructs the REAL processor, whose AppPreferences would otherwise
@@ -279,8 +296,7 @@ target_sources(TabbyEQ_AdapterTest PRIVATE
     src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp              # TabbyEqEditor holds an InfoButton → must link it
-    src/UpdateChecker.cpp)              # the processor owns an UpdateChecker → must link it
+    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
 
 target_include_directories(TabbyEQ_AdapterTest PRIVATE src "${TABBY_VERSION_DIR}")
 add_dependencies(TabbyEQ_AdapterTest TabbyVersionGen)
@@ -294,6 +310,7 @@ target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
 target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     teq::core
     felitronics::lineareq
+    felitronics::appkit
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags
@@ -309,8 +326,7 @@ tabbyeq_sanitize(TabbyEQ_AdapterTest
     src/PluginEditor.cpp
     src/ui/EqCurveDisplay.cpp
     src/ui/BandEditStrip.cpp
-    src/ui/VersionInfo.cpp
-    src/UpdateChecker.cpp)
+    src/ui/VersionInfo.cpp)
 
 add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 # Same prefs isolation as the lifecycle harness (real processor => real AppPreferences otherwise).
@@ -339,7 +355,8 @@ add_test(NAME tabbyeq_version_header COMMAND TabbyEQ_VersionTest)
 # release. Pure header, so no JUCE and no version-generator dependency — rides the same core-tests ctest.
 # ----------------------------------------------------------------------------
 add_executable(TabbyEQ_UpdateCompareTest tests/update_compare.cpp)
-target_include_directories(TabbyEQ_UpdateCompareTest PRIVATE src)   # UpdateCompare.h
+target_include_directories(TabbyEQ_UpdateCompareTest PRIVATE src)   # UpdateCompare.h (the alias shim)
+target_link_libraries(TabbyEQ_UpdateCompareTest PRIVATE felitronics::appkit)   # the rule itself lives there now
 add_test(NAME tabbyeq_update_compare COMMAND TabbyEQ_UpdateCompareTest)
 
 # ----------------------------------------------------------------------------
