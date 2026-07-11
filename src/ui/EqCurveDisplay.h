@@ -9,6 +9,7 @@
 #include <teq/SpectrumTap.h>
 #include <felitronics/core/Fft.h>
 
+#include "eqview/PlotMap.h"
 #include "PluginProcessor.h"
 
 #include <array>
@@ -82,7 +83,9 @@ public:
 private:
     void timerCallback() override;
 
-    // coordinate maps
+    // coordinate maps — thin wrappers over eqview::PlotMap (the single, unit-tested home of the
+    // mapping math); plotMap() snapshots the component's live geometry into one.
+    eqview::PlotMap plotMap() const noexcept;
     float  freqToX (double f) const noexcept;
     double xToFreq (float x)  const noexcept;
     float  dbToY   (double db) const noexcept;     // curve gain scale (± kGainRange around centre)
