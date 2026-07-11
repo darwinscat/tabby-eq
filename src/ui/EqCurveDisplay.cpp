@@ -85,13 +85,7 @@ namespace
 
 EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
 {
-    for (int i = 0; i < (int) window.size(); ++i)
-        window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (window.size() - 1));
-
-    fft.prepare (teq::kSpectrumFftSize);     // core::Fft seam — plan/alloc here (UI thread), not in the timer
-
-    specDb.fill (-120.0f);
-    specPeak.fill (-120.0f);
+    analyzer.peakFallDb = kPeakFallDb;   // the pane readies its own Hann window / FFT plan / dB arrays
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
 
@@ -633,75 +627,31 @@ void EqCurveDisplay::stepSelection (int dir)
 //==============================================================================
 void EqCurveDisplay::pushSpectrum()
 {
-    if (! proc.pullSpectrum (analyzerPre, fftBuf.data()))
-    {
-        // No new frame this tick is NORMAL (a 2048-pt window arrives at ~23 fps vs the 30 Hz timer).
-        // Hold the last spectrum; only fade once genuinely starved (audio stopped ~0.5 s).
-        if (starveTicks < 16) ++starveTicks;          // bounded — never overflows over long silence
-        if (starveTicks > 15)
-            for (auto& v : specDb) v += 0.05f * (-120.0f - v);
-        for (auto& v : specPeak) v = juce::jmax (-120.0f, v - kPeakFallDb);
-        return;
-    }
-    starveTicks = 0;
-
-    for (int i = 0; i < teq::kSpectrumFftSize; ++i) fftBuf[(size_t) i] *= window[(size_t) i];
-    fft.forward (fftBuf.data(), spec.data());                    // real[N] -> spectrum [DC, Nyquist, re1,im1, …]
-
-    const double norm = (double) teq::kSpectrumFftSize * 0.25;   // Hann single-bin compensation
-    const int    N    = teq::kSpectrumFftSize;
-    for (int i = 0; i < (int) specDb.size(); ++i)
-    {
-        const float re  = (i == 0) ? spec[0] : (i == N / 2) ? spec[1] : spec[(size_t) (2 * i)];
-        const float im  = (i == 0 || i == N / 2) ? 0.0f : spec[(size_t) (2 * i + 1)];
-        const float mag = std::sqrt (re * re + im * im);         // |bin| of the unnormalized forward (== JUCE)
-        const double db = juce::Decibels::gainToDecibels ((double) mag / norm, -120.0);
-        specDb[(size_t) i]  += 0.25f * ((float) db - specDb[(size_t) i]);   // smooth toward target
-        specPeak[(size_t) i] = juce::jmax (specPeak[(size_t) i] - kPeakFallDb, specDb[(size_t) i]);
-    }
+    // The pane owns the pipeline (window -> FFT -> dB smoothing + peak-hold, unit-tested);
+    // this component owns only the SOURCE — the processor's pre/post tap.
+    if (proc.pullSpectrum (analyzerPre, analyzer.frameInput())) analyzer.ingest();
+    else                                                        analyzer.starve();
 }
 
 // Spectrum on the display's log grid: linear-interpolate the sparse bass (smooth, no stair-steps),
 // take the bin MAX in the dense highs (keeps the spiky harmonic detail pro analyzers show). High
 // column resolution (~1/px) so high-freq peaks aren't skipped. +4.5 dB/oct pink-tilt on top.
-void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const
+// The column math lives in the pane; here we only wrap the emitted points into JUCE paths. The
+// geometry has ONE source — the PlotMap — for both the columns and the closing edges (a separate
+// width parameter could silently detach the fill's closing edge from the last column).
+void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const
 {
-    constexpr int nb = teq::kSpectrumFftSize / 2 + 1;
-    const double binPerHz = (double) teq::kSpectrumFftSize / fsCache;
-    const int N = juce::jlimit (256, 900, (int) w);
-    const auto pm = plotMap();   // hoisted: one geometry snapshot for the whole column loop
-
-    auto column = [&] (const auto& raw, double f, int loBin, int hiBin) -> float
-    {
-        if (hiBin <= loBin)                                         // < 1 bin this column -> interpolate
+    const auto pm = plotMap();
+    float lastY = pm.height;
+    analyzer.buildColumns (pm, fsCache, kTiltDbPerOct, kTiltPivotHz,
+        [&] (int i, float x, float yS, float yP)
         {
-            const double bf = juce::jlimit (0.0, (double) (nb - 2), f * binPerHz);
-            const int b0 = (int) bf; const float t = (float) (bf - (double) b0);
-            return raw[(size_t) b0] + t * (raw[(size_t) (b0 + 1)] - raw[(size_t) b0]);
-        }
-        float m = -200.0f;                                          // >= 1 bin -> peak (max) = detail
-        for (int b = juce::jmax (0, loBin + 1); b <= juce::jmin (nb - 1, hiBin); ++b)
-            m = juce::jmax (m, raw[(size_t) b]);
-        return m;
-    };
-
-    float lastY = h;
-    int prevBin = 0;
-    for (int i = 0; i <= N; ++i)
-    {
-        const float  x = (float) i / (float) N * w;
-        const double f = pm.xToFreq (x);
-        const int    curBin = juce::jlimit (0, nb - 1, (int) std::floor (f * binPerHz));
-        const float  tilt = (float) (kTiltDbPerOct * std::log2 (f / kTiltPivotHz));   // pink-noise comp
-        const float  yS = pm.specDbToY (column (specDb,   f, prevBin, curBin) + tilt);
-        const float  yP = pm.specDbToY (column (specPeak, f, prevBin, curBin) + tilt);
-        if (i == 0) { fillOut.startNewSubPath (0.0f, h); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
-        else          peakOut.lineTo (x, yP);
-        fillOut.lineTo (x, yS);
-        prevBin = curBin;
-        lastY = yS;
-    }
-    fillOut.lineTo (w, lastY); fillOut.lineTo (w, h); fillOut.closeSubPath();
+            if (i == 0) { fillOut.startNewSubPath (0.0f, pm.height); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
+            else          peakOut.lineTo (x, yP);
+            fillOut.lineTo (x, yS);
+            lastY = yS;
+        });
+    fillOut.lineTo (pm.width, lastY); fillOut.lineTo (pm.width, pm.height); fillOut.closeSubPath();
 }
 
 void EqCurveDisplay::timerCallback()
@@ -829,7 +779,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // --- spectrum (filled) ------------------------------------------------
     {
         juce::Path specFill, specPeakPath;
-        buildSpectrumPaths (specFill, specPeakPath, w, h);
+        buildSpectrumPaths (specFill, specPeakPath);
         g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
                                                  tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
         g.fillPath (specFill);
