@@ -1,0 +1,77 @@
+- generic [active] [ref=f1e1]:
+  - heading "TabbyEQ placement lanes — curves straight from the new engine" [level=1] [ref=f1e2]
+  - paragraph [ref=f1e3]:
+    - text: Demo set, computed by
+    - code [ref=f1e4]: felitronics::eq
+    - text: (branch
+    - code [ref=f1e5]: feat/eq-lanes
+    - text: "): point 1 = ST high-pass 24 dB/oct @ 40 Hz · point 2 = {m,s} split — Mid −5 dB @ 250, Side +4 dB @ 3.2k · point 3 = {l,r} split — Left +3 / Right −3 @ 1.2k"
+  - heading "Display axes (what the GUI will draw)" [level=2] [ref=f1e6]
+  - paragraph [ref=f1e7]: "Per-axis composites, industry convention: each axis = its own-domain lanes × the ST lanes. Cross-domain coupling deliberately ignored here."
+  - img [ref=f1e9]:
+    - generic [ref=f1e10]: "20"
+    - generic [ref=f1e11]: "50"
+    - generic [ref=f1e12]: "100"
+    - generic [ref=f1e13]: "200"
+    - generic [ref=f1e14]: "500"
+    - generic [ref=f1e15]: 1k
+    - generic [ref=f1e16]: 2k
+    - generic [ref=f1e17]: 5k
+    - generic [ref=f1e18]: 10k
+    - generic [ref=f1e19]: 20k
+    - generic [ref=f1e20]: "-24"
+    - generic [ref=f1e21]: "-18"
+    - generic [ref=f1e22]: "-12"
+    - generic [ref=f1e23]: "-6"
+    - generic [ref=f1e24]: "0"
+    - generic [ref=f1e25]: "+6"
+    - generic [ref=f1e30]: S
+    - generic [ref=f1e31]: L
+    - generic [ref=f1e32]: M
+    - generic [ref=f1e33]: R
+  - generic [ref=f1e34]:
+    - generic [ref=f1e35]: Left axis
+    - generic [ref=f1e37]: Right axis
+    - generic [ref=f1e39]: Mid axis
+    - generic [ref=f1e41]: Side axis
+  - heading "Exact 2×2 matrix (what the audio really does — FIR/tests source of truth)" [level=2] [ref=f1e43]
+  - paragraph [ref=f1e44]:
+    - text: True per-channel transfers h
+    - subscript [ref=f1e45]: LL
+    - text: ", h"
+    - subscript [ref=f1e46]: RR
+    - text: and the cross-terms h
+    - subscript [ref=f1e47]: LR
+    - text: ", h"
+    - subscript [ref=f1e48]: RL
+    - text: the M/S split creates — the coupling the display convention hides. Cross-terms run off below the floor where Mid = Side.
+  - img [ref=f1e50]:
+    - generic [ref=f1e51]: "20"
+    - generic [ref=f1e52]: "50"
+    - generic [ref=f1e53]: "100"
+    - generic [ref=f1e54]: "200"
+    - generic [ref=f1e55]: "500"
+    - generic [ref=f1e56]: 1k
+    - generic [ref=f1e57]: 2k
+    - generic [ref=f1e58]: 5k
+    - generic [ref=f1e59]: 10k
+    - generic [ref=f1e60]: 20k
+    - generic [ref=f1e61]: "-36"
+    - generic [ref=f1e62]: "-30"
+    - generic [ref=f1e63]: "-24"
+    - generic [ref=f1e64]: "-18"
+    - generic [ref=f1e65]: "-12"
+    - generic [ref=f1e66]: "-6"
+    - generic [ref=f1e67]: "0"
+    - generic [ref=f1e68]: "+6"
+    - generic [ref=f1e73]: hLL
+    - generic [ref=f1e74]: hRR
+    - generic [ref=f1e75]: hLR
+    - generic [ref=f1e76]: hRL
+  - generic [ref=f1e77]:
+    - generic [ref=f1e78]: h LL — true Left
+    - generic [ref=f1e80]: h RR — true Right
+    - generic [ref=f1e82]: h LR — R→L bleed
+    - generic [ref=f1e84]: h RL — L→R bleed
+  - group [ref=f1e86]:
+    - generic "Data table (sampled)" [ref=f1e87]
