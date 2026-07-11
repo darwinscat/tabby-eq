@@ -121,18 +121,28 @@ EqCurveDisplay::~EqCurveDisplay()
 }
 
 //==============================================================================
-float  EqCurveDisplay::freqToX (double f) const noexcept
+// The freq↔px / dB↔px math lives in eqview::PlotMap (src/eqview/PlotMap.h, unit-tested) — these
+// wrappers only feed it the component's live geometry, so every caller keeps its old signature.
+eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
 {
-    const double lo = std::log10 (kFreqMin), hi = std::log10 (kFreqMax);
-    return (float) ((std::log10 (juce::jlimit (kFreqMin, kFreqMax, f)) - lo) / (hi - lo) * (double) getWidth());
+    const eqview::PlotMap pm { .width = (float) getWidth(), .height = (float) getHeight(),
+                               .plotBottom = (float) plotBottomY(),
+                               .freqMin = kFreqMin, .freqMax = kFreqMax, .dbRange = gainRange,
+                               .specTop = kSpecTop, .specBottom = kSpecBottom };
+    // The unit test can't see THIS wiring (it hand-builds maps) — so sanity-pin it here, debug-only:
+    // a scrambled field mapping trips on the first paint instead of silently moving pixels.
+    // plotBottom may legally EXCEED a sub-40px height (plotBottomY floors at 40 — collapse/mid-layout
+    // transients), so that check stands down for tiny heights instead of aborting a legal state.
+    jassert ((pm.plotBottom <= pm.height || pm.height < 40.0f)
+             && pm.freqMin < pm.freqMax && pm.specBottom < pm.specTop && pm.dbRange > 0.0);
+    return pm;
 }
 
-double EqCurveDisplay::xToFreq (float x) const noexcept
-{
-    const double lo = std::log10 (kFreqMin), hi = std::log10 (kFreqMax);
-    const double t = juce::jlimit (0.0, 1.0, (double) x / (double) juce::jmax (1, getWidth()));
-    return std::pow (10.0, lo + t * (hi - lo));
-}
+float  EqCurveDisplay::freqToX (double f) const noexcept { return plotMap().freqToX (f); }
+double EqCurveDisplay::xToFreq (float x)  const noexcept { return plotMap().xToFreq (x); }
+float  EqCurveDisplay::dbToY   (double db) const noexcept { return plotMap().dbToY (db); }
+double EqCurveDisplay::yToDb   (float y)   const noexcept { return plotMap().yToDb (y); }
+float  EqCurveDisplay::specDbToY (double db) const noexcept { return plotMap().specDbToY (db); }
 
 // Bottom of the curve/node plotting area. In Fixed-lane mode it stops above the reserved bottom strip, so
 // nodes (whose Y comes from dbToY) can never fall into the lane; every other mode uses the full height.
@@ -142,23 +152,9 @@ int    EqCurveDisplay::plotBottomY() const noexcept
     // of the window bottom. Below that invisible -gainRange line the curves OVERSHOOT (a deep cut / notch dives
     // on down to the very bottom of the window), the spectrum shows, and in Fixed-lane the edit strip slides.
     // The curve *clip* uses the full window height (see paint), so curves reach the bottom edge, not this line.
+    // Stays PRODUCT-side (not in PlotMap): it depends on the toolbar-placement mode.
     return toolbarPlace == ToolbarPlace::FixedLane ? juce::jmax (40, getHeight() - kLaneH)
                                                    : juce::jmax (40, getHeight() - kBottomAxisH);
-}
-float  EqCurveDisplay::dbToY (double db) const noexcept
-{
-    return (float) ((0.5 - db / (2.0 * gainRange)) * (double) plotBottomY());
-}
-
-double EqCurveDisplay::yToDb (float y) const noexcept
-{
-    return (0.5 - (double) y / (double) juce::jmax (1, plotBottomY())) * (2.0 * gainRange);
-}
-
-float  EqCurveDisplay::specDbToY (double db) const noexcept
-{
-    const double t = juce::jlimit (0.0, 1.0, (kSpecTop - db) / (kSpecTop - kSpecBottom));
-    return (float) (t * (double) getHeight());
 }
 
 //==============================================================================
@@ -673,6 +669,7 @@ void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOu
     constexpr int nb = teq::kSpectrumFftSize / 2 + 1;
     const double binPerHz = (double) teq::kSpectrumFftSize / fsCache;
     const int N = juce::jlimit (256, 900, (int) w);
+    const auto pm = plotMap();   // hoisted: one geometry snapshot for the whole column loop
 
     auto column = [&] (const auto& raw, double f, int loBin, int hiBin) -> float
     {
@@ -693,11 +690,11 @@ void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOu
     for (int i = 0; i <= N; ++i)
     {
         const float  x = (float) i / (float) N * w;
-        const double f = xToFreq (x);
+        const double f = pm.xToFreq (x);
         const int    curBin = juce::jlimit (0, nb - 1, (int) std::floor (f * binPerHz));
         const float  tilt = (float) (kTiltDbPerOct * std::log2 (f / kTiltPivotHz));   // pink-noise comp
-        const float  yS = specDbToY (column (specDb,   f, prevBin, curBin) + tilt);
-        const float  yP = specDbToY (column (specPeak, f, prevBin, curBin) + tilt);
+        const float  yS = pm.specDbToY (column (specDb,   f, prevBin, curBin) + tilt);
+        const float  yP = pm.specDbToY (column (specPeak, f, prevBin, curBin) + tilt);
         if (i == 0) { fillOut.startNewSubPath (0.0f, h); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
         else          peakOut.lineTo (x, yP);
         fillOut.lineTo (x, yS);
@@ -726,8 +723,9 @@ void EqCurveDisplay::timerCallback()
 void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc, const juce::String& label) const
 {
     const float  w = (float) getWidth(), h = (float) getHeight();
+    const auto   pm = plotMap();   // hoisted: one geometry snapshot for the whole overlay
     const double f0 = juce::jlimit (kFreqMin, kFreqMax, f0c);
-    const float  xc = freqToX (f0);
+    const float  xc = pm.freqToX (f0);
     const auto   orng = tabby::palette::orange();
 
     if (audVisual == AudVisual::Bell)
@@ -736,14 +734,14 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
         bp.on = true; bp.type = teq::FilterType::Bell;
         auto& st = bp.lane (teq::Lane::Stereo);
         st.freq = f0; st.Q = juce::jmax (0.5, qc); st.gainDb = 20.0;         // a tall narrow bell = what you hear
-        const float y0 = dbToY (0.0);
+        const float y0 = pm.dbToY (0.0);
         juce::Path line, fill; bool started = false;
         for (float x = 0.0f; x <= w; x += 3.0f)
         {
             const double dfs = designFs();
-            const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (xToFreq (x), 0.499 * dfs) / dfs;
+            const double wd = 2.0 * juce::MathConstants<double>::pi * juce::jmin (pm.xToFreq (x), 0.499 * dfs) / dfs;
             const double db = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (teq::bandResponse (bp, dfs, wd))));
-            const float  y  = dbToY (db);
+            const float  y  = pm.dbToY (db);
             if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, y0); fill.lineTo (x, y); started = true; }
             else           { line.lineTo (x, y); fill.lineTo (x, y); }
         }
@@ -755,8 +753,8 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
     {
         const double inv = 1.0 / (2.0 * juce::jmax (0.5, qc));               // -3 dB band-pass edges (octave-ish)
         const double k   = std::sqrt (1.0 + inv * inv);
-        const float  xLo = freqToX (f0 * (k - inv));
-        const float  xHi = freqToX (f0 * (k + inv));
+        const float  xLo = pm.freqToX (f0 * (k - inv));
+        const float  xHi = pm.freqToX (f0 * (k + inv));
         g.setColour (juce::Colours::black.withAlpha (0.5f));
         g.fillRect (0.0f, 0.0f, juce::jmax (0.0f, xLo), h);
         g.fillRect (xHi, 0.0f, juce::jmax (0.0f, w - xHi), h);
@@ -779,6 +777,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 {
     const auto w = (float) getWidth(), h = (float) getHeight();
     refreshDesigns();
+    const auto pm = plotMap();             // hoisted: one geometry snapshot for the whole paint pass
     const int solo = proc.getSoloBand();   // >=0: spotlight that band's curve, dim the composite
 
     // premium radial vignette: centre lifted a touch, corners deepened
@@ -794,7 +793,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     g.setFont (11.0f);
     for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
     {
-        const float x = freqToX (f);
+        const float x = pm.freqToX (f);
         g.setColour (tabby::palette::grid());
         g.drawVerticalLine ((int) x, 0.0f, h);
         g.setColour (tabby::palette::axisText());
@@ -807,7 +806,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     {
         if (std::abs (std::abs (db) - gainRange) < 0.01) continue;   // skip the outermost ticks — they sit ON the top/bottom
                                                                      // edge and read as a frame the curves "bump into"
-        const float y = dbToY (db);
+        const float y = pm.dbToY (db);
         const bool zero = std::abs (db) < 0.01;
         if (zero)
         {
@@ -852,12 +851,12 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
     for (int b = 0; b < tabby::kNumBands; ++b) if (paramCache[b].on)
         for (int L = 0; L < teq::kNumLanes; ++L)
-            if (laneOn (b, L)) curveXs[nCurveX++] = freqToX (paramCache[(size_t) b].lanes[(size_t) L].freq);
+            if (laneOn (b, L)) curveXs[nCurveX++] = pm.freqToX (paramCache[(size_t) b].lanes[(size_t) L].freq);
     std::sort (curveXs, curveXs + nCurveX);
     // Below the graph floor, let the curve DIVE off the bottom axis (it's clipped to the plot area, below)
     // instead of clamping it flat ONTO the bottom line — a deep cut / notch / LP slope should read as a
     // dive off the bottom, not a smear of every curve along the bottom edge.
-    auto cy = [&] (double db) { return dbToY (juce::jmax (-2.5 * gainRange, db)); };
+    auto cy = [&] (double db) { return pm.dbToY (juce::jmax (-2.5 * gainRange, db)); };
 
     // --- per-band response curves (colour line + subtle fill); soloing -> only that band; the
     //     selected band's own curve is lifted ------------------------------------------------------
@@ -865,7 +864,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     {
         juce::Graphics::ScopedSaveState bandClip (g);
         g.reduceClipRegion (0, 0, (int) w, getHeight());   // curves dive to the WINDOW bottom, below the invisible -gainRange line
-        const float y0 = dbToY (0.0);
+        const float y0 = pm.dbToY (0.0);
         auto drawLane = [&] (int b, int lane)
         {
             const auto& lp = paramCache[b].lanes[(size_t) lane];
@@ -875,7 +874,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             for (int i = 0; i < nCurveX; ++i)
             {
                 const float x = curveXs[i];
-                const float y = cy (bandDb (b, xToFreq (x), lane));
+                const float y = cy (bandDb (b, pm.xToFreq (x), lane));
                 if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
                 bf.lineTo (x, y);
             }
@@ -896,13 +895,13 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     {
         juce::Graphics::ScopedSaveState compositeClip (g);
         g.reduceClipRegion (0, 0, (int) w, getHeight());   // composite dives to the WINDOW bottom, below the invisible -gainRange line
-        const float y0 = dbToY (0.0);
+        const float y0 = pm.dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
         for (int i = 0; i < nCurveX; ++i)
         {
             const float x = curveXs[i];
-            const float y = cy (compositeDbAxis (xToFreq (x), teq::Axis::Mid));   // hero = the Mid axis (== today's main)
+            const float y = cy (compositeDbAxis (pm.xToFreq (x), teq::Axis::Mid));   // hero = the Mid axis (== today's main)
             if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
             fill.lineTo (x, y);
         }
@@ -955,14 +954,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             for (int i = 0; i < nCurveX; ++i)
             {
                 const float x = curveXs[i];
-                const float y = cy (compositeDbAxis (xToFreq (x), ax));
+                const float y = cy (compositeDbAxis (pm.xToFreq (x), ax));
                 if (! st) { aline.startNewSubPath (x, y); st = true; } else aline.lineTo (x, y);
             }
             const auto col = tabby::palette::lane ((int) axl);
             g.setColour (col.withAlpha (dim ? 0.35f : 0.80f));
             g.strokePath (aline, juce::PathStrokeType (1.4f));
 
-            const float labY = cy (compositeDbAxis (xToFreq (w - 10.0f), ax));   // subtle right-edge label
+            const float labY = cy (compositeDbAxis (pm.xToFreq (w - 10.0f), ax));   // subtle right-edge label
             g.setFont (juce::Font (juce::FontOptions (10.0f).withStyle ("Bold")));
             g.setColour (col.withAlpha (dim ? 0.55f : 0.95f));
             g.drawText (juce::String (laneKeyStr ((int) axl)).toUpperCase(),
@@ -1107,7 +1106,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // fogs the top sliver (the curve dissolves right at the edge); at low rates it fogs most of the top.
     if (fsCache > 0.0)
     {
-        const float xNyq = freqToX (0.499 * fsCache);
+        const float xNyq = pm.freqToX (0.499 * fsCache);
         if (xNyq < w - 1.0f)
         {
             const auto fog = tabby::palette::bg().darker (0.35f);

@@ -360,6 +360,16 @@ target_link_libraries(TabbyEQ_UpdateCompareTest PRIVATE felitronics::appkit)   #
 add_test(NAME tabbyeq_update_compare COMMAND TabbyEQ_UpdateCompareTest)
 
 # ----------------------------------------------------------------------------
+# JUCE-free unit for the eqview PlotMap (src/eqview/PlotMap.h) — the single home of the plot's
+# freq<->px / dB<->px math (step 0 of the eqview layering; the display's coordinate methods are
+# thin wrappers over it). Pins axis anchors, roundtrips, clamping and the deliberate below-range
+# curve overshoot, so the layer split can never silently move a pixel. Same core-tests ctest tier.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_PlotMapTest tests/plot_map.cpp)
+target_include_directories(TabbyEQ_PlotMapTest PRIVATE src)   # eqview/PlotMap.h
+add_test(NAME tabbyeq_plot_map COMMAND TabbyEQ_PlotMapTest)
+
+# ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
 # a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
 # literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.
