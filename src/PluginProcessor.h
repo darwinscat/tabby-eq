@@ -132,6 +132,10 @@ public:
     // The UI's active lane for a band (0..4 = teq::Lane order). Drives the solo band-pass frequency and is
     // persisted as the per-band `activeLane` ValueTree property. Message thread.
     void setBandActiveLane (int band, int lane) noexcept;
+    int  getBandActiveLane (int band) const noexcept   // the processor-side mirror (what solo actually uses)
+    {
+        return band >= 0 && band < tabby::kNumBands ? activeLaneAtom[(size_t) band].load (std::memory_order_relaxed) : -1;
+    }
 
     // Drag-audition: listen to a narrow band-pass at an arbitrary frequency, independent of the band
     // list (so it works even while placing a not-yet-created band). RT-safe (atomics only).
@@ -184,7 +188,10 @@ public:
 
     // "Modified since you dialed it in" marker for the A/B/C/D buttons: has this register
     // accumulated edits (its own undo history is non-empty)?
-    bool snapshotEdited (int i) const noexcept { return history.registerEdited (i); }
+    bool snapshotEdited (int i) const noexcept
+    {
+        return juce::isPositiveAndBelow (i, kNumSnapshots) && history.registerEdited (i);
+    }
 
     // A register "has content" (a valid copy SOURCE) if it is the active/live one or holds a stored
     // snapshot. Drives the copy menu (only content-bearing registers are offered as sources).
@@ -218,7 +225,7 @@ public:
             history.applyEdit (toReg, t, "Paste");
     }
 
-    // Undo / redo. The editor pumps undoTick() from its 30 Hz timer (settleTicks is a tick COUNT,
+    // Undo / redo. The editor pumps undoTick() from its 10 Hz timer (settleTicks is a tick COUNT,
     // not wall-clock, so one steady pump). Undo/redo act on the active register only.
     void undoTick() { history.tick(); }
     bool undo()     { return history.undo(); }
@@ -232,8 +239,12 @@ public:
 
     // Gesture brackets: everything between begin/end is ONE labelled undo step — the tool for a
     // node drag (grab = begin, release = end). Nestable; see CompareHistory's gesture contract.
-    void beginHistoryGesture (const juce::String& label) { history.beginGesture (label); }
-    void endHistoryGesture()                             { history.endGesture(); }
+    // Both drain the link-mirror FIFO first, so pending mirror writes land on the correct side of
+    // the step boundary: pre-gesture mirrors fold into the flushed pre-burst, and the drag's last
+    // mirrors fold into the gesture step instead of leaking out as a separate settle burst ~33 ms
+    // after mouse-up (the drain timer would otherwise race endGesture).
+    void beginHistoryGesture (const juce::String& label) { drainLinkFifo(); history.beginGesture (label); }
+    void endHistoryGesture()                             { drainLinkFifo(); history.endGesture(); }
 
     // Programmatic bulk-write gate (preset apply / reset / search->treat): writes apply but record
     // no history. RAII: felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());

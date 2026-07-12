@@ -196,7 +196,49 @@ int main()
         p.pasteState (0, clip);                               // paste onto the ACTIVE register = one undoable step
         check (std::abs (rv (p, probeId()) - 7777.0f) < 1e-1f, "5: paste applies the clipboard content");
         check (p.undoDepth() == depthBefore + 1 && p.peekUndoLabel() == "Paste", "5: paste is one labelled step");
+
+        // Aliasing pin: the live tree must be a DEEP COPY of the pasted content — a later live edit
+        // must never mutate the caller's clipboard tree (this fails if applyLiveState drops createCopy).
+        setReal (p, probeId(), 9000.0f);
+        bool clipIntact = false;
+        for (int i = 0; i < clip.getNumChildren(); ++i)
+        {
+            const auto ch = clip.getChild (i);
+            if (ch.getProperty ("id").toString() == probeId())
+                clipIntact = std::abs ((double) ch.getProperty ("value") - 7777.0) < 1e-3;
+        }
+        check (clipIntact, "5: post-paste live edits never mutate the clipboard tree (deep copy pinned)");
+
+        check (p.undo() && std::abs (rv (p, probeId()) - 7777.0f) < 1e-1f, "5: undo flushes the post-paste burst first");
         check (p.undo() && std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "5: paste is undoable");
+    }
+
+    // ====== 5b. Foreign-but-PARAMS-typed paste: degrades to DEFAULTS, documented ======
+    // Empirically verified (JUCE 8.0.14): replaceState appends a fresh valueless child for every
+    // param absent from the pasted tree, and the valueTreeChildAdded listener then setNewState()s
+    // it — no "value" property -> the param RESETS TO ITS DEFAULT (it does NOT keep its current
+    // value; static reads of updateParameterConnectionsToChildTrees miss the child-added listener).
+    // So a sparse/foreign PARAMS tree = present-params-applied + absent-params-defaulted. No crash,
+    // one undoable step, fully undoable.
+    {
+        TabbyEqAudioProcessor p;
+        const float def     = rv (p, probeId());
+        const float defGain = rv (p, tabby::laneParamId (0, 0, "gain"));
+        setReal (p, probeId(), 2000.0f); settle (p);
+
+        juce::ValueTree sparse ("PARAMS");                     // only ONE param child, no probe child
+        juce::ValueTree n ("PARAM");
+        n.setProperty ("id", tabby::laneParamId (0, 0, "gain"), nullptr);
+        n.setProperty ("value", -6.0, nullptr);
+        sparse.addChild (n, -1, nullptr);
+
+        p.pasteState (0, sparse);
+        check (std::abs (rv (p, probeId()) - def) < 1e-3f, "5b: absent params reset to their defaults");
+        check (std::abs (rv (p, tabby::laneParamId (0, 0, "gain")) - (-6.0f)) < 1e-3f, "5b: present params apply");
+        check (p.undo()
+                   && std::abs (rv (p, tabby::laneParamId (0, 0, "gain")) - defGain) < 1e-3f
+                   && std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f,
+               "5b: the sparse paste is ONE undoable step (both the applied and the defaulted params revert)");
     }
 
     // ====== 6. v4 session round-trip ======
@@ -296,6 +338,19 @@ int main()
 
         check (std::abs (rv (p, probeId()) - 4000.0f) < 1e-3f, "10: a corrupt envelope leaves the live state untouched");
         check (p.canUndo(), "10: a corrupt envelope leaves the history untouched");
+        check (p.compareHistory().hasUnsavedChanges(), "10: a REJECTED load must not falsely clean a dirty session");
+
+        // A hostile blob can pass the ENVELOPE validation with a garbage <Live> payload — the
+        // consumer's applyLiveState must refuse to install a foreign tree as the live state.
+        juce::ValueTree hostile ("Workspace");
+        hostile.setProperty ("schema", 1, nullptr);
+        hostile.setProperty ("count", 4, nullptr);
+        hostile.setProperty ("active", 0, nullptr);
+        juce::ValueTree live ("Live");
+        live.appendChild (juce::ValueTree ("Garbage"), nullptr);
+        hostile.appendChild (live, nullptr);
+        loadState (p, treeToBinary (hostile));
+        check (std::abs (rv (p, probeId()) - 4000.0f) < 1e-3f, "10: a garbage <Live> payload never becomes the live state");
     }
 
     // ====== 11. No phantom steps: idle ticks after an apply never create history ======
@@ -317,9 +372,23 @@ int main()
         p.switchToSnapshot (0);
         check ((int) p.apvts.state.getProperty (tabby::bandId (0, "activeLane"), -1) == 3,
                "12: register A restores its own active-lane property");
+        check (p.getBandActiveLane (0) == 3, "12: the processor-side ATOM follows the property (drives solo)");
         p.switchToSnapshot (1);
         check ((int) p.apvts.state.getProperty (tabby::bandId (0, "activeLane"), -1) == 4,
                "12: register B restores its own active-lane property");
+        check (p.getBandActiveLane (0) == 4, "12: the atom follows across the switch back");
+    }
+
+    // ====== 12b. applyLiveState re-syncs the analyzer-domain mirror (specDomain property -> atomic) ======
+    {
+        TabbyEqAudioProcessor p;
+        p.apvts.state.setProperty ("specDomain", 2, nullptr);   // Side — as the editor's view menu writes it
+        p.setSpectrumDomain (2);
+        p.switchToSnapshot (1);
+        p.apvts.state.setProperty ("specDomain", 1, nullptr);   // Mid on register B
+        p.setSpectrumDomain (1);
+        p.switchToSnapshot (0);
+        check (p.getSpectrumDomain() == 2, "12b: register A restores its analyzer domain (atomic follows the property)");
     }
 
     // ====== 13. historyRevision bumps on every history mutation the UI must reflect ======
@@ -334,6 +403,71 @@ int main()
         check (r2 != r1, "13: undo bumps the revision");
         p.switchToSnapshot (2);
         check (p.historyRevision() != r2, "13: a register switch bumps the revision");
+    }
+
+    // ====== 14. Host program-change MID-GESTURE (release-mode recovery; the engine jasserts in
+    // debug — loading inside an open scope is documented misuse, but a host can still do it) ======
+   #if ! JUCE_DEBUG
+    {
+        TabbyEqAudioProcessor p;
+        setReal (p, probeId(), 2000.0f); settle (p);
+        const auto blob = saveState (p);                       // v4 blob: probe = 2000
+
+        setReal (p, probeId(), 3000.0f); settle (p);
+        p.beginHistoryGesture ("Drag");
+        setReal (p, probeId(), 3500.0f);                       // mid-drag...
+        loadState (p, blob);                                   // ...host switches the program
+        check (std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "14: the loaded state wins over the open gesture");
+        p.endHistoryGesture();                                 // the editor's mouse-up still arrives — must be a safe no-op
+        check (! p.canUndo() && ! p.canRedo(), "14: a mid-gesture load is still a fresh history boundary");
+        for (int i = 0; i < 20; ++i) p.undoTick();
+        check (p.undoDepth() == 0, "14: the discarded gesture leaves no phantom step behind");
+    }
+   #endif
+
+    // ====== 15. Newer-schema envelope: best-effort load (forward compat) ======
+    {
+        TabbyEqAudioProcessor donor;
+        setReal (donor, probeId(), 3210.0f); settle (donor);
+        auto ws = juce::ValueTree::fromXml (*parseState (saveState (donor)));
+        ws.setProperty ("schema", 2, nullptr);                 // a future build's envelope
+
+        TabbyEqAudioProcessor p;
+        loadState (p, treeToBinary (ws));
+        check (std::abs (rv (p, probeId()) - 3210.0f) < 1e-3f, "15: a newer-schema envelope still loads best-effort");
+    }
+
+    // ====== 16. Register-count mismatch: extras dropped, callback fires (skip-not-clamp) ======
+    {
+        TabbyEqAudioProcessor donor;
+        setReal (donor, probeId(), 2000.0f); settle (donor);
+        auto ws = juce::ValueTree::fromXml (*parseState (saveState (donor)));
+        ws.setProperty ("count", 6, nullptr);                  // a 6-register build's session
+        auto snaps = ws.getChildWithName ("Snaps");
+        juce::ValueTree s5 ("Snap");
+        s5.setProperty ("i", 5, nullptr);
+        s5.appendChild (donor.apvts.copyState(), nullptr);     // a dialed-in out-of-range register
+        snaps.appendChild (s5, nullptr);
+
+        TabbyEqAudioProcessor p;
+        int savedC = 0, buildC = 0;
+        p.compareHistory().onRegisterCountMismatch = [&] (int s, int b) { savedC = s; buildC = b; };
+        loadState (p, treeToBinary (ws));
+        check (savedC == 6 && buildC == 4, "16: onRegisterCountMismatch fires with (saved, build)");
+        check (std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "16: the in-range workspace still loads");
+    }
+
+    // ====== 17. Redo stack survives a register switch round-trip ======
+    {
+        TabbyEqAudioProcessor p;
+        const float def = rv (p, probeId());
+        setReal (p, probeId(), 2000.0f); settle (p);
+        p.undo();
+        check (p.canRedo() && std::abs (rv (p, probeId()) - def) < 1e-3f, "17: redo armed after undo");
+        p.switchToSnapshot (1);
+        p.switchToSnapshot (0);
+        check (p.canRedo(), "17: A's redo stack survives the switch round-trip");
+        check (p.redo() && std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "17: redo still applies after the round-trip");
     }
 
     if (failures == 0)

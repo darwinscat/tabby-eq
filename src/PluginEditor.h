@@ -26,9 +26,11 @@ public:
     void resized() override;
 
 private:
-    // 30 Hz editor pump: drives the undo settle timer (CompareHistory counts ticks, not wall-clock).
-    // History only settles while an editor is open — an edit made with the UI closed stays one
-    // pending burst and commits on the next open (or is flushed by the next history operation).
+    // 10 Hz editor pump: drives the undo settle timer (CompareHistory counts ticks, not wall-clock;
+    // every tick deep-copies the 820-param tree, so the pump is deliberately slow — settleTicks is
+    // sized to keep the same ~0.4 s settle window). History only settles while an editor is open —
+    // an edit made with the UI closed stays one pending burst and commits on the next open (or is
+    // flushed by the next history operation).
     void timerCallback() override { proc.undoTick(); }
 
     void showViewMenu();

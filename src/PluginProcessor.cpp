@@ -195,10 +195,14 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
       // apvts (declaration order) — the engine's capture-stability assert captures at construction.
       // copyState() (not state.createCopy()!) is load-bearing: it flushes the param->tree sync under
       // its lock, so a capture is always converged — endGesture at mouse-up misses no drag writes.
+      // Config: 4 registers; maxUndo 32 (a tabby snapshot is an 820-param tree — hundreds of KB in
+      // memory; 32 halves orbitcab's worst case with no UX loss); settleTicks 4 at the editor's
+      // 10 Hz pump = the same ~0.4 s settle window as orbitcab's 12 @ 30 Hz, at a third of the
+      // full-tree capture cost per open-editor second.
       history (felitronics::appkit::CompareHistory::Mode::PerRegister,
                [this] { return apvts.copyState(); },
                [this] (const juce::ValueTree& t) { applyLiveState (t); },
-               felitronics::appkit::CompareHistory::Config { kNumSnapshots, 64, 12 })
+               felitronics::appkit::CompareHistory::Config { kNumSnapshots, 32, 4 })
 {
     // Every history mutation (commit / undo / redo / switch / copy / clear / load) bumps an atomic
     // revision the editor polls (historyRevision()) to refresh its undo/redo + A/B/C/D affordances.
@@ -602,7 +606,11 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
 // engine-stored snapshot (a later live edit would silently mutate the stored baseline — contract 1).
 void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
 {
-    if (! t.isValid())
+    // Only a TabbyEQ state tree may become the live state. A hostile v4 blob can carry a valid
+    // <Workspace> envelope with a garbage <Live> payload — the engine validates the ENVELOPE, the
+    // payload type is the consumer's to check (rejecting here degrades to "registers load, live
+    // keeps the prior sound"; the engine reseeds its baseline from whatever we kept — tolerated).
+    if (! t.hasType (apvts.state.getType()))
         return;
 
     // Suppress link-mirror enqueues for the apply's own param writes; drop any that slip through afterwards.
@@ -610,11 +618,18 @@ void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
     apvts.replaceState (t.createCopy());
     tlsMirrorWrite = false;
 
-    { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop any enqueues that slipped through the apply
-    linkFifo.overflowed.store (false, std::memory_order_relaxed);
+    // Clear the flags BEFORE draining: a racing audio-thread push then re-arms linkDirty and its
+    // event survives for the 30 Hz drain (correct — it is post-apply automation). The other order
+    // leaves a pushed event stranded behind a cleared flag, to be replayed STALE after a later
+    // edit re-arms the drain. Worst case now is one harmless spurious drain wake-up.
     linkDirty.store (false, std::memory_order_relaxed);
+    linkFifo.overflowed.store (false, std::memory_order_relaxed);
+    { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop enqueues that slipped through the apply itself
+
+    // Re-sync every processor-side mirror of a state-tree property (the snapshot is authoritative).
     for (int i = 0; i < tabby::kNumBands; ++i)
         activeLaneAtom[(size_t) i].store ((int) apvts.state.getProperty (tabby::bandId (i, "activeLane"), -1), std::memory_order_relaxed);
+    spectrumDomain.store ((int) apvts.state.getProperty ("specDomain", 0), std::memory_order_relaxed);   // analyzer Stereo/Mid/Side (see PluginEditor)
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -641,9 +656,11 @@ void TabbyEqAudioProcessor::setStateInformation (const void* data, int sizeInByt
         // envelope (nothing applied, the prior state is kept) or a newer schema (best-effort load
         // still applied). Neither is a programming error on a host-supplied blob. The engine calls
         // applyLiveState() for the live payload, which does the param/link/lane resync.
+        // NO markSaved() here: fromTree() re-baselines the saved marker itself on every load it
+        // applies — an unconditional markSaved() would falsely CLEAN a dirty session whose load
+        // was rejected (the user would then not be prompted to save real edits).
         if (! history.fromTree (juce::ValueTree::fromXml (*xml)))
             DBG ("TabbyEQ: <Workspace> envelope rejected (corrupt) or newer schema (best-effort)");
-        history.markSaved();   // a freshly loaded session is clean
         return;
     }
 
