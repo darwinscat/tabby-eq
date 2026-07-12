@@ -42,8 +42,8 @@ namespace
         if (auto* prm = p.apvts.getParameter (id)) prm->setValueNotifyingHost (prm->convertTo0to1 (real));
     }
 
-    // Enough ticks for a stable burst to commit (settleTicks = 12: one tick notices the change,
-    // twelve more see it stable), with headroom.
+    // Enough ticks for a stable burst to commit (settleTicks = 4: one tick notices the change,
+    // four more see it stable), with generous headroom.
     void settle (TabbyEqAudioProcessor& p) { for (int i = 0; i < 20; ++i) p.undoTick(); }
 
     juce::MemoryBlock saveState (TabbyEqAudioProcessor& p)
@@ -72,6 +72,8 @@ namespace
 
     // The ST-lane freq of band 0 — the workhorse probe parameter.
     juce::String probeId() { return tabby::laneParamId (0, 0, "freq"); }
+
+    constexpr int kNumSnapshotsProbe = 4;   // mirrors TabbyEqAudioProcessor::kNumSnapshots for OOB probes
 }
 
 int main()
@@ -145,6 +147,8 @@ int main()
         setReal (p, probeId(), 2000.0f); settle (p);
         check (p.snapshotEdited (0) && ! p.snapshotEdited (1), "4: edited marker set on A only");
 
+        check (! p.snapshotEdited (-1) && ! p.snapshotEdited (kNumSnapshotsProbe), "4: an out-of-range register index reads as not-edited (no OOB)");
+
         p.switchToSnapshot (1);
         check (p.getActiveSnapshot() == 1, "4: switch lands on B");
         check (std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "4: a never-used register keeps the live sound as its seed");
@@ -199,7 +203,11 @@ int main()
 
         // Aliasing pin: the live tree must be a DEEP COPY of the pasted content — a later live edit
         // must never mutate the caller's clipboard tree (this fails if applyLiveState drops createCopy).
+        // The copyState() below is load-bearing: it FLUSHES the param write into the (potentially
+        // aliased) live tree — without it the write sits in the parameter adapter and the pin can
+        // never fail in this loop-less harness (the APVTS flush timer never fires here).
         setReal (p, probeId(), 9000.0f);
+        (void) p.apvts.copyState();
         bool clipIntact = false;
         for (int i = 0; i < clip.getNumChildren(); ++i)
         {
@@ -455,6 +463,32 @@ int main()
         loadState (p, treeToBinary (ws));
         check (savedC == 6 && buildC == 4, "16: onRegisterCountMismatch fires with (saved, build)");
         check (std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "16: the in-range workspace still loads");
+    }
+
+    // ====== 16b. Gesture brackets drain the link-mirror FIFO onto the correct side of the step ======
+    // The processor's 30 Hz drain timer never fires in this loop-less harness, so any mirror that
+    // lands is proof the BRACKET drained it. Regression: remove drainLinkFifo() from the brackets
+    // and both mirror checks below fail (the linked lane stays put).
+    {
+        TabbyEqAudioProcessor p;
+        const juce::String linkedId = tabby::laneParamId (0, 1, "freq");   // the L lane mirrors ST when linked
+        p.apvts.state.setProperty (tabby::bandId (0, "linkFq"), true, nullptr);
+        setReal (p, tabby::laneParamId (0, 1, "on"), 1.0f);                // enable the mirror target lane
+        settle (p);
+
+        setReal (p, probeId(), 2000.0f);                                    // pre-gesture tweak: queues a mirror event
+        p.beginHistoryGesture ("Drag");                                     // must drain: mirror joins the flushed pre-burst
+        check (std::abs (rv (p, linkedId) - 2000.0f) < 1e-3f, "16b: a pending mirror lands BEFORE the gesture baseline");
+        const int depthInGesture = p.undoDepth();
+
+        setReal (p, probeId(), 2500.0f);                                    // mid-drag: queues another mirror event
+        p.endHistoryGesture();                                              // must drain: mirror folds INTO the gesture step
+        check (std::abs (rv (p, linkedId) - 2500.0f) < 1e-3f, "16b: the drag's last mirror folds into the gesture step");
+        check (p.undoDepth() == depthInGesture + 1, "16b: still exactly one gesture step");
+
+        check (p.undo(), "16b: the gesture step undoes");
+        check (std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f && std::abs (rv (p, linkedId) - 2000.0f) < 1e-3f,
+               "16b: undo reverts the drag INCLUDING its mirror (one step, both lanes)");
     }
 
     // ====== 17. Redo stack survives a register switch round-trip ======

@@ -618,12 +618,15 @@ void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
     apvts.replaceState (t.createCopy());
     tlsMirrorWrite = false;
 
-    // Clear the flags BEFORE draining: a racing audio-thread push then re-arms linkDirty and its
-    // event survives for the 30 Hz drain (correct — it is post-apply automation). The other order
-    // leaves a pushed event stranded behind a cleared flag, to be replayed STALE after a later
-    // edit re-arms the drain. Worst case now is one harmless spurious drain wake-up.
-    linkDirty.store (false, std::memory_order_relaxed);
-    linkFifo.overflowed.store (false, std::memory_order_relaxed);
+    // Clear the flags BEFORE draining (acquire-exchange for parity with drainLinkFifo on weak
+    // memory): an event racing this window is either popped here (dropped — it references the
+    // PRE-apply state, same by-design semantics as the load path always had) or lands after the
+    // pop with its producer having re-armed linkDirty (survives for the 30 Hz drain — provably so:
+    // surviving the pop implies the push, and thus the later flag store, ordered after our clear).
+    // The reverse order stranded an event behind a cleared flag for a later STALE replay. Worst
+    // case now is one harmless spurious drain wake-up.
+    (void) linkDirty.exchange (false, std::memory_order_acquire);
+    (void) linkFifo.overflowed.exchange (false, std::memory_order_acquire);
     { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop enqueues that slipped through the apply itself
 
     // Re-sync every processor-side mirror of a state-tree property (the snapshot is authoritative).
