@@ -152,6 +152,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     setResizable (true, true);
     setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);
+
+    startTimerHz (30);   // undo settle pump — see timerCallback()
 }
 
 TabbyEqEditor::~TabbyEqEditor() = default;

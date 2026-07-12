@@ -189,8 +189,30 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", tabby::createParameterLayout()),
-      updateCheckerInstance (tabby::currentDescribe(), *appPreferencesInstance)   // compares kDescribe → latest release (prefs shared process-wide)
+      updateCheckerInstance (tabby::currentDescribe(), *appPreferencesInstance),   // compares kDescribe → latest release (prefs shared process-wide)
+      // The shared appkit undo/redo + A/B/C/D engine (PerRegister mode). The opaque seam is the whole
+      // APVTS state tree: captureLive()->copyState and applyLive()->applyLiveState. Initialized after
+      // apvts (declaration order) — the engine's capture-stability assert captures at construction.
+      // copyState() (not state.createCopy()!) is load-bearing: it flushes the param->tree sync under
+      // its lock, so a capture is always converged — endGesture at mouse-up misses no drag writes.
+      history (felitronics::appkit::CompareHistory::Mode::PerRegister,
+               [this] { return apvts.copyState(); },
+               [this] (const juce::ValueTree& t) { applyLiveState (t); },
+               felitronics::appkit::CompareHistory::Config { kNumSnapshots, 64, 12 })
 {
+    // Every history mutation (commit / undo / redo / switch / copy / clear / load) bumps an atomic
+    // revision the editor polls (historyRevision()) to refresh its undo/redo + A/B/C/D affordances.
+    history.onHistoryChanged = [this] { historyRev.fetch_add (1, std::memory_order_relaxed); };
+
+    // A foreign session carrying a different register count is diagnostic-only: the engine already
+    // skipped the out-of-range snapshots (skip-not-clamp), and this build's count is fixed.
+    history.onRegisterCountMismatch = [] (int savedCount, int buildCount)
+    {
+        juce::ignoreUnused (savedCount, buildCount);
+        DBG ("TabbyEQ: session carries " << savedCount << " compare registers, build has "
+             << buildCount << " — extras dropped");
+    };
+
     // Wire the per-band / per-lane atomic parameter pointers, and build the link-mirror index maps.
     const int numParams = getParameters().size();
     linkField.assign   ((size_t) numParams, (int8_t) -1);
@@ -574,34 +596,68 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
 }
 
 //==============================================================================
+// The CompareHistory applyLive seam AND the shared load routine: replace the APVTS state from a
+// snapshot, then re-sync everything derived from it. Runs on every apply (undo / redo / register
+// switch / copy / session load). Deep-copies the incoming tree so the live tree never aliases an
+// engine-stored snapshot (a later live edit would silently mutate the stored baseline — contract 1).
+void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
+{
+    if (! t.isValid())
+        return;
+
+    // Suppress link-mirror enqueues for the apply's own param writes; drop any that slip through afterwards.
+    tlsMirrorWrite = true;
+    apvts.replaceState (t.createCopy());
+    tlsMirrorWrite = false;
+
+    { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop any enqueues that slipped through the apply
+    linkFifo.overflowed.store (false, std::memory_order_relaxed);
+    linkDirty.store (false, std::memory_order_relaxed);
+    for (int i = 0; i < tabby::kNumBands; ++i)
+        activeLaneAtom[(size_t) i].store ((int) apvts.state.getProperty (tabby::bandId (i, "activeLane"), -1), std::memory_order_relaxed);
+}
+
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    auto state = apvts.copyState();
-    state.setProperty ("stateVersion", kStateVersion, nullptr);
-    if (auto xml = state.createXml())
+    // v4: the session root is the CompareHistory <Workspace> envelope (live + A/B/C/D registers +
+    // active index); the inner state trees keep the v3 lane format, so stateVersion rides on the
+    // envelope root. toTree() is pure capture — a host autosave poll must never mutate history
+    // (no flush here: an unsettled edit burst simply saves as part of the current live).
+    auto ws = history.toTree();
+    ws.setProperty ("stateVersion", kStateVersion, nullptr);
+    if (auto xml = ws.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
 void TabbyEqAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
+    if (xml == nullptr)
+        return;
 
+    if (xml->hasTagName ("Workspace"))
+    {
+        // v4+: the CompareHistory envelope. The engine validates BEFORE mutating: false = corrupt
+        // envelope (nothing applied, the prior state is kept) or a newer schema (best-effort load
+        // still applied). Neither is a programming error on a host-supplied blob. The engine calls
+        // applyLiveState() for the live payload, which does the param/link/lane resync.
+        if (! history.fromTree (juce::ValueTree::fromXml (*xml)))
+            DBG ("TabbyEQ: <Workspace> envelope rejected (corrupt) or newer schema (best-effort)");
+        history.markSaved();   // a freshly loaded session is clean
+        return;
+    }
+
+    if (! xml->hasTagName (apvts.state.getType()))
+        return;
+
+    // Legacy v2/v3 session: a flat state tree with no compare workspace. It becomes the live state
+    // of register A with B/C/D empty and a fresh, clean history — reset() clears registers/history
+    // but leaves live untouched, so apply the (migrated) state first.
     juce::ValueTree incoming = juce::ValueTree::fromXml (*xml);
     const int ver = (int) incoming.getProperty ("stateVersion", 2);   // a v2 XML without stateVersion counts as v2
-    const bool legacy = ver <= 2;
-
-    // Suppress link-mirror enqueues for the load's own param writes; drop any that slip through afterwards.
-    tlsMirrorWrite = true;
-    if (legacy) apvts.replaceState (migrateV2toV3 (incoming, apvts.state.getType()));
-    else        apvts.replaceState (incoming);
-    tlsMirrorWrite = false;
-
-    { LinkEvent e; while (linkFifo.pop (e)) {} }   // drop any enqueues that slipped through the load
-    linkFifo.overflowed.store (false, std::memory_order_relaxed);
-    linkDirty.store (false, std::memory_order_relaxed);
-    for (int i = 0; i < tabby::kNumBands; ++i)
-        activeLaneAtom[(size_t) i].store ((int) apvts.state.getProperty (tabby::bandId (i, "activeLane"), -1), std::memory_order_relaxed);
+    applyLiveState (ver <= 2 ? migrateV2toV3 (incoming, apvts.state.getType()) : incoming);
+    history.reset();
+    history.markSaved();
 }
 
 teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept

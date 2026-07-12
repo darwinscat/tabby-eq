@@ -6,6 +6,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <teq/EqEngine.h>
 #include <teq/Smoother.h>
+#include <felitronics/appkit/CompareHistory.h>
 
 #include "Parameters.h"
 #include "LinearPhase.h"
@@ -172,6 +173,77 @@ public:
     // plugin instance, and shares the single global PropertiesFile; the (i) button drives + reads it.
     tabby::UpdateChecker& updateChecker() { return updateCheckerInstance; }
 
+    //==========================================================================
+    // A/B/C/D compare + undo/redo — the shared felitronics-appkit CompareHistory engine in
+    // PerRegister mode: each register carries its OWN undo/redo history, and a register SWITCH is
+    // NOT an undo step (its inverse is re-selecting the slot). The opaque snapshot is the whole
+    // APVTS state tree (params + view/session properties such as activeLane). Message thread only.
+    static constexpr int kNumSnapshots = 4;
+    void switchToSnapshot (int index) { history.switchTo (index); }
+    int  getActiveSnapshot() const noexcept { return history.active(); }
+
+    // "Modified since you dialed it in" marker for the A/B/C/D buttons: has this register
+    // accumulated edits (its own undo history is non-empty)?
+    bool snapshotEdited (int i) const noexcept { return history.registerEdited (i); }
+
+    // A register "has content" (a valid copy SOURCE) if it is the active/live one or holds a stored
+    // snapshot. Drives the copy menu (only content-bearing registers are offered as sources).
+    bool snapshotHasContent (int i) const noexcept
+    {
+        return i == history.active() || (juce::isPositiveAndBelow (i, kNumSnapshots) && history.registerTree (i).has_value());
+    }
+
+    // Copy the whole state of one A/B/C/D register into another — one discrete undoable edit in the
+    // TARGET register's history (Recall D->B edits B; Stamp B->D edits D).
+    void copySnapshot (int from, int to)
+    {
+        if (juce::isPositiveAndBelow (from, kNumSnapshots) && juce::isPositiveAndBelow (to, kNumSnapshots))
+            history.copyRegister (from, to);
+    }
+
+    // Register i's state tree (active -> a fresh live capture), for the clipboard. Deep copy —
+    // never a handle aliasing an engine-stored snapshot.
+    juce::ValueTree snapshotState (int i)
+    {
+        if (! juce::isPositiveAndBelow (i, kNumSnapshots)) return {};
+        return i == history.active() ? apvts.copyState()
+                                     : history.registerTree (i).value_or (juce::ValueTree()).createCopy();
+    }
+
+    // Clipboard paste: only a TabbyEQ state tree (the APVTS root type) is pasteable.
+    bool canPasteState (const juce::ValueTree& t) const { return t.hasType (apvts.state.getType()); }
+    void pasteState (int toReg, const juce::ValueTree& t)
+    {
+        if (juce::isPositiveAndBelow (toReg, kNumSnapshots) && canPasteState (t))
+            history.applyEdit (toReg, t, "Paste");
+    }
+
+    // Undo / redo. The editor pumps undoTick() from its 30 Hz timer (settleTicks is a tick COUNT,
+    // not wall-clock, so one steady pump). Undo/redo act on the active register only.
+    void undoTick() { history.tick(); }
+    bool undo()     { return history.undo(); }
+    bool redo()     { return history.redo(); }
+    bool canUndo() const noexcept { return history.canUndo(); }
+    bool canRedo() const noexcept { return history.canRedo(); }
+    int  undoDepth() const noexcept { return history.undoDepth(); }
+    int  redoDepth() const noexcept { return history.redoDepth(); }
+    juce::String peekUndoLabel() const { return history.peekUndoLabel(); }
+    juce::String peekRedoLabel() const { return history.peekRedoLabel(); }
+
+    // Gesture brackets: everything between begin/end is ONE labelled undo step — the tool for a
+    // node drag (grab = begin, release = end). Nestable; see CompareHistory's gesture contract.
+    void beginHistoryGesture (const juce::String& label) { history.beginGesture (label); }
+    void endHistoryGesture()                             { history.endGesture(); }
+
+    // Programmatic bulk-write gate (preset apply / reset / search->treat): writes apply but record
+    // no history. RAII: felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+    felitronics::appkit::CompareHistory& compareHistory() noexcept { return history; }
+
+    // Event-driven history revision: every history mutation (commit / undo / redo / switch / copy /
+    // clear / load) bumps it — the editor polls this instead of onHistoryChanged callbacks (cheap,
+    // and safe across editor open/close).
+    unsigned historyRevision() const noexcept { return historyRev.load (std::memory_order_relaxed); }
+
 private:
     // AudioProcessorParameter::Listener — may fire on ANY thread. The body only pushes a captured link
     // event + wakes the drain (alloc/lock-free; JUCE's dispatch itself holds the listener lock — see LinkFifo).
@@ -185,6 +257,10 @@ private:
     void applyToEnabledLanes (int band, const char* field, float v01);   // tagged writes; disabled lanes untouched
     void resyncAllLinks();  // idempotent snap of every linked point from its active lane (overflow recovery)
     int  resyncActiveLane (int band) const;                 // active lane from state prop / lowest-enabled fallback
+
+    // The CompareHistory applyLive seam AND the shared load routine: replace the APVTS state from a
+    // snapshot, then re-sync everything derived from it (link mirrors, per-band active lanes).
+    void applyLiveState (const juce::ValueTree& t);
 
     // appPreferencesInstance MUST precede updateCheckerInstance: the checker takes it by reference,
     // so it has to be constructed first (members init in declaration order). SharedResourcePointer =
@@ -242,7 +318,14 @@ private:
     std::atomic<float> correlation { 1.0f };   // L/R phase correlation (-1..+1) for the meter
     float corrState = 1.0f;                    // audio-thread smoothing state for the correlation meter
 
-    static constexpr int kStateVersion = 3;   // v3: placement lanes (ST/L/R/M/S), shared type/swept/bypass
+    // The shared appkit undo/redo + A/B/C/D engine (PerRegister mode). The opaque seam: captureLive
+    // = apvts.copyState(), applyLive = applyLiveState(). Declared AFTER apvts (public above) — the
+    // engine's construction-time capture-stability assert captures through the live APVTS.
+    felitronics::appkit::CompareHistory history;
+    std::atomic<unsigned> historyRev { 0 };    // bumped by onHistoryChanged; the editor polls historyRevision()
+
+    static constexpr int kStateVersion = 4;   // v4: session root = CompareHistory <Workspace> envelope (live +
+                                              // A/B/C/D + active); the inner state trees keep the v3 lane format
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqAudioProcessor)
 };

@@ -15,7 +15,8 @@
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
 // The semantic layer (source/role pickers, trait knobs, search->treat) lands on top next.
-class TabbyEqEditor final : public juce::AudioProcessorEditor
+class TabbyEqEditor final : public juce::AudioProcessorEditor,
+                            private juce::Timer
 {
 public:
     explicit TabbyEqEditor (TabbyEqAudioProcessor& p);
@@ -25,6 +26,11 @@ public:
     void resized() override;
 
 private:
+    // 30 Hz editor pump: drives the undo settle timer (CompareHistory counts ticks, not wall-clock).
+    // History only settles while an editor is open — an edit made with the UI closed stays one
+    // pending burst and commits on the next open (or is flushed by the next history operation).
+    void timerCallback() override { proc.undoTick(); }
+
     void showViewMenu();
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)
     void toggleFullscreen();  // real borderless fullscreen (kiosk) — standalone only

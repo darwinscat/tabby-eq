@@ -333,6 +333,57 @@ add_test(NAME tabbyeq_adapter_schema COMMAND TabbyEQ_AdapterTest)
 set_tests_properties(tabbyeq_adapter_schema PROPERTIES
     ENVIRONMENT "TABBYEQ_PREFS_DIR=${CMAKE_BINARY_DIR}/test-prefs")
 
+# ----------------------------------------------------------------------------
+# CompareHistory adapter harness — theory-driven falsification of the undo/redo + A/B/C/D wiring
+# (captureLive/applyLiveState seams, v4 <Workspace> envelope, legacy v2/v3 load paths, save purity,
+# per-register semantics, gesture brackets). The ENGINE is tested upstream in felitronics-appkit;
+# this attacks the tabby adapter only. Same headless pattern as the harnesses above.
+# ----------------------------------------------------------------------------
+juce_add_console_app(TabbyEQ_HistoryTest PRODUCT_NAME "TabbyEQ_HistoryTest")
+
+target_sources(TabbyEQ_HistoryTest PRIVATE
+    tests/compare_history_adapter.cpp
+    src/PluginProcessor.cpp
+    src/Parameters.cpp
+    src/PluginEditor.cpp                # createEditor() references TabbyEqEditor → must link it (never instantiated)
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)             # TabbyEqEditor holds an InfoButton → must link it
+
+target_include_directories(TabbyEQ_HistoryTest PRIVATE src "${TABBY_VERSION_DIR}")
+add_dependencies(TabbyEQ_HistoryTest TabbyVersionGen)
+
+target_compile_definitions(TabbyEQ_HistoryTest PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1        # keep the shared harness compile flags identical
+    JucePlugin_Name="TabbyEQ")
+
+target_link_libraries(TabbyEQ_HistoryTest PRIVATE
+    teq::core
+    felitronics::lineareq
+    felitronics::appkit
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+# Same sanitizer treatment as the other harnesses (shared src/*.cpp objects are instrumented
+# directory-wide; the target needs the matching LINK options).
+tabbyeq_sanitize(TabbyEQ_HistoryTest
+    tests/compare_history_adapter.cpp
+    src/PluginProcessor.cpp
+    src/Parameters.cpp
+    src/PluginEditor.cpp
+    src/ui/EqCurveDisplay.cpp
+    src/ui/BandEditStrip.cpp
+    src/ui/VersionInfo.cpp)
+
+add_test(NAME tabbyeq_compare_history COMMAND TabbyEQ_HistoryTest)
+# Same prefs isolation as the harnesses above (real processor => real AppPreferences otherwise).
+set_tests_properties(tabbyeq_compare_history PROPERTIES
+    ENVIRONMENT "TABBYEQ_PREFS_DIR=${CMAKE_BINARY_DIR}/test-prefs")
+
 endif()  # TABBYEQ_BUILD_TESTS
 
 if(TABBYEQ_BUILD_CORE_TESTS)
