@@ -295,6 +295,7 @@ void EqCurveDisplay::endDragGesture()
             if (draggingGain)
                 if (auto* gp = proc.apvts.getParameter (laneParamId (draggingBand, draggingLane, "gain"))) gp->endChangeGesture();
         }
+        proc.endHistoryGesture();   // commit the drag as its ONE labelled undo step (balanced with mouseDown)
     }
     if (momentarySolo) { proc.setSoloBand (prevSoloBand); momentarySolo = false; }   // release momentary solo
     pressBand    = -1;
@@ -1012,6 +1013,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         if (! traces.param (b).on)
         {
             const auto ft = tabby::filterTypeFromChoice (typeIndex);
+            proc.beginHistoryGesture ("Add Band " + juce::String (b + 1));  // the whole multi-param birth = ONE undo step
             setParamGestured (tabby::bandId (b, "type"), typeIndex);        // shared point type
             // A fresh band is an unsplit ST lane. Force the split lanes off (a vacated slot may carry stale
             // on flags), and edit the ST lane's fields.
@@ -1030,6 +1032,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             proc.apvts.state.removeProperty (tabby::bandId (b, "linkFq"), nullptr);
             proc.apvts.state.removeProperty (tabby::bandId (b, "linkQ"),  nullptr);
             setParamGestured (tabby::bandId (b, "on"), 1.0);               // point on
+            proc.endHistoryGesture();
             selectBand (b);
             return;
         }
@@ -1184,7 +1187,12 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             m.addItem (100, "Remove band");
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, lane] (int r) {
                 if (safe == nullptr || r <= 0 || r >= 1000) return;                     // ignore the lane rows' own ids
-                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);    // remove the whole band (point off)
+                if (r == 100)                                                            // remove the whole band (point off)
+                {
+                    safe->proc.beginHistoryGesture ("Remove Band " + juce::String (b + 1));   // one labelled step
+                    safe->setParamGestured (tabby::bandId (b, "on"), 0.0);
+                    safe->proc.endHistoryGesture();
+                }
                 else if (r <= 9)
                 {
                     const int oldChoice = (int) std::lround (safe->proc.apvts.getRawParameterValue (tabby::bandId (b, "type"))->load());
@@ -1248,6 +1256,8 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             whiskerSlope = slopeWhisker (selType);   // HP/LP + Notch step the discrete slope; others set Q
             if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selLane, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
+            // The whole whisker drag = ONE undo step (closed in endDragGesture).
+            proc.beginHistoryGesture ((whiskerSlope ? "Slope Band " : "Q Band ") + juce::String (selBand + 1));
             lastDragFreq = (float) traces.param (selBand).lanes[(size_t) selLane].freq;
             grabKeyboardFocus();
             if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
@@ -1280,6 +1290,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         const auto& lp = traces.param (pb).lanes[(size_t) pl];
         const auto  lt = traces.param (pb).type;                                    // shared point type
         pressBand = pb; pressPos = e.position; pressMs = juce::Time::getMillisecondCounter(); pressMoved = false;
+        // The whole node drag = ONE undo step — the killer use case the history gestures exist for
+        // (grab = begin, release = end in endDragGesture; link mirrors fold in via the bracket drain).
+        proc.beginHistoryGesture ("Move Band " + juce::String (pb + 1));
         if (auto* fp = proc.apvts.getParameter (laneParamId (pb, pl, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (lt);
         if (draggingGain)
@@ -1392,7 +1405,9 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
     {
         if (code == juce::KeyPress::backspaceKey || code == juce::KeyPress::deleteKey)
         {
+            proc.beginHistoryGesture ("Remove Band " + juce::String (selBand + 1));   // one labelled step
             setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
+            proc.endHistoryGesture();
             selectBand (-1);
             return true;
         }

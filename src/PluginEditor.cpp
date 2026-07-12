@@ -46,6 +46,37 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     setupCap (inCap, "IN");
     setupCap (outCap, "OUT");
 
+    // A/B/C/D compare registers — recall on click, copy via right-click menu / drag / clipboard.
+    // Toggle look: the ACTIVE register is violet (the family accent), siblings sit on the panel.
+    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
+    {
+        auto& b = snapBtn[i];
+        b.setRegisterIndex (i);
+        b.setButtonText (juce::String::charToString ((juce::juce_wchar) ('A' + i)));
+        b.setColour (juce::TextButton::buttonColourId,   tabby::palette::panel());
+        b.setColour (juce::TextButton::buttonOnColourId, tabby::palette::violet());
+        b.setColour (juce::TextButton::textColourOffId,  tabby::palette::textDim());
+        b.setColour (juce::TextButton::textColourOnId,   juce::Colours::white);
+        b.onClick    = [this, i] { switchSnapshot (i); };
+        b.onPopup    = [this, i] { showSnapshotMenu (i); };
+        b.onCopyDrop = [this] (int from, int to) { applySnapshotCopy (from, to); };
+        addAndMakeVisible (b);
+    }
+    updateSnapshotButtons();
+
+    // Undo / redo — enablement + peek-label tooltips follow historyRevision() (see timerCallback).
+    for (auto* b : { &undoBtn, &redoBtn })
+    {
+        b->setColour (juce::TextButton::buttonColourId,  tabby::palette::panel());
+        b->setColour (juce::TextButton::textColourOffId, tabby::palette::text());
+        addAndMakeVisible (*b);
+    }
+    undoBtn.setButtonText (juce::String::charToString (0x21b6));   // ↶
+    redoBtn.setButtonText (juce::String::charToString (0x21b7));   // ↷
+    undoBtn.onClick = [this] { proc.undo(); afterHistoryNav(); };
+    redoBtn.onClick = [this] { proc.redo(); afterHistoryNav(); };
+    refreshHistoryUi();
+
     prePost.setButtonText ("POST");
     prePost.setClickingTogglesState (true);
     prePost.onClick = [this]
@@ -123,6 +154,36 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (fullButton);
     display.onToggleFullscreen = [this] { toggleFullscreen(); };            // 'f' key
 
+    syncViewFromState();   // the view properties ride the state tree — also re-read on every history apply
+    // Per-point Link FQ / Link Q are now mirrored PROCESSOR-side (host-safe, works with the editor closed);
+    // the old editor-only msFreqLink machinery is gone. The View menu edits only the GLOBAL new-split defaults.
+
+    // One-time migration notice: the v2->v3 migration coerced a legacy M/S band's Side type (all 24 slots
+    // were in use, so the Side lane couldn't fission into its own point). Async = non-blocking; removing
+    // the property makes it one-time (the removal is saved with the session).
+    if (proc.apvts.state.hasProperty ("migrationNote"))
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "TabbyEQ — session migrated",
+            "An older session's M/S band used a different filter type on its Side lane.\n"
+            "All 24 bands were in use, so that Side lane now uses the band's shared type.");
+        // Suppressed: a programmatic state write at editor-open must not seed a junk undo step
+        // ("Parameter Change" that just removes a note flag) into the freshly loaded history.
+        const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+        proc.apvts.state.removeProperty ("migrationNote", nullptr);
+    }
+
+    setWantsKeyboardFocus (true);             // ⌘Z/⇧⌘Z, 1-4, ⌘C/⌘V — see keyPressed()
+    setResizable (true, true);
+    setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
+    setSize (860, 500);
+
+    startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
+}
+
+// Re-read every view property the state tree carries — at editor open AND after every history
+// apply (undo/switch/load may swap them; the display objects don't watch the tree themselves).
+void TabbyEqEditor::syncViewFromState()
+{
     display.setViewBandColors ((bool) proc.apvts.state.getProperty ("viewBandColors", true));
     display.setViewBandCurves ((bool) proc.apvts.state.getProperty ("viewBandCurves", true));
     display.setViewBandFill   ((bool) proc.apvts.state.getProperty ("viewBandFill",   false));
@@ -135,25 +196,6 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     display.setLeaderMode       ((int)  proc.apvts.state.getProperty ("leaderMode",   1));   // node<->strip leader: default Flash
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
-    // Per-point Link FQ / Link Q are now mirrored PROCESSOR-side (host-safe, works with the editor closed);
-    // the old editor-only msFreqLink machinery is gone. The View menu edits only the GLOBAL new-split defaults.
-
-    // One-time migration notice: the v2->v3 migration coerced a legacy M/S band's Side type (all 24 slots
-    // were in use, so the Side lane couldn't fission into its own point). Async = non-blocking; removing
-    // the property makes it one-time (the removal is saved with the session).
-    if (proc.apvts.state.hasProperty ("migrationNote"))
-    {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "TabbyEQ — session migrated",
-            "An older session's M/S band used a different filter type on its Side lane.\n"
-            "All 24 bands were in use, so that Side lane now uses the band's shared type.");
-        proc.apvts.state.removeProperty ("migrationNote", nullptr);
-    }
-
-    setResizable (true, true);
-    setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
-    setSize (860, 500);
-
-    startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
 }
 
 TabbyEqEditor::~TabbyEqEditor() = default;
@@ -275,10 +317,18 @@ void TabbyEqEditor::toggleFullscreen()
 
 void TabbyEqEditor::resetAll()
 {
-    for (auto* p : proc.getParameters())          // every band param + output back to its default
-        p->setValueNotifyingHost (p->getDefaultValue());
+    // Suppressed (Oleh's call): Reset is a programmatic bulk write and records NO undo step — the
+    // writes apply, the settle baseline absorbs them, and earlier history still walks back past the
+    // reset. (The alternative — a "Reset All" gesture bracket making the reset itself one undoable
+    // step — was raised and can be flipped later without touching anything else.)
+    {
+        const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+        for (auto* p : proc.getParameters())      // every band param + output back to its default
+            p->setValueNotifyingHost (p->getDefaultValue());
+    }
     proc.setSoloBand (-1);                         // clear any solo
     display.clearSelection();                       // deselect + hide the floating toolbar
+    afterHistoryNav();                              // markers/enablement (redo is now stale by contract)
 }
 
 void TabbyEqEditor::paint (juce::Graphics& g)
@@ -290,7 +340,9 @@ void TabbyEqEditor::resized()
 {
     auto r = getLocalBounds();
     auto top = r.removeFromTop (30);
-    title.setBounds (top.removeFromLeft (150).reduced (8, 4));
+    title.setBounds (top.removeFromLeft (110).reduced (8, 4));
+    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));   // ↶ / ↷ next to the title
+    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));
     prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
     infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i) — just left of POST
     latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
@@ -301,7 +353,9 @@ void TabbyEqEditor::resized()
     viewButton.setBounds (top.removeFromRight (52).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (52).reduced (4, 3));
     fullButton.setBounds (top.removeFromRight (46).reduced (4, 3));
-    corrMeter.setBounds (top.removeFromLeft (108).reduced (8, 2));   // remaining middle-left of the top bar
+    corrMeter.setBounds (top.removeFromLeft (100).reduced (8, 2));   // middle-left of the top bar
+    for (auto& b : snapBtn)                                          // A/B/C/D registers, after the meter
+        b.setBounds (top.removeFromLeft (26).reduced (2, 5));
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
     //  it used to occupy is reserved for the upcoming Helper.)
@@ -323,4 +377,153 @@ void TabbyEqEditor::resized()
     }
 
     display.setBounds (r.reduced (8, 4));
+}
+
+//==============================================================================
+// A/B/C/D compare registers — recall + copy (right-click menu / drag-n-drop / system clipboard).
+// Every copy path lands in the engine (copyRegister / applyEdit): ONE discrete undoable edit in
+// the TARGET register's own history; a byte-equal copy records nothing.
+//==============================================================================
+void TabbyEqEditor::updateSnapshotButtons()
+{
+    const int a = proc.getActiveSnapshot();
+    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
+    {
+        snapBtn[i].setToggleState (i == a, juce::dontSendNotification);
+        snapBtn[i].setEdited (proc.snapshotEdited (i));   // "modified since you dialed it in" dot
+    }
+}
+
+void TabbyEqEditor::switchSnapshot (int i)
+{
+    // Recall register i (the engine stashes the live state into the register we leave first),
+    // then re-sync the editor — lane sets, links, colours and view properties may all have changed.
+    proc.switchToSnapshot (i);
+    afterHistoryNav();
+}
+
+// Full editor re-sync after any history navigation (undo / redo / switch / copy / paste). The
+// timerCallback polls cover the same ground as a safety net (host-driven loads, other editors);
+// calling it directly keeps editor-initiated actions snappy at the 10 Hz poll rate.
+void TabbyEqEditor::afterHistoryNav()
+{
+    display.refreshAfterLaneEdit();
+    syncViewFromState();
+    updateSnapshotButtons();
+    refreshHistoryUi();
+}
+
+void TabbyEqEditor::refreshHistoryUi()
+{
+    undoBtn.setEnabled (proc.canUndo());
+    redoBtn.setEnabled (proc.canRedo());
+    // Peek-label tooltips: an unlabelled settle burst reads as "Parameter Change".
+    const auto pretty = [] (const juce::String& l) { return l.isEmpty() ? juce::String ("Parameter Change") : l; };
+    const auto hint   = [] (juce::ModifierKeys::Flags mods)
+    { return " (" + juce::KeyPress ('z', mods, 0).getTextDescriptionWithIcons() + ")"; };
+    undoBtn.setTooltip ((proc.canUndo() ? "Undo " + pretty (proc.peekUndoLabel()) : juce::String ("Undo"))
+                        + hint (juce::ModifierKeys::commandModifier));
+    redoBtn.setTooltip ((proc.canRedo() ? "Redo " + pretty (proc.peekRedoLabel()) : juce::String ("Redo"))
+                        + hint (juce::ModifierKeys::Flags (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier)));
+}
+
+bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
+{
+    using MK = juce::ModifierKeys;
+
+    // While a node/whisker drag is in flight (an OPEN history gesture), history-navigation keys are
+    // inert: a switch/undo/paste mid-drag would hit the engine's gesture×navigation misuse path
+    // (force-commit + debug assert). Acting mid-drag was never meaningful — swallow, don't act.
+    const bool midDrag = display.isDragActive();
+
+    // ⌘Z / ⇧⌘Z — undo/redo on the active register's own history. Swallowed even when there is
+    // nothing to undo (the plugin owns the shortcut while focused; letting it fall through would
+    // trigger the HOST's undo — far more destructive than a no-op).
+    if (key == juce::KeyPress ('z', MK::commandModifier, 0))                     { if (! midDrag) { proc.undo(); afterHistoryNav(); } return true; }
+    if (key == juce::KeyPress ('z', MK::commandModifier | MK::shiftModifier, 0)) { if (! midDrag) { proc.redo(); afterHistoryNav(); } return true; }
+
+    // 1..4 → A/B/C/D register switch. Digit row, no modifiers — a focused text field consumes its
+    // own digits before they bubble here, so numeric entry is unaffected.
+    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
+        if (key == juce::KeyPress ((juce::juce_wchar) ('1' + i)))
+        {
+            if (! midDrag)
+                switchSnapshot (i);
+            return true;
+        }
+
+    // ⌘C / ⌘V — copy/paste the ACTIVE register via the system clipboard (the right-click menu
+    // reaches any register). ⌘C stays live mid-drag (read-only). An unrecognised clipboard falls
+    // through to the host (return false), so a stray ⌘V isn't swallowed.
+    if (key == juce::KeyPress ('c', MK::commandModifier, 0)) { copySnapshotToClipboard (proc.getActiveSnapshot()); return true; }
+    if (key == juce::KeyPress ('v', MK::commandModifier, 0)) return ! midDrag && pasteSnapshotFromClipboard (proc.getActiveSnapshot());
+
+    return false;
+}
+
+void TabbyEqEditor::showSnapshotMenu (int i)
+{
+    // Sources for "copy here from": only content-bearing registers (the active one or a stored
+    // snapshot) — copying from a never-visited slot is meaningless. Targets are unrestricted.
+    juce::PopupMenu from, to;
+    for (int j = 0; j < TabbyEqAudioProcessor::kNumSnapshots; ++j)
+    {
+        if (j == i) continue;
+        const auto name = snapBtn[j].getButtonText();
+        if (proc.snapshotHasContent (j))
+            from.addItem (100 + j, name);
+        to.addItem (200 + j, name);
+    }
+
+    const bool hasContent = proc.snapshotHasContent (i);
+    juce::PopupMenu m;
+    m.addSectionHeader ("Snapshot " + snapBtn[i].getButtonText());
+    m.addSubMenu ("Copy here from", from, from.getNumItems() > 0);
+    m.addSubMenu ("Copy this to",   to,   hasContent);
+    m.addSeparator();
+    m.addItem (1, "Copy state", hasContent);
+    {
+        // Enablement uses the SAME predicate the paste itself enforces — a hollow or foreign
+        // tree must show as disabled, not as an enabled item that silently no-ops.
+        const auto clip = juce::ValueTree::fromXml (juce::SystemClipboard::getTextFromClipboard());
+        m.addItem (2, "Paste state", proc.canPasteState (clip));
+    }
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&snapBtn[i]),
+        [this, safe = juce::Component::SafePointer<TabbyEqEditor> (this), i] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if      (r == 1)        copySnapshotToClipboard (i);
+            else if (r == 2)        pasteSnapshotFromClipboard (i);
+            else if (r >= 200)      applySnapshotCopy (i, r - 200);   // "copy this to" → i is the source
+            else if (r >= 100)      applySnapshotCopy (r - 100, i);   // "copy here from" → i is the target
+        });
+}
+
+void TabbyEqEditor::applySnapshotCopy (int from, int to)
+{
+    if (from == to) return;
+    proc.copySnapshot (from, to);
+    afterHistoryNav();   // live may have changed (copy INTO the active register); markers always
+}
+
+void TabbyEqEditor::copySnapshotToClipboard (int i)
+{
+    // The register's whole state tree (params + view/session properties) as XML text — a paste in
+    // another TabbyEQ instance re-imports it through the validated pasteState path.
+    if (const auto t = proc.snapshotState (i); t.isValid())
+        if (const auto xml = t.createXml())
+            juce::SystemClipboard::copyTextToClipboard (xml->toString());
+}
+
+bool TabbyEqEditor::pasteSnapshotFromClipboard (int toReg)
+{
+    // The clipboard is untrusted input: accept only a tree of this plugin's state type (the same
+    // predicate the menu enablement showed; applyLiveState re-validates at the apply seam).
+    const auto t = juce::ValueTree::fromXml (juce::SystemClipboard::getTextFromClipboard());
+    if (! proc.canPasteState (t))
+        return false;
+    proc.pasteState (toReg, t);
+    afterHistoryNav();
+    return true;
 }

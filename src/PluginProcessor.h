@@ -255,6 +255,10 @@ public:
     // and safe across editor open/close).
     unsigned historyRevision() const noexcept { return historyRev.load (std::memory_order_relaxed); }
 
+    // Bumped on every APPLY (undo / redo / switch / copy / load) — i.e. whenever the live state was
+    // replaced wholesale and the editor must re-sync its state-tree mirrors (view props, lane caches).
+    unsigned applyRevision() const noexcept { return applyRev.load (std::memory_order_relaxed); }
+
 private:
     // AudioProcessorParameter::Listener — may fire on ANY thread. The body only pushes a captured link
     // event + wakes the drain (alloc/lock-free; JUCE's dispatch itself holds the listener lock — see LinkFifo).
@@ -334,6 +338,7 @@ private:
     // engine's construction-time capture-stability assert captures through the live APVTS.
     felitronics::appkit::CompareHistory history;
     std::atomic<unsigned> historyRev { 0 };    // bumped by onHistoryChanged; the editor polls historyRevision()
+    std::atomic<unsigned> applyRev   { 0 };    // bumped by onAfterApply; the editor polls applyRevision()
 
     static constexpr int kStateVersion = 4;   // v4: session root = CompareHistory <Workspace> envelope (live +
                                               // A/B/C/D + active); the inner state trees keep the v3 lane format

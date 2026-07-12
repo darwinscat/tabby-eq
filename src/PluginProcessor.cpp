@@ -208,6 +208,12 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     // revision the editor polls (historyRevision()) to refresh its undo/redo + A/B/C/D affordances.
     history.onHistoryChanged = [this] { historyRev.fetch_add (1, std::memory_order_relaxed); };
 
+    // Any APPLY (undo / redo / switch / copy / load) replaced the live state wholesale — the editor
+    // polls applyRevision() to re-sync everything it mirrors from the state tree (view properties,
+    // lane caches). Read-only w.r.t. the live state (engine contract 2): it only bumps an atomic.
+    history.onAfterApply = [this] (felitronics::appkit::CompareHistory::Reason)
+    { applyRev.fetch_add (1, std::memory_order_relaxed); };
+
     // A foreign session carrying a different register count is diagnostic-only: the engine already
     // skipped the out-of-range snapshots (skip-not-clamp), and this build's count is fixed.
     history.onRegisterCountMismatch = [] (int savedCount, int buildCount)
@@ -596,6 +602,11 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
     if (band < 0 || band >= tabby::kNumBands) return;
     const int L = juce::jlimit (0, tabby::kNumLanes - 1, lane);
     activeLaneAtom[(size_t) band].store (L, std::memory_order_relaxed);
+    // Suppressed: selecting a lane TAB is view state, not an edit — unsuppressed, every tab click
+    // would settle into a junk "Parameter Change" undo step. The property still rides the snapshot
+    // (saves, registers), it just records no step. Engine caveat applies: as a suppressed forward
+    // move it invalidates a stale redo — the cost of view props living in the opaque snapshot (D1).
+    const felitronics::appkit::CompareHistory::ScopedSuppress ss (history);
     apvts.state.setProperty (tabby::bandId (band, "activeLane"), L, nullptr);
 }
 

@@ -45,6 +45,10 @@ public:
     bool keyPressed       (const juce::KeyPress&) override;   // Esc cancels an in-progress add-drag
     void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
+    // A node/whisker drag (an open history gesture) is in flight — the editor gates history
+    // NAVIGATION keys on this (undo/redo/register switch mid-drag is the engine's misuse path).
+    bool isDragActive() const noexcept { return draggingBand >= 0; }
+
     // Set by the editor: fires when the selected band/lane changes (-1 = none). Drives the edit strip.
     std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
