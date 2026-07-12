@@ -402,6 +402,17 @@ target_link_libraries(TabbyEQ_TraceSetTest PRIVATE teq::core)
 add_test(NAME tabbyeq_trace_set COMMAND TabbyEQ_TraceSetTest)
 
 # ----------------------------------------------------------------------------
+# JUCE-free theory unit for the eqview HandleMath (src/eqview/HandleMath.h) — node/whisker
+# geometry + filter-type editing classification. Pins the type axioms, the log-linear Q<->bandwidth
+# calibration (endpoints, monotonicity, roundtrips), the slope-table maps and the symmetric-in-log
+# whisker geometry. Header-only over PlotMap + teq types; same core-tests ctest tier.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_HandleMathTest tests/handle_math.cpp)
+target_include_directories(TabbyEQ_HandleMathTest PRIVATE src)
+target_link_libraries(TabbyEQ_HandleMathTest PRIVATE teq::core)
+add_test(NAME tabbyeq_handle_math COMMAND TabbyEQ_HandleMathTest)
+
+# ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
 # a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
 # literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.
