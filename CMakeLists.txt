@@ -392,6 +392,16 @@ target_link_libraries(TabbyEQ_EqviewRefuteTest PRIVATE teq::core)
 add_test(NAME tabbyeq_eqview_refute COMMAND TabbyEQ_EqviewRefuteTest)
 
 # ----------------------------------------------------------------------------
+# JUCE-free theory unit for the eqview TraceSet (src/eqview/TraceSet.h) — the response-curve
+# calculator. Pins the matched-design centre contract, cascade log-multiplicativity, the teq
+# lane/axis folding axioms, the analytic-Butterworth anti-flatten rule and the display clamps.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_TraceSetTest tests/trace_set.cpp)
+target_include_directories(TabbyEQ_TraceSetTest PRIVATE src)
+target_link_libraries(TabbyEQ_TraceSetTest PRIVATE teq::core)
+add_test(NAME tabbyeq_trace_set COMMAND TabbyEQ_TraceSetTest)
+
+# ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
 # a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
 # literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.

@@ -9,6 +9,7 @@
 
 #include "eqview/PlotMap.h"
 #include "eqview/SpectrumPane.h"
+#include "eqview/TraceSet.h"
 #include "PluginProcessor.h"
 
 //==============================================================================
@@ -93,12 +94,9 @@ private:
     struct Hit { int band = -1; int lane = 0; };   // a node hit: which band + which placement lane (0..4)
 
     void   refreshDesigns();                       // pull the bands into the cache + design every enabled lane
-    // The curve is DESIGNED + evaluated at an oversampled "display" rate (>= 96k), not the real fs. A matched
-    // biquad's magnitude is even about fs/2, so at low real rates (44.1/48k) an LP/BP would visibly FLATTEN
-    // as it nears Nyquist (slope -> 0) and then kink; oversampling pushes that flattening far past the 28k
-    // axis so the curve shows the smooth analog INTENT (FabFilter-style) and looks identical at every rate.
-    // (The spectrum analyzer still uses the real fsCache — that's true measured content, not a design.)
-    double designFs() const noexcept { return juce::jmax (fsCache, 96000.0); }
+    // Oversampled "display" design rate (>= 96k) — the rule and its rationale live in
+    // eqview::TraceSet (the analyzer still uses the real sample rate: measured content, not a design).
+    double designFs() const noexcept { return traces.designFs(); }
 
     // Placement-lane node helpers. A "point" has a node per ENABLED lane (ST/L/R/M/S). `lane` is a teq::Lane
     // index 0..4. laneOn reads the paint cache; laneOnLive reads the live atomics (async menu callbacks).
@@ -152,11 +150,9 @@ private:
     // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
     eqview::SpectrumPane analyzer;
 
-    // per-paint cache of the band designs (shared by curve / nodes / hit-test). One design per placement
-    // lane (ST/L/R/M/S) of every band; a disabled lane is left as a default (never evaluated — gated by on).
-    teq::BandParams paramCache[tabby::kNumBands];
-    teq::BandDesign designCache[tabby::kNumBands][teq::kNumLanes];
-    double fsCache = 44100.0;
+    // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
+    // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().
+    eqview::TraceSet traces;
 
     int  draggingBand = -1;
     int  draggingLane = 0;       // the placement lane of the node being dragged (0..4)
