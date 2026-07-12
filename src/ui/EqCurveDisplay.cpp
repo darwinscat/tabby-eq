@@ -8,52 +8,20 @@
 
 namespace
 {
-    bool hasGain (teq::FilterType t) noexcept
-    {
-        return t == teq::FilterType::Bell     || t == teq::FilterType::LowShelf
-            || t == teq::FilterType::HighShelf || t == teq::FilterType::Tilt;
-    }
-
-    bool qRelevant (teq::FilterType t) noexcept   // Q sets bandwidth -> show the Q whiskers
-    {                                             // HP/LP use discrete slopes (their own whisker), not Q
-        return t == teq::FilterType::Bell      || t == teq::FilterType::BandPass
-            || t == teq::FilterType::Notch     || t == teq::FilterType::AllPass
-            || t == teq::FilterType::LowShelf  || t == teq::FilterType::HighShelf;   // resonant shelves have Q
-    }
-
-    // Q-whisker calibration — half-bandwidth (octaves) <-> Q, log-linear. Tuned by feel so the
-    // handles span a usable range: 0.2 oct out = max Q 40, 0.833 oct out = min Q 0.1.
-    constexpr double kQwBwLo = 0.2, kQwBwHi = 0.833, kQwQHi = 40.0, kQwQLo = 0.1;
-    double whiskerBwForQ (double Q) noexcept
-    {
-        const double t = (std::log10 (kQwQHi) - std::log10 (juce::jlimit (kQwQLo, kQwQHi, Q)))
-                       / (std::log10 (kQwQHi) - std::log10 (kQwQLo));
-        return kQwBwLo + t * (kQwBwHi - kQwBwLo);
-    }
-    double whiskerQForBw (double bw) noexcept
-    {
-        const double t = juce::jlimit (0.0, 1.0, (bw - kQwBwLo) / (kQwBwHi - kQwBwLo));
-        return std::pow (10.0, std::log10 (kQwQHi) - t * (std::log10 (kQwQHi) - std::log10 (kQwQLo)));
-    }
-
-    bool isCut (teq::FilterType t) noexcept { return t == teq::FilterType::HighPass || t == teq::FilterType::LowPass; }
-
-    // Whiskers that encode the discrete SLOPE (octaves) via the Neutron-style handle spread, not a continuous
-    // Q. HP/LP have always done this; the Notch joins them now that felitronics-core v0.1.5 gives it a variable
-    // ORDER (slope->order, 6..96 dB/oct, like HP/LP). Its Q stays the -3 dB width (edited in the strip).
-    bool slopeWhisker (teq::FilterType t) noexcept { return isCut (t) || t == teq::FilterType::Notch
-                                                          || t == teq::FilterType::BandPass; }   // v0.2.1: BP has order too
-    bool whiskerRelevant (teq::FilterType t) noexcept { return qRelevant (t) || isCut (t); }
-
-    // HP/LP whisker maps to the DISCRETE slope list (steeper = narrower handle) instead of Q.
-    constexpr int kSlopeDb[7] = { 6, 12, 24, 36, 48, 72, 96 };
-    int    slopeIndexFromDb (int db) noexcept { for (int i = 0; i < 7; ++i) if (kSlopeDb[i] == db) return i; return 1; }
-    double slopeBwForIndex  (int i)  noexcept { return kQwBwHi + (kQwBwLo - kQwBwHi) * (i / 6.0); }   // i0 wide -> i6 narrow
-    int    slopeIndexForBw  (double bw) noexcept
-    {
-        const double t = juce::jlimit (0.0, 1.0, (kQwBwHi - bw) / (kQwBwHi - kQwBwLo));
-        return juce::jlimit (0, 6, (int) std::round (t * 6.0));
-    }
+    // Node/whisker geometry + filter-type editing classification live in eqview::HandleMath
+    // (JUCE-free, unit-tested); pull the names into this TU so every call-site stays unchanged.
+    using eqview::handles::hasGain;
+    using eqview::handles::qRelevant;
+    using eqview::handles::isCut;
+    using eqview::handles::slopeWhisker;
+    using eqview::handles::whiskerRelevant;
+    using eqview::handles::whiskerBwForQ;
+    using eqview::handles::whiskerQForBw;
+    using eqview::handles::slopeIndexFromDb;
+    using eqview::handles::slopeBwForIndex;
+    using eqview::handles::slopeIndexForBw;
+    using eqview::handles::kSlopeDb;
+    using eqview::handles::restsOnZeroDb;
 
     juce::Colour typeColour (teq::FilterType t) noexcept
     {
@@ -225,9 +193,9 @@ juce::Point<float> EqCurveDisplay::nodePos (int b, int lane) const noexcept
     const double f  = lp.freq;
     const double g  = lp.gainDb;
     double db;
-    if (hasGain (t))                                                                    db = g;
-    else if (isCut (t) || t == teq::FilterType::Notch || t == teq::FilterType::AllPass) db = 0.0;
-    else                                                                                db = compositeDbAxis (f, axisForLane (lane));
+    if      (hasGain (t))       db = g;
+    else if (restsOnZeroDb (t)) db = 0.0;
+    else                        db = compositeDbAxis (f, axisForLane (lane));
     return { freqToX (f), dbToY (db) };
 }
 
@@ -239,9 +207,9 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
     const auto   t   = traces.param (b).type;             // shared point type
     const int    sl  = lp.slope;
     const double qv  = lp.Q;
-    const double bw  = slopeWhisker (t) ? slopeBwForIndex (slopeIndexFromDb (sl)) : whiskerBwForQ (qv);   // half-bandwidth (oct)
-    const float dx   = freqToX (f0 * std::exp2 (bw)) - pos.x;                  // -> px offset (log-x, symmetric)
-    return { { pos.x - dx, pos.y }, { pos.x + dx, pos.y } };
+    const double bw  = eqview::handles::whiskerBw (t, qv, sl);                 // half-bandwidth (oct)
+    const auto   e   = eqview::handles::whiskerEndsPx (plotMap(), { pos.x, pos.y }, f0, bw);
+    return { { e.left.x, e.left.y }, { e.right.x, e.right.y } };
 }
 
 juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
@@ -262,7 +230,7 @@ double EqCurveDisplay::bandDb (int b, double f, int lane) const noexcept { retur
 
 EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
 {
-    Hit best; float bestD = (kNodeR + 5.0f) * (kNodeR + 5.0f);
+    Hit best; float bestD = eqview::handles::grabRadiusSq (kNodeR, eqview::handles::kNodeGrabPad);
     for (int b = 0; b < tabby::kNumBands; ++b)
         if (traces.param (b).on)
             for (int L = 0; L < teq::kNumLanes; ++L)
@@ -278,7 +246,7 @@ EqCurveDisplay::Hit EqCurveDisplay::nodeAt (juce::Point<float> p) const noexcept
 // place cycles through the returned set (see mouseDown).
 int EqCurveDisplay::collectNodesAt (juce::Point<float> p, Hit* out, int maxOut) const noexcept
 {
-    int n = 0; const float r2 = (kNodeR + 5.0f) * (kNodeR + 5.0f);
+    int n = 0; const float r2 = eqview::handles::grabRadiusSq (kNodeR, eqview::handles::kNodeGrabPad);
     for (int b = 0; b < tabby::kNumBands && n < maxOut; ++b)
         if (traces.param (b).on)
             for (int L = 0; L < teq::kNumLanes && n < maxOut; ++L)
@@ -1112,7 +1080,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     // node dot (matches nodePos: hasGain -> own gain; HP/LP/notch/all-pass -> 0; only band-pass its corner)
     double nodeDb = 0.0;
     if (hasGain (ft)) nodeDb = gain;
-    else if (! (isCut (ft) || ft == teq::FilterType::Notch || ft == teq::FilterType::AllPass))
+    else if (! restsOnZeroDb (ft))
         nodeDb = 20.0 * std::log10 (juce::jmax (1.0e-9, std::abs (
                      teq::bandResponse (bp, dfs, 2.0 * juce::MathConstants<double>::pi * f0 / dfs))));
     const float nx = freqToX (f0), ny = dbToY (nodeDb);
@@ -1272,8 +1240,8 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
     if (selBand >= 0 && b < 0 && traces.param (selBand).on && whiskerRelevant (selType))
     {
         const auto wk = whiskerEnds (selBand, selLane);
-        const bool onRight = e.position.getDistanceFrom (wk.second) < kNodeR + 4.0f;
-        const bool onLeft  = e.position.getDistanceFrom (wk.first)  < kNodeR + 4.0f;
+        const bool onRight = e.position.getDistanceFrom (wk.second) < kNodeR + eqview::handles::kWhiskerGrabPad;
+        const bool onLeft  = e.position.getDistanceFrom (wk.first)  < kNodeR + eqview::handles::kWhiskerGrabPad;
         if (onLeft || onRight)
         {
             draggingBand = selBand; draggingLane = selLane; draggingQ = true; qDragSide = onRight ? 1 : -1;
@@ -1488,7 +1456,7 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
     // never pops the add-affordance under the cursor.
     for (int b = 0; b < tabby::kNumBands; ++b) if (traces.param (b).on)
         for (int L = 0; L < teq::kNumLanes; ++L)
-            if (laneOn (b, L) && hoverPos.getDistanceFrom (nodePos (b, L)) < kNodeR + 16.0f) return { -1.0f, -1.0f };
+            if (laneOn (b, L) && hoverPos.getDistanceFrom (nodePos (b, L)) < kNodeR + eqview::handles::kAddClearPad) return { -1.0f, -1.0f };
 
     // don't surface "+" over the selected lane's whisker bar (so you can grab a handle)
     const auto selType = (selBand >= 0) ? traces.param (selBand).type : teq::FilterType::Bell;   // shared point type

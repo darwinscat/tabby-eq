@@ -10,6 +10,7 @@
 #include "eqview/PlotMap.h"
 #include "eqview/SpectrumPane.h"
 #include "eqview/TraceSet.h"
+#include "eqview/HandleMath.h"
 #include "PluginProcessor.h"
 
 //==============================================================================
@@ -226,7 +227,7 @@ private:
     static constexpr double kGainMax   = 24.0;          // ± dB — the real gain-param clamp (drag / keyboard)
     static constexpr double kGainSteps[4] = { 3.0, 6.0, 12.0, 30.0 };   // selectable vertical-scale steps (visible ± dB)
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
-    static constexpr float  kNodeR     = 6.0f;
+    static constexpr float  kNodeR     = eqview::handles::kNodeR;   // single home = HandleMath (drawing + hit-tests share it)
     static constexpr float  kAddThreshold = 36.0f;       // px from the curve to surface the "+" add button
     static constexpr float  kPeakFallDb = 0.8f;          // peak-hold fall (~24 dB/s at 30 Hz)
     static constexpr double kTiltDbPerOct = 4.5;         // analyzer tilt — pink-noise comp, like Pro-Q / Neutron

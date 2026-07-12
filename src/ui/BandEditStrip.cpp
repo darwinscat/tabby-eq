@@ -7,6 +7,7 @@
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
+#include "eqview/HandleMath.h"   // shared filter-type classifiers (single home with the curve view)
 
 namespace
 {
@@ -258,17 +259,16 @@ void BandEditStrip::updateForType()
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
     const auto t       = tabby::filterTypeFromChoice (bandTypeIndex());
-    const bool isCut   = (t == teq::FilterType::HighPass || t == teq::FilterType::LowPass);
-    const bool isShelf = (t == teq::FilterType::LowShelf || t == teq::FilterType::HighShelf);
+    const bool isCut   = eqview::handles::isCut (t);        // shared classifiers — same home as the curve view's whiskers
     const bool isTilt  = (t == teq::FilterType::Tilt);
-    const bool hasGain = (t == teq::FilterType::Bell || isShelf || isTilt);
+    const bool hasGain = eqview::handles::hasGain (t);
     // The Notch rides a variable ORDER (slope->order like HP/LP), so it shows the slope combo — but its
     // Q is an INDEPENDENT width (the −3 dB bandwidth, order-invariant), so unlike HP/LP the width bar
     // stays too (Oleh: «мы у Notch в окне ширину забыли»). Width displays in OCTAVES for the two
     // bandwidth-shaped types (Notch + BandPass): BW = (2/ln2)·asinh(1/(2Q)), exact and invertible.
     const bool isNotch   = (t == teq::FilterType::Notch);
     const bool isBw      = isNotch || (t == teq::FilterType::BandPass);
-    const bool usesSlope = isCut || isBw;   // core v0.2.1: BandPass rides a variable order too (FabFilter model)
+    const bool usesSlope = eqview::handles::slopeWhisker (t);   // == isCut || Notch || BandPass (single home)
 
     slopeBox.setVisible (usesSlope);
     gain.setVisible (hasGain);   gain.setEnabled (hasGain);
