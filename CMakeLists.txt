@@ -370,6 +370,28 @@ target_include_directories(TabbyEQ_PlotMapTest PRIVATE src)   # eqview/PlotMap.h
 add_test(NAME tabbyeq_plot_map COMMAND TabbyEQ_PlotMapTest)
 
 # ----------------------------------------------------------------------------
+# JUCE-free unit for the eqview SpectrumPane (src/eqview/SpectrumPane.h) — the analyzer pipeline
+# (Hann -> FFT -> dB smoothing + peak-hold) and the liquid column sampler + tilt. Pins the Hann
+# single-bin compensation, the peak-hold/starve behaviour and the column geometry. Links teq::core
+# for the Fft seam — still JUCE-free, same core-tests ctest tier.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_SpectrumPaneTest tests/spectrum_pane.cpp)
+target_include_directories(TabbyEQ_SpectrumPaneTest PRIVATE src)   # eqview/SpectrumPane.h
+target_link_libraries(TabbyEQ_SpectrumPaneTest PRIVATE teq::core)
+add_test(NAME tabbyeq_spectrum_pane COMMAND TabbyEQ_SpectrumPaneTest)
+
+# ----------------------------------------------------------------------------
+# ADVERSARIAL theory suite for the eqview headers (house policy: tests from THEORY, trying to
+# refute the code — never mirrored from the implementation). Expectations are derived in-test
+# from the symmetric-Hann DFT (Dirichlet kernel), hand-computed axis constants and the documented
+# smoothing/fade recurrences. Case authors: the review crew (codex / deepseek / opus).
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_EqviewRefuteTest tests/eqview_refute.cpp)
+target_include_directories(TabbyEQ_EqviewRefuteTest PRIVATE src)
+target_link_libraries(TabbyEQ_EqviewRefuteTest PRIVATE teq::core)
+add_test(NAME tabbyeq_eqview_refute COMMAND TabbyEQ_EqviewRefuteTest)
+
+# ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
 # a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
 # literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.

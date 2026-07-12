@@ -6,13 +6,10 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include <teq/EqBand.h>
-#include <teq/SpectrumTap.h>
-#include <felitronics/core/Fft.h>
 
 #include "eqview/PlotMap.h"
+#include "eqview/SpectrumPane.h"
 #include "PluginProcessor.h"
-
-#include <array>
 
 //==============================================================================
 // The classic EQ canvas — log-frequency / dB grid, a live post spectrum (FFT of the engine's
@@ -147,17 +144,13 @@ private:
     void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
-    void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut, float w, float h) const;  // liquid + peak-hold
+    void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())
 
     TabbyEqAudioProcessor& proc;
 
-    // analyzer (core::Fft seam — JUCE-free; layout [DC, Nyquist, re1,im1, …])
-    felitronics::core::fft::DefaultRealFft fft;
-    std::array<float, teq::kSpectrumFftSize>     window {};
-    std::array<float, teq::kSpectrumFftSize * 2> fftBuf {};
-    std::array<float, teq::kSpectrumFftSize>     spec {};
-    std::array<float, teq::kSpectrumFftSize / 2 + 1> specDb {};
-    std::array<float, teq::kSpectrumFftSize / 2 + 1> specPeak {};   // slow-decay peak-hold
+    // analyzer — the JUCE-free spectrum pipeline (window/FFT/dB smoothing/peak-hold/columns) lives
+    // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
+    eqview::SpectrumPane analyzer;
 
     // per-paint cache of the band designs (shared by curve / nodes / hit-test). One design per placement
     // lane (ST/L/R/M/S) of every band; a disabled lane is left as a default (never evaluated — gated by on).
@@ -182,7 +175,6 @@ private:
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  selLane      = 0;       // selected placement lane (0..4) of the selected band
     juce::Point<float> lastClickPos { -1.0e9f, -1.0e9f };   // coincident-node cycling: a repeat click in place cycles
-    int  starveTicks  = 0;       // consecutive analyzer ticks with no new frame
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
     bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
     bool perBandColors = true;                      // each band a fixed distinct colour (else by type)
