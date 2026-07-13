@@ -519,9 +519,20 @@ int main()
         for (int i = 0; i < 20; ++i) p.undoTick();
         check (p.canRedo(), "18: a no-op active-lane echo keeps the redo stack (crew P1 guard)");
 
+        // (a2) The guard must also keep a PENDING burst pending — without it, the suppress scope's
+        // pre-flush promotes the burst to a step immediately. This is the mutation-killer: the
+        // plain echo in (a) passes even without the guard (an exact-value setProperty is already a
+        // ValueTree no-op); this check does not.
+        check (p.redo(), "18: redo still applies");
+        const int depthA = p.undoDepth();
+        setReal (p, probeId(), 2600.0f);               // unsettled burst
+        p.setBandActiveLane (0, 3);                    // exact echo again — must not flush it
+        check (p.undoDepth() == depthA, "18: an echo never flushes a pending burst (guard mutation-killer)");
+        settle (p);
+        check (p.undoDepth() == depthA + 1, "18: the burst then settles normally");
+
         // (b) Reset is a suppressed bulk write: defaults land, NO undo step records, nothing
         // phantom settles afterwards.
-        check (p.redo(), "18: redo still applies");
         const int depth = p.undoDepth();
         p.resetAllToDefaults();
         check (std::abs (rv (p, probeId()) - def) < 1e-3f, "18: reset restores the defaults");

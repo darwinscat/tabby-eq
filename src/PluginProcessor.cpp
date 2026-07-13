@@ -601,17 +601,22 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
 {
     if (band < 0 || band >= tabby::kNumBands) return;
     const int L = juce::jlimit (0, tabby::kNumLanes - 1, lane);
-    // No-op echo guard: the editor re-fires its lane binding on every history re-sync; writing the
-    // value that is already there must be a TRUE no-op — a suppressed write that "moves" the state
-    // clears the freshly-built redo by engine contract (crew P1: undo would wipe its own redo).
-    if (activeLaneAtom[(size_t) band].load (std::memory_order_relaxed) == L
-        && (int) apvts.state.getProperty (tabby::bandId (band, "activeLane"), -1) == L)
+    activeLaneAtom[(size_t) band].store (L, std::memory_order_relaxed);   // derived mirror — never capture-visible
+
+    // The PROPERTY write is capture-visible; skip it whenever it would not change the tree: an
+    // exact echo of the RAW property (the editor re-fires its lane binding on every history
+    // re-sync — compare the raw value, NOT the enabled-clamped resolution: even a same-value
+    // write's suppress scope would flush a pending edit burst), or BIRTHING the property with the
+    // value its absence already resolves to (first node click on a fresh band). Either would
+    // count as a suppressed "forward move" and clear a freshly-built redo (crew P1).
+    const int prop = (int) apvts.state.getProperty (tabby::bandId (band, "activeLane"), -1);
+    if (prop == L || (prop < 0 && resyncActiveLane (band) == L))
         return;
-    activeLaneAtom[(size_t) band].store (L, std::memory_order_relaxed);
     // Suppressed: selecting a lane TAB is view state, not an edit — unsuppressed, every tab click
     // would settle into a junk "Parameter Change" undo step. The property still rides the snapshot
     // (saves, registers), it just records no step. Engine caveat applies: as a suppressed forward
-    // move it invalidates a stale redo — the cost of view props living in the opaque snapshot (D1).
+    // move a REAL lane change invalidates a stale redo — the cost of view props living in the
+    // opaque snapshot (D1).
     const felitronics::appkit::CompareHistory::ScopedSuppress ss (history);
     apvts.state.setProperty (tabby::bandId (band, "activeLane"), L, nullptr);
 }

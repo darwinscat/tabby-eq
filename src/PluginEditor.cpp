@@ -31,9 +31,14 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     output.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (output);
     outputAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "output", output);
-    // A fader drag = ONE labelled undo step (and keyPressed's navigation gate covers it while open).
-    output.onDragStart = [this] { proc.beginHistoryGesture ("Output Trim"); };
-    output.onDragEnd   = [this] { proc.endHistoryGesture(); };
+    // A MOUSE fader drag = ONE labelled undo step (and keyPressed's navigation gate covers it
+    // while open). Mouse-only, like the strip bars: JUCE also fires the drag pair for wheel
+    // notches / typed entry / double-click — those coalesce through the settle timer instead.
+    {
+        auto open = std::make_shared<bool> (false);
+        output.onDragStart = [this, open] { if (output.isMouseButtonDown()) { *open = true; proc.beginHistoryGesture ("Output Trim"); } };
+        output.onDragEnd   = [this, open] { if (*open) { *open = false; proc.endHistoryGesture(); } };
+    }
 
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
@@ -137,8 +142,11 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (phaseAmountSlider);
     phaseAmountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "phaseAmount", phaseAmountSlider);
     phaseAmountSlider.onValueChange = [this] { updatePhaseUi(); };
-    phaseAmountSlider.onDragStart   = [this] { proc.beginHistoryGesture ("Phase Blend"); };
-    phaseAmountSlider.onDragEnd     = [this] { proc.endHistoryGesture(); };
+    {
+        auto open = std::make_shared<bool> (false);   // mouse-only bracket, same rationale as the output fader
+        phaseAmountSlider.onDragStart = [this, open] { if (phaseAmountSlider.isMouseButtonDown()) { *open = true; proc.beginHistoryGesture ("Phase Blend"); } };
+        phaseAmountSlider.onDragEnd   = [this, open] { if (*open) { *open = false; proc.endHistoryGesture(); } };
+    }
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
@@ -209,7 +217,16 @@ void TabbyEqEditor::syncViewFromState()
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
 }
 
-TabbyEqEditor::~TabbyEqEditor() = default;
+TabbyEqEditor::~TabbyEqEditor()
+{
+    // A host may destroy the editor MID-DRAG. The display's own dtor closes a node drag, but the
+    // slider brackets (strip bars, output fader, phase blend) would leak their open gesture on the
+    // out-living PROCESSOR — navigation gate stuck, settle commits blocked, forever. Close the
+    // node drag first (so nothing double-ends), then force-close whatever brackets remain.
+    display.endDragGesture();
+    while (proc.historyGestureOpen())
+        proc.endHistoryGesture();
+}
 
 void TabbyEqEditor::updatePhaseUi()
 {

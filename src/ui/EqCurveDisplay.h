@@ -53,6 +53,11 @@ public:
     // saved scale after every history apply — see syncViewFromState).
     void setGainRange (double r, bool persist = true);
 
+    // Balance any open begin/endChangeGesture + close the node drag's history gesture — from
+    // mouseUp, this dtor, AND the editor's dtor (which must close the node drag BEFORE force-
+    // closing leftover slider brackets, so nothing double-ends).
+    void endDragGesture();
+
     // Set by the editor: fires when the selected band/lane changes (-1 = none). Drives the edit strip.
     std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
@@ -129,7 +134,6 @@ private:
     int    collectNodesAt (juce::Point<float> p, Hit* out, int maxOut) const noexcept;   // all nodes within grab radius
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
-    void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
     void   addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex = -1);   // enable the first free band
     void   smartAdd (juce::Point<float> at);   // add with a smart default type (grid 3x2 -> see predictAdd)
 
@@ -163,6 +167,7 @@ private:
     eqview::TraceSet traces;
 
     int  draggingBand = -1;
+    int  dragSourceIndex = -1;   // the input source that owns the current drag/placement (multi-touch filter)
     int  draggingLane = 0;       // the placement lane of the node being dragged (0..4)
     bool draggingGain = false;
     double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
