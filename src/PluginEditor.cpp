@@ -676,7 +676,8 @@ void TabbyEqEditor::resized()
     const int groupW = brandW + undoW + redoW + tGap + TabbyEqAudioProcessor::kNumSnapshots * abcdW
                      + gGap + presetW + saveW + importW + exportW;
 
-    int x = juce::jmax (6, (bandRight - groupW) / 2);   // centred; clamps to a small left margin if it won't fit
+    int x = juce::jmax (0, (bandRight - groupW) / 2);   // centred; hits the left edge at the minimum width
+    brand.setLeftFlush (x <= 3);                        // flush left → the left skirt disappears, straight cut
     const auto barItem = [&x] (juce::Component& c, int w, int vInset) { c.setBounds (x, vInset, w, kBarH - 2 * vInset); x += w; };
 
     brand.setBounds (x, 0, brandW, kBlisterH);          x += brandW;   // the blister protrudes; the rest sit in the bar
