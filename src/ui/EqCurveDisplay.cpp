@@ -57,15 +57,19 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
 
-    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB.
-    for (int i = 0; i < 4; ++i) gainScaleCombo.addItem (juce::String ((int) kGainSteps[i]) + " dB", i + 1);
-    gainScaleCombo.setColour (juce::ComboBox::textColourId,       tabby::palette::text());
-    gainScaleCombo.setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel().withAlpha (0.85f));
-    gainScaleCombo.setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
-    gainScaleCombo.setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
-    gainScaleCombo.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (gainScaleCombo);
-    gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
+    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB. Flat text (no frame, no
+    // background, no arrow) so it never boxes over the graph's axis; a click opens a plain menu.
+    gainScaleBtn.setTooltip ("Vertical scale (dB)");
+    addAndMakeVisible (gainScaleBtn);
+    gainScaleBtn.onClick = [this]
+    {
+        juce::PopupMenu m;
+        for (int i = 0; i < 4; ++i)
+            m.addItem (i + 1, juce::String ((int) kGainSteps[i]) + " dB", true, std::abs (gainRange - kGainSteps[i]) < 0.5);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&gainScaleBtn),
+            [safe = juce::Component::SafePointer<EqCurveDisplay> (this)] (int r)
+            { if (safe != nullptr && r > 0) safe->setGainRange (kGainSteps[r - 1]); });
+    };
     setGainRange ((double) proc.apvts.state.getProperty ("gainRangeLive",              // restore the VISIBLE scale (auto-fit
                       proc.apvts.state.getProperty ("gainRange", 12.0)), false);       // included), like the post-apply re-sync
     { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
@@ -91,7 +95,7 @@ eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
     const eqview::PlotMap pm { .width = (float) getWidth(), .height = (float) getHeight(),
                                .plotBottom = (float) plotBottomY(),
                                .freqMin = kFreqMin, .freqMax = kFreqMax, .dbRange = gainRange,
-                               .specTop = kSpecTop, .specBottom = kSpecBottom };
+                               .specTop = kSpecTop, .specBottom = -anaRange };   // Range preset = the -range dBFS floor
     // The unit test can't see THIS wiring (it hand-builds maps) — so sanity-pin it here, debug-only:
     // a scrambled field mapping trips on the first paint instead of silently moving pixels.
     // plotBottom may legally EXCEED a sub-40px height (plotBottomY floors at 40 — collapse/mid-layout
@@ -481,7 +485,7 @@ void EqCurveDisplay::positionToolbar()
 
 void EqCurveDisplay::resized()
 {
-    gainScaleCombo.setBounds (getWidth() - 82, 6, 74, 22);   // top-right overlay, above the dB scale
+    gainScaleBtn.setBounds (getWidth() - 96, 6, 70, 20);   // flat top-right overlay, clear of the right axis labels
     positionToolbar();
 }
 
@@ -510,7 +514,8 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     // comparison also normalizes a String-typed post-load property without a "changed" write.
     const bool liveDiffers    = std::abs ((double) proc.apvts.state.getProperty ("gainRangeLive", -1.0e9) - gainRange) > 1.0e-6;
     const bool persistDiffers = persist && std::abs ((double) proc.apvts.state.getProperty ("gainRange", -1.0e9) - gainRange) > 1.0e-6;
-    gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
+    gainScaleBtn.text = juce::String ((int) gainRange) + " dB";   // reflect the current scale on the flat picker
+    gainScaleBtn.repaint();
     if (liveDiffers || persistDiffers)
     {
         // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —
@@ -584,10 +589,38 @@ void EqCurveDisplay::stepSelection (int dir)
 //==============================================================================
 void EqCurveDisplay::pushSpectrum()
 {
-    // The pane owns the pipeline (window -> FFT -> dB smoothing + peak-hold, unit-tested);
-    // this component owns only the SOURCE — the processor's pre/post tap.
-    if (proc.pullSpectrum (analyzerPre, analyzer.frameInput())) analyzer.ingest();
-    else                                                        analyzer.starve();
+    // The panes own the pipeline (window -> FFT -> dB smoothing + peak-hold, unit-tested); this
+    // component owns only the SOURCES — the processor's pre/post taps. Frozen = pull nothing:
+    // the panes hold their arrays, so the drawn spectra stand perfectly still.
+    if (anaFrozen)
+        return;
+    if (showAnaPre)
+    {
+        if (proc.pullSpectrum (true, analyzerPrePane.frameInput())) analyzerPrePane.ingest();
+        else                                                        analyzerPrePane.starve();
+    }
+    else
+        (void) proc.pullSpectrum (true, tapDrain.data());    // keep the hidden tap fresh: an unpulled
+    if (showAnaPost)                                         // tap holds its frame, so re-enabling
+    {                                                        // would first show STALE audio
+        if (proc.pullSpectrum (false, analyzer.frameInput())) analyzer.ingest();
+        else                                                  analyzer.starve();
+    }
+    else
+        (void) proc.pullSpectrum (false, tapDrain.data());
+}
+
+void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept
+{
+    // 0 Slow / 1 Medium / 2 Fast — the spectrum's attack/release feel: per-frame smoothing plus
+    // the peak-hold decay, applied to both panes so pre and post always move together.
+    const float coeff = preset == 0 ? 0.12f : preset == 2 ? 0.50f : 0.25f;
+    const float fall  = preset == 0 ? 0.4f  : preset == 2 ? 1.6f  : 0.8f;
+    for (auto* p : { &analyzer, &analyzerPrePane })
+    {
+        p->smoothCoeff = coeff;
+        p->peakFallDb  = fall;
+    }
 }
 
 // Spectrum on the display's log grid: linear-interpolate the sparse bass (smooth, no stair-steps),
@@ -596,11 +629,11 @@ void EqCurveDisplay::pushSpectrum()
 // The column math lives in the pane; here we only wrap the emitted points into JUCE paths. The
 // geometry has ONE source — the PlotMap — for both the columns and the closing edges (a separate
 // width parameter could silently detach the fill's closing edge from the last column).
-void EqCurveDisplay::buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const
+void EqCurveDisplay::buildSpectrumPaths (const eqview::SpectrumPane& pane, juce::Path& fillOut, juce::Path& peakOut) const
 {
     const auto pm = plotMap();
     float lastY = pm.height;
-    analyzer.buildColumns (pm, traces.sampleRate(), kTiltDbPerOct, kTiltPivotHz,
+    pane.buildColumns (pm, traces.sampleRate(), anaTilt, kTiltPivotHz,
         [&] (int i, float x, float yS, float yP)
         {
             if (i == 0) { fillOut.startNewSubPath (0.0f, pm.height); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
@@ -735,13 +768,25 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- spectrum (filled) ------------------------------------------------
     {
-        juce::Path specFill, specPeakPath;
-        buildSpectrumPaths (specFill, specPeakPath);
-        g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
-                                                 tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
-        g.fillPath (specFill);
-        g.setColour (tabby::palette::spectrum().withAlpha (0.55f));
-        g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
+        if (showAnaPre)   // pre-EQ first: neutral, dimmed — reads as "the input" behind the coloured post
+        {
+            juce::Path preFill, prePeak;
+            buildSpectrumPaths (analyzerPrePane, preFill, prePeak);
+            g.setColour (tabby::palette::text().withAlpha (0.08f));
+            g.fillPath (preFill);
+            g.setColour (tabby::palette::text().withAlpha (0.28f));
+            g.strokePath (prePeak, juce::PathStrokeType (1.0f));
+        }
+        if (showAnaPost)
+        {
+            juce::Path specFill, specPeakPath;
+            buildSpectrumPaths (analyzer, specFill, specPeakPath);
+            g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
+                                                     tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
+            g.fillPath (specFill);
+            g.setColour (tabby::palette::spectrum().withAlpha (0.55f));
+            g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
+        }
     }
 
     // Fixed-lane placement: mark the reserved bottom lane — nodes stay above this line, spectrum still shows below.

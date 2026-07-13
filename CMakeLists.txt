@@ -106,6 +106,12 @@ if(TABBYEQ_BUILD_PLUGIN OR TABBYEQ_BUILD_TESTS)
         GIT_TAG        ${TABBYEQ_JUCE_TAG}
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(juce)
+
+    # Embedded assets (BinaryData::*) — the Michroma wordmark font (OFL) for the header brand.
+    # Every target that compiles PluginEditor.cpp links this (the plugin + the headless harnesses).
+    juce_add_binary_data(TabbyEQData
+        SOURCES resources/fonts/Michroma-Regular.ttf
+                resources/brand/logo-darwinscat.svg)
 endif()
 
 # ----------------------------------------------------------------------------
@@ -185,6 +191,7 @@ juce_add_plugin(TabbyEQ
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT  "TabbyEQ analyses live audio input to draw the spectrum."
+    ICON_BIG                    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/TabbyEQ-1024.png"
     COPY_PLUGIN_AFTER_BUILD     TRUE)
 
 clap_juce_extensions_plugin(TARGET TabbyEQ
@@ -212,6 +219,7 @@ target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
     felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
     felitronics::appkit                 # shared UpdateChecker/UpdateCompare (header-only; JUCE comes from us)
+    TabbyEQData                         # embedded assets (Michroma wordmark font)
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
     juce::juce_dsp                      # (legacy link; the FFT/convolution are now core — JUCE-dsp-free in src)
     juce::juce_recommended_config_flags
@@ -261,6 +269,7 @@ target_link_libraries(TabbyEQ_LifecycleTest PRIVATE
     teq::core
     felitronics::lineareq
     felitronics::appkit
+    TabbyEQData
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags
@@ -311,6 +320,7 @@ target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     teq::core
     felitronics::lineareq
     felitronics::appkit
+    TabbyEQData
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags
@@ -363,6 +373,7 @@ target_link_libraries(TabbyEQ_HistoryTest PRIVATE
     teq::core
     felitronics::lineareq
     felitronics::appkit
+    TabbyEQData
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags

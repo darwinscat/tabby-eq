@@ -548,6 +548,43 @@ int main()
         check (! p.historyGestureOpen(), "18: the gate clears at end");
     }
 
+    // ====== 19. Preset files: flat live-state XML, validated load, registers reset ======
+    {
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getChildFile ("tabbyeq-preset-test");
+        dir.createDirectory();
+        const auto f = dir.getChildFile ("probe.tabbyeq");
+
+        TabbyEqAudioProcessor p1;
+        setReal (p1, probeId(), 2000.0f); settle (p1);
+        p1.switchToSnapshot (1);                               // dial in a workspace too
+        setReal (p1, probeId(), 5000.0f); settle (p1);
+        check (p1.saveStateFile (f), "19: saveStateFile writes");
+
+        const auto xml = juce::XmlDocument::parse (f);
+        check (xml != nullptr && xml->hasTagName ("PARAMS"), "19: a preset is the FLAT live tree (portable, no workspace)");
+
+        TabbyEqAudioProcessor p2;
+        setReal (p2, probeId(), 700.0f); settle (p2);
+        check (p2.loadStateFile (f), "19: loadStateFile accepts our preset");
+        check (std::abs (rv (p2, probeId()) - 5000.0f) < 1e-3f, "19: the preset's live sound lands");
+        check (p2.getActiveSnapshot() == 0 && ! p2.snapshotHasContent (1), "19: a preset load resets the compare registers");
+        check (! p2.canUndo(), "19: a preset load is a fresh history boundary");
+
+        const auto foreign = dir.getChildFile ("foreign.tabbyeq");
+        foreign.replaceWithText ("<NotOurs><PARAM id=\"x\" value=\"1\"/></NotOurs>");
+        check (! p2.loadStateFile (foreign), "19: a foreign XML file is rejected");
+        check (std::abs (rv (p2, probeId()) - 5000.0f) < 1e-3f, "19: a rejected file changes nothing");
+
+        // A full <Workspace> session dump is NOT a preset: it would smuggle four compare registers
+        // through a path labelled "preset", and its engine-side rejection would be invisible here.
+        const auto ws = dir.getChildFile ("session.tabbyeq");
+        ws.replaceWithText ("<Workspace schema=\"1\" count=\"4\" active=\"0\"><Live><PARAMS/></Live></Workspace>");
+        check (! p2.loadStateFile (ws), "19: a <Workspace> session dump is rejected (presets are flat trees only)");
+
+        dir.deleteRecursively();
+    }
+
     if (failures == 0)
         std::cout << "TabbyEQ CompareHistory adapter harness: ALL OK\n";
     else

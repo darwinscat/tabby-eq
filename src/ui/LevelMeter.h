@@ -14,12 +14,19 @@
 // brand gradient — mostly violet, turning orange only near the top — anchored to dB position so a
 // given height always reads the same colour; the clip cap goes red. Reads the processor's lock-free
 // peak atomics on a 30 Hz timer. ~free on CPU (no blur, no shadows).
-class LevelMeter : public juce::Component, private juce::Timer
+class LevelMeter : public juce::Component,
+                   public juce::SettableTooltipClient,   // the IN/OUT captions are gone — a hint instead
+                   private juce::Timer
 {
 public:
     enum class Which { In, Out };
 
-    LevelMeter (TabbyEqAudioProcessor& p, Which w) : proc (p), which (w) { startTimerHz (30); }
+    LevelMeter (TabbyEqAudioProcessor& p, Which w) : proc (p), which (w)
+    {
+        setTooltip (w == Which::In ? "Input level (click to reset the clip cap)"
+                                   : "Output level, post-EQ (click to reset the clip cap)");
+        startTimerHz (30);
+    }
     ~LevelMeter() override { stopTimer(); }
 
     void paint (juce::Graphics& g) override

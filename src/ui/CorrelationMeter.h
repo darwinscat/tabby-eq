@@ -11,20 +11,23 @@
 //==============================================================================
 // A compact horizontal phase-correlation meter: centre = 0, right = +1 (in phase / mono-safe),
 // left = -1 (out of phase). Polls the processor's correlation atomic on a timer. Violet to the
-// right, orange to the left (out-of-phase = a heads-up).
-class CorrelationMeter : public juce::Component, private juce::Timer
+// right, orange to the left (out-of-phase = a heads-up). No caption — a tooltip explains it
+// (the bottom toolbar keeps it slim).
+class CorrelationMeter : public juce::Component,
+                         public juce::SettableTooltipClient,
+                         private juce::Timer
 {
 public:
-    explicit CorrelationMeter (TabbyEqAudioProcessor& p) : proc (p) { startTimerHz (30); }
+    explicit CorrelationMeter (TabbyEqAudioProcessor& p) : proc (p)
+    {
+        setTooltip ("L/R phase correlation: right = in phase (mono-safe), left = out of phase");
+        startTimerHz (30);
+    }
     ~CorrelationMeter() override { stopTimer(); }
 
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (tabby::palette::textDim());
-        g.setFont (juce::Font (juce::FontOptions (8.5f)));
-        g.drawText ("CORR", b.removeFromTop (9.0f), juce::Justification::centred);
-
         auto track = b.reduced (1.0f, 1.0f);
         g.setColour (tabby::palette::panel().brighter (0.10f));
         g.fillRoundedRectangle (track, 2.0f);

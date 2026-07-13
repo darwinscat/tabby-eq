@@ -12,6 +12,23 @@
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
 #include "PluginProcessor.h"
+#include "ui/Palette.h"
+
+//==============================================================================
+// A flat text overlay button — no frame, no background, no dropdown arrow. Used for the vertical-
+// scale picker so it never boxes over the graph's axis; a click opens a plain PopupMenu.
+class FlatScaleButton final : public juce::Button
+{
+public:
+    FlatScaleButton() : juce::Button ({}) {}
+    juce::String text;
+    void paintButton (juce::Graphics& g, bool highlighted, bool) override
+    {
+        g.setColour (highlighted ? tabby::palette::text() : tabby::palette::textDim());
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawText (text, getLocalBounds(), juce::Justification::centredRight);
+    }
+};
 
 //==============================================================================
 // The classic EQ canvas — log-frequency / dB grid, a live post spectrum (FFT of the engine's
@@ -62,7 +79,16 @@ public:
     std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
     int  selectedBand() const noexcept { return selBand; }
-    void setAnalyzerPre (bool pre) noexcept { analyzerPre = pre; }   // analyzer reads pre- or post-EQ
+    // Analyzer view state (driven by the bottom-bar popover): which taps are drawn (pre = dimmed
+    // grey behind the coloured post), freeze (hold the current spectra), display tilt and range.
+    void setAnalyzerShow (bool pre, bool post) noexcept { showAnaPre = pre; showAnaPost = post; repaint(); }
+    void setAnalyzerFrozen (bool f) noexcept            { anaFrozen = f; }
+    void setAnalyzerTilt   (double dbPerOct) noexcept   { anaTilt = dbPerOct; repaint(); }
+    void setAnalyzerRange  (double dB) noexcept         { anaRange = juce::jlimit (30.0, 200.0, dB); repaint(); }
+    void setAnalyzerSpeed  (int preset) noexcept;       // 0 Slow / 1 Medium / 2 Fast — both panes
+    bool analyzerPreShown()  const noexcept { return showAnaPre; }
+    bool analyzerPostShown() const noexcept { return showAnaPost; }
+    bool analyzerFrozen()    const noexcept { return anaFrozen; }
     void setViewBandColors (bool v) noexcept { perBandColors = v; repaint(); }
     void setViewBandCurves (bool v) noexcept { perBandCurves = v; repaint(); }
     void setViewBandFill   (bool v) noexcept { perBandFill = v; repaint(); }
@@ -154,13 +180,15 @@ private:
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
-    void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())
+    void   buildSpectrumPaths (const eqview::SpectrumPane& pane, juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())
 
     TabbyEqAudioProcessor& proc;
 
     // analyzer — the JUCE-free spectrum pipeline (window/FFT/dB smoothing/peak-hold/columns) lives
     // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
-    eqview::SpectrumPane analyzer;
+    eqview::SpectrumPane analyzer;          // post-EQ pane (primary, coloured)
+    eqview::SpectrumPane analyzerPrePane;   // pre-EQ pane (dimmed grey, drawn behind)
+    std::array<float, eqview::SpectrumPane::fftSize> tapDrain {};   // discard buffer for HIDDEN taps (see pushSpectrum)
 
     // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
     // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().
@@ -185,7 +213,12 @@ private:
     int  selLane      = 0;       // selected placement lane (0..4) of the selected band
     juce::Point<float> lastClickPos { -1.0e9f, -1.0e9f };   // coincident-node cycling: a repeat click in place cycles
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
-    bool analyzerPre = false;                       // analyzer taps pre-EQ (true) or post-EQ (false)
+    bool   showAnaPre  = false;                     // draw the pre-EQ spectrum (dimmed, behind)
+    bool   showAnaPost = true;                      // draw the post-EQ spectrum (coloured)
+    bool   anaFrozen   = false;                     // hold the panes (no pulls -> spectra stand still)
+    double anaTilt     = kTiltDbPerOct;             // display tilt, dB/oct around kTiltPivotHz
+    double anaRange    = -kSpecBottom;              // spectrum RANGE preset: the floor is -range dBFS
+                                                    // (default 90 == the classic -90 floor exactly)
     bool perBandColors = true;                      // each band a fixed distinct colour (else by type)
     bool perBandCurves = true;                      // draw each band's own faint colour curve
     bool perBandFill   = false;                     // fill under each band's curve (off by default)
@@ -228,7 +261,7 @@ private:
     // while dragging a node past the edge (kGainSteps), so a node never gets stranded under the floating strip.
     double gainRange = 12.0;                          // visible ± dB (curve y-axis); NOT the gain clamp (that's kGainMax)
     juce::uint32 lastZoomMs = 0;                      // rate-limit for drag auto-zoom (one step per interval)
-    juce::ComboBox gainScaleCombo;                    // vertical-scale picker (±3/6/12/30 dB) — top-right overlay
+    FlatScaleButton gainScaleBtn;                     // vertical-scale picker (±3/6/12/30 dB) — flat, top-right
 
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)

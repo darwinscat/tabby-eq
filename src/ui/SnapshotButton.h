@@ -70,8 +70,24 @@ public:
 
     void paintButton (juce::Graphics& g, bool highlighted, bool down) override
     {
-        TextButton::paintButton (g, highlighted, down);
+        // FLAT (no stock frame): the ACTIVE register is a violet rounded fill, siblings are bare
+        // letters that lift on hover — one visual block with the flat undo/redo arrows beside it.
         const auto r = getLocalBounds().toFloat();
+        if (getToggleState())
+        {
+            g.setColour (tabby::palette::violet().withAlpha (down ? 0.8f : 1.0f));
+            g.fillRoundedRectangle (r.reduced (1.0f), 4.0f);
+        }
+        else if (highlighted || down)
+        {
+            g.setColour (tabby::palette::text().withAlpha (down ? 0.16f : 0.08f));
+            g.fillRoundedRectangle (r.reduced (1.0f), 4.0f);
+        }
+        g.setColour (getToggleState() ? juce::Colours::white
+                                      : highlighted ? tabby::palette::text() : tabby::palette::textDim());
+        g.setFont (juce::Font (juce::FontOptions (12.5f).withStyle ("Bold")));
+        g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred);
+
         if (edited)
         {
             const float d = 4.0f;   // "modified since you dialed it in" — small warm dot, top-right

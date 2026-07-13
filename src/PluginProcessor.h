@@ -264,6 +264,14 @@ public:
     // why the link-FIFO is drained inside the scope.
     void resetAllToDefaults();
 
+    //==========================================================================
+    // Preset files — the family convention (…/Darwin's Cat/TabbyEQ/Presets, *.tabbyeq). A preset is
+    // the FLAT live state tree (v3 lane format) as XML text; loading routes through
+    // setStateInformation's flat-tree path: live sound replaced, B/C/D reset, fresh clean history.
+    static juce::File presetDirectory();
+    bool saveStateFile (const juce::File& f);   // live state -> XML text file (portable preset)
+    bool loadStateFile (const juce::File& f);   // XML file -> validated load (false = not a TabbyEQ state)
+
     // Programmatic bulk-write gate (preset apply / reset / search->treat): writes apply but record
     // no history. RAII: felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
     felitronics::appkit::CompareHistory& compareHistory() noexcept { return history; }
