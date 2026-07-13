@@ -18,3 +18,11 @@ TabbyEQ is AGPL-3.0-or-later. Bundled / fetched third-party components and their
 - The **RBJ Audio EQ Cookbook** formulas (Robert Bristow-Johnson) appear in `MatchedBiquad.h`
   **only** as the baseline the unit test measures the matched design against — also a published
   method, not copied code.
+
+## First-party
+
+The **Darwin's Cat** logo (`resources/brand/logo-darwinscat.svg`, embedded via `TabbyEQData` and
+shown in the header blister) and the **TabbyEQ** name/marks are © Darwin's Cat / Oleh Tsymaienko &
+Alisa. The stripe-cat "spectrum" mark is drawn programmatically (`src/ui/BrandMark.h`); the same
+mark also ships as the app/bundle icon (`resources/icon/`, fed to JUCE's `ICON_BIG`). These are
+**not** covered by the AGPLv3 grant on the source code — trademarks and brand assets are reserved.

@@ -8,8 +8,11 @@
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
 {
-    // The clickable brand header — the orbitcab pattern (same Michroma wordmark + byline), the
-    // stripe-cat mark instead of the orbit. Links to the product page.
+    // The clickable brand blister — FabFilter-style badge (the Darwin's Cat mark + "TabbyEQ"
+    // Michroma wordmark + byline). Links to the product page.
+    catLogo = juce::Drawable::createFromImageData (BinaryData::logodarwinscat_svg,
+                                                   (size_t) BinaryData::logodarwinscat_svgSize);
+    brand.catLogo = catLogo.get();
     brand.wordmarkTypeface = juce::Typeface::createSystemTypefaceFor (BinaryData::MichromaRegular_ttf,
                                                                       (size_t) BinaryData::MichromaRegular_ttfSize);
     brand.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
@@ -17,6 +20,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (brand);
 
     addAndMakeVisible (display);
+    brand.toFront (false);   // the blister protrudes below the toolbar, ON TOP of the display's top edge
 
     display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
     display.onBandSelected = [this] (int b, int lane) { strip.setBand (b); strip.setActiveLane (lane); };   // node+lane -> toolbar
@@ -649,25 +653,53 @@ void TabbyEqEditor::paint (juce::Graphics& g)
 
 void TabbyEqEditor::resized()
 {
-    auto r = getLocalBounds();
-    auto top = r.removeFromTop (30);
-    brand.setBounds (top.removeFromLeft (brand.preferredWidth (26)).reduced (0, 2));
+    static constexpr int kBarH = 30, kBlisterH = 46;   // the flat toolbar band + the taller brand badge
+
+    auto r   = getLocalBounds();
+    auto top = r.removeFromTop (kBarH);                 // the flat band for everything EXCEPT the brand blister
+    const int W      = getWidth();
+    const int brandW = brand.preferredWidth (kBlisterH);
+
+    // Right-side chrome first (fixed): (i) / gear / fullscreen, then Save / Import / Export.
     if (fullBtn.isVisible())
         fullBtn.setBounds (top.removeFromRight (26).reduced (2, 4));    // fullscreen — the very corner (standalone)
-    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear, left of it
+    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear
     infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i)
-    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // undo/redo arrows LEFT of A/B/C/D —
-    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // one visual block with the registers,
-    top.removeFromLeft (6);                                          // separated by a slim gap
-    for (auto& b : snapBtn)                                          // A/B/C/D registers
-        b.setBounds (top.removeFromLeft (26).reduced (2, 5));
-
-    // Presets live in the TOP bar (FabFilter-style): the name centred in the free middle,
-    // Save / Import / Export to its right.
     exportItem.setBounds (top.removeFromRight (50).reduced (2, 4));
     importItem.setBounds (top.removeFromRight (50).reduced (2, 4));
     saveItem.setBounds (top.removeFromRight (42).reduced (2, 4));
-    presetItem.setBounds (top.reduced (8, 4));                       // remaining top middle = the preset name
+
+    // Transport = undo/redo + A/B/C/D, one visual block. In a WIDE window the blister floats to the
+    // window centre (FabFilter); the transport then moves to the far left. In a NARROW window (the
+    // default) the blister anchors left and the transport sits right after it. The default 860px is
+    // narrow — the blister only floats to centre once the window is genuinely wide.
+    constexpr int kWideThreshold = 1200;
+    const int  centredX = (W - brandW) / 2;
+    const bool wide     = W >= kWideThreshold && centredX + brandW <= top.getRight() - 100;
+
+    auto placeTransport = [this] (juce::Rectangle<int>& band)
+    {
+        undoBtn.setBounds (band.removeFromLeft (24).reduced (2, 5));
+        redoBtn.setBounds (band.removeFromLeft (24).reduced (2, 5));
+        band.removeFromLeft (6);
+        for (auto& b : snapBtn)
+            b.setBounds (band.removeFromLeft (26).reduced (2, 5));
+    };
+
+    if (wide)
+    {
+        brand.setBounds (centredX, 0, brandW, kBlisterH);   // centred, protruding
+        placeTransport (top);                               // far left
+        auto presetCol = top.withLeft (brand.getRight() + 8);   // preset centres to the RIGHT of the blister
+        presetItem.setBounds (presetCol.reduced (8, 4));
+    }
+    else
+    {
+        brand.setBounds (0, 0, brandW, kBlisterH);          // anchored left, protruding
+        top.removeFromLeft (brandW);                        // reserve the blister's footprint in the bar
+        placeTransport (top);
+        presetItem.setBounds (top.reduced (8, 4));          // name centred in the remaining middle
+    }
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
     // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE

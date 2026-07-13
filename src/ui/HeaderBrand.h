@@ -5,21 +5,26 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-#include "BrandMark.h"   // tabby::brand — the stripe-cat mark + Michroma wordmark
+#include "BrandMark.h"   // tabby::brand — the stripe-cat fallback mark + Michroma wordmark
 #include "Palette.h"
 
 #include <cmath>
 #include <functional>
 
 //==============================================================================
-// Clickable header brand (the orbitcab HeaderBrand pattern — same font, same byline, the LOGO
-// differs):
-//   [stripe-cat mark]  TabbyEQ     by Darwin's Cat
-//                                  Semantic EQ
-// The mark sits left of the "TabbyEQ" Michroma wordmark; a two-line block follows — "by Darwin's
-// Cat" (accent) over "Semantic EQ" (dim), right-aligned to each other, the bottom line sharing
-// the wordmark's baseline. The whole strip links to the product page with a soft accent halo on
-// hover, and sizes itself to its content.
+// HeaderBrand — the FabFilter-style brand "blister": a rounded-bottom badge that protrudes a touch
+// below the top toolbar, holding a LARGE Darwin's Cat mark + the "TabbyEQ" Michroma wordmark and a
+// small "by Darwin's Cat" tagline under it:
+//
+//    ╭──────────────────────────╮
+//    │  🐱   TabbyEQ             │
+//    │       by Darwin's Cat    │
+//    ╰──────────────────────────╯
+//
+// The editor slides it to the window centre when there's room (wide window), or anchors it left
+// (narrow) — see the editor's resized(). The whole badge links to the product page with a soft
+// accent halo on hover. The cat is a juce::Drawable set by the editor (BinaryData); if absent it
+// falls back to the procedural stripe mark (tabby::brand::drawMark).
 //==============================================================================
 class HeaderBrand final : public juce::Component,
                           public juce::SettableTooltipClient
@@ -27,18 +32,18 @@ class HeaderBrand final : public juce::Component,
 public:
     HeaderBrand() { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
 
+    juce::Drawable*       catLogo = nullptr;       // Darwin's Cat mark — not owned (editor holds it)
     juce::Typeface::Ptr   wordmarkTypeface;        // Michroma — set by the editor (BinaryData)
     juce::Colour          accent { tabby::palette::violet() };
     std::function<void()> onLaunch;
 
-    // Width the strip needs: mark square + wordmark + the wider subtitle line.
+    // Width the badge needs at a given height: pads + cat square + gap + the wider text line.
     int preferredWidth (int height) const
     {
-        const float h    = (float) height;
-        const float subW = tabby::brand::textWidth (font (subHeight (h)), kSub);
-        return height + kGap
-             + (int) std::ceil (tabby::brand::textWidth (font (wordHeight (h)), kWord))
-             + kSubGap + (int) std::ceil (subW) + kPadR;
+        const float h = (float) height;
+        const float textW = juce::jmax (tabby::brand::textWidth (wordFont (h), kWord),
+                                        tabby::brand::textWidth (tagFont (h),  kTag));
+        return (int) std::ceil (kPadL + catSize (h) + kGap + textW + kPadR);
     }
 
     void mouseEnter (const juce::MouseEvent&) override { hover = true;  repaint(); }
@@ -51,58 +56,65 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto b = getLocalBounds().toFloat();
-        const float h = (float) getHeight();
+        const auto b = getLocalBounds().toFloat();
+        const float h = b.getHeight();
 
-        if (hover)                                  // soft accent halo
-        {
-            g.setColour (accent.withAlpha (0.16f));
-            g.fillRoundedRectangle (b, 8.0f);
-        }
+        // --- the blister panel: flat top (flush with the toolbar), rounded bottom corners ---
+        juce::Path panel;
+        const float r = juce::jmin (11.0f, h * 0.28f);
+        panel.startNewSubPath (b.getX(), b.getY());
+        panel.lineTo (b.getRight(), b.getY());
+        panel.lineTo (b.getRight(), b.getBottom() - r);
+        panel.quadraticTo (b.getRight(), b.getBottom(), b.getRight() - r, b.getBottom());
+        panel.lineTo (b.getX() + r, b.getBottom());
+        panel.quadraticTo (b.getX(), b.getBottom(), b.getX(), b.getBottom() - r);
+        panel.closeSubPath();
 
-        // the stripe-cat mark (square at the strip height)
-        tabby::brand::drawMark (g, b.removeFromLeft (h).reduced (3.0f), hover);
-        b.removeFromLeft ((float) kGap);
+        g.setGradientFill (juce::ColourGradient (tabby::palette::panel().brighter (0.06f), 0.0f, b.getY(),
+                                                 tabby::palette::panel().darker (0.25f),   0.0f, b.getBottom(), false));
+        g.fillPath (panel);
+        g.setColour ((hover ? accent : tabby::palette::text()).withAlpha (hover ? 0.55f : 0.14f));
+        g.strokePath (panel, juce::PathStrokeType (1.0f));   // subtle rim, accent-tinted on hover
 
-        // Shared baseline so "TabbyEQ" and "Semantic EQ" sit on the SAME bottom line.
-        const auto  wf = font (wordHeight (h));
-        const float baseline = b.getCentreY() + (wf.getAscent() - wf.getDescent()) * 0.5f;
-        float x = b.getX();
+        // --- content: cat square + wordmark/tagline, vertically centred in the toolbar band ---
+        auto content = b.reduced (0.0f, 1.0f);
+        content.removeFromBottom (h * 0.12f);                // keep clear of the rounded bottom
+        const float cs = catSize (h);
+        auto catArea = content.removeFromLeft (kPadL + cs).withTrimmedLeft (kPadL);
+        catArea = catArea.withSizeKeepingCentre (cs, cs);
+        if (catLogo != nullptr)
+            catLogo->drawWithin (g, catArea, juce::RectanglePlacement::centred, hover ? 1.0f : 0.92f);
+        else
+            tabby::brand::drawMark (g, catArea, hover);
+
+        const float x  = catArea.getRight() + kGap;
+        const auto  wf = wordFont (h);
+        const auto  tf = tagFont (h);
+        // Baseline group: the wordmark sits above centre, the tagline just below it.
+        const float cy       = content.getCentreY();
+        const float baseline = cy + wf.getHeight() * 0.16f;
 
         g.setFont (wf);
         g.setColour (hover ? juce::Colours::white : juce::Colour (0xffeef0f6));
         g.drawSingleLineText (kWord, juce::roundToInt (x), juce::roundToInt (baseline));
-        x += tabby::brand::textWidth (wf, kWord) + (float) kSubGap;
 
-        // Two stacked lines right of the wordmark: "by Darwin's Cat" (accent, top) over
-        // "Semantic EQ" (dim — bottom, SAME baseline as the wordmark), right-aligned together.
-        const auto  sf   = font (subHeight (h));
-        const auto  bf   = font (bylineHeight (h));
-        const float subW = tabby::brand::textWidth (sf, kSub);
-        const float bylW = tabby::brand::textWidth (bf, kByline);
-
-        g.setFont (bf);
+        g.setFont (tf);
         g.setColour (hover ? accent.brighter (0.30f) : accent);
-        g.drawSingleLineText (kByline, juce::roundToInt (x + subW - bylW),
-                              juce::roundToInt (baseline - sf.getHeight() * 0.96f));
-
-        g.setFont (sf);
-        g.setColour (hover ? juce::Colour (0xffc8c8d2) : juce::Colour (0xff8a8a94));
-        g.drawSingleLineText (kSub, juce::roundToInt (x), juce::roundToInt (baseline));
+        g.drawSingleLineText (kTag, juce::roundToInt (x), juce::roundToInt (baseline + tf.getHeight() * 0.95f));
     }
 
 private:
-    static float wordHeight   (float h) { return h * 0.58f; }    // "TabbyEQ"
-    static float subHeight    (float h) { return h * 0.30f; }    // "Semantic EQ" (bottom line)
-    static float bylineHeight (float h) { return h * 0.21f; }    // "by Darwin's Cat" (top line)
+    static float catSize (float h) { return h * 0.72f; }
+    static float wordH   (float h) { return h * 0.40f; }    // "TabbyEQ"
+    static float tagH    (float h) { return h * 0.175f; }   // "by Darwin's Cat"
 
-    juce::Font font (float height) const { return tabby::brand::wordmarkFont (wordmarkTypeface, height); }
+    juce::Font wordFont (float h) const { return tabby::brand::wordmarkFont (wordmarkTypeface, wordH (h)); }
+    juce::Font tagFont  (float h) const { return tabby::brand::wordmarkFont (wordmarkTypeface, tagH (h)); }
 
     bool hover = false;
-    static constexpr int kGap = 7, kSubGap = 14, kPadR = 12;
-    const juce::String kWord   = "TabbyEQ";
-    const juce::String kSub    = "Semantic EQ";
-    const juce::String kByline = juce::String::fromUTF8 ("by Darwin\xe2\x80\x99s Cat");
+    static constexpr float kPadL = 10.0f, kGap = 9.0f, kPadR = 14.0f;
+    const juce::String kWord = "TabbyEQ";
+    const juce::String kTag  = juce::String::fromUTF8 ("by Darwin\xe2\x80\x99s Cat");
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HeaderBrand)
 };

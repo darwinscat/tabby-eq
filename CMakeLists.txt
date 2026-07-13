@@ -110,7 +110,8 @@ if(TABBYEQ_BUILD_PLUGIN OR TABBYEQ_BUILD_TESTS)
     # Embedded assets (BinaryData::*) — the Michroma wordmark font (OFL) for the header brand.
     # Every target that compiles PluginEditor.cpp links this (the plugin + the headless harnesses).
     juce_add_binary_data(TabbyEQData
-        SOURCES resources/fonts/Michroma-Regular.ttf)
+        SOURCES resources/fonts/Michroma-Regular.ttf
+                resources/brand/logo-darwinscat.svg)
 endif()
 
 # ----------------------------------------------------------------------------

@@ -225,7 +225,8 @@ private:
     LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
     LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
     CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
-    HeaderBrand    brand;                    // [stripe-cat mark] TabbyEQ · by Darwin's Cat / Semantic EQ → website
+    std::unique_ptr<juce::Drawable> catLogo; // Darwin's Cat mark (BinaryData SVG), drawn inside the blister
+    HeaderBrand    brand;                    // [cat] TabbyEQ · by Darwin's Cat blister → website
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
 
     // ---- bottom toolbar (FabFilter-style flat items; every popup opens upward) ----
