@@ -175,7 +175,7 @@ void TabbyEqEditor::syncViewFromState()
     // The analyzer settings ride the snapshot too (view state, suppressed writes — AnalyzerPanel).
     display.setAnalyzerShow  ((bool) proc.apvts.state.getProperty ("anaPre", false),
                               (bool) proc.apvts.state.getProperty ("anaPost", true));
-    display.setAnalyzerRange ((double) proc.apvts.state.getProperty ("anaRange", 96.0));
+    display.setAnalyzerRange ((double) proc.apvts.state.getProperty ("anaRange", 90.0));
     display.setAnalyzerSpeed ((int) proc.apvts.state.getProperty ("anaSpeed", 1));
     display.setAnalyzerTilt  ((double) proc.apvts.state.getProperty ("anaTilt", 4.5));
     refreshAnalyzerItem();
@@ -242,9 +242,11 @@ void TabbyEqEditor::showModeMenu()
 {
     const int   mode = juce::jlimit (0, 2, (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f));
     const int   q    = juce::jlimit (0, 4, (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f));
-    const int   kPct = juce::roundToInt (proc.apvts.getRawParameterValue ("phaseAmount")->load() * 10.0f) * 10;
+    const int   kPct = juce::roundToInt (proc.apvts.getRawParameterValue ("phaseAmount")->load() * 100.0f);
 
     // Natural blend as fixed steps (10..100; 0 is omitted — k=0 IS linear phase, the mode below).
+    // The checkmark demands an EXACT match: an off-grid k (host automation, e.g. 37) shows no tick
+    // rather than lying with the nearest decade — picking a "ticked" item must never change sound.
     juce::PopupMenu natural;
     for (int p = 10; p <= 100; p += 10)
         natural.addItem (100 + p / 10, juce::String (p), true, mode == 1 && kPct == p);
@@ -355,18 +357,25 @@ namespace
     private:
         void setProp (const juce::Identifier& id, const juce::var& v)
         {
+            // Value-guard BEFORE the suppress scope: an empty ScopedSuppress still flushes a
+            // pending edit burst on entry (the activeLane bug class) — re-picking the already-
+            // selected value must be a TRUE no-op.
+            if (proc.apvts.state.getProperty (id) == v)
+                { refreshValues(); return; }
             // View state, not an edit: suppressed — records no undo step. The editor's refresh
             // callback re-applies the state to the display and relabels the bottom-bar item.
-            const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
-            proc.apvts.state.setProperty (id, v, nullptr);
+            {
+                const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+                proc.apvts.state.setProperty (id, v, nullptr);
+            }
             if (onChanged) onChanged();
             refreshValues();
         }
 
         void refreshValues()
         {
-            const int range = (int) proc.apvts.state.getProperty ("anaRange", 96);
-            rangeVal.setButtonText (juce::String (range == 96 ? 90 : range) + " dB");
+            const int range = (int) proc.apvts.state.getProperty ("anaRange", 90);
+            rangeVal.setButtonText (juce::String (range) + " dB");
             static const char* speeds[] = { "Slow", "Medium", "Fast" };
             speedVal.setButtonText (speeds[juce::jlimit (0, 2, (int) proc.apvts.state.getProperty ("anaSpeed", 1))]);
             tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty ("anaTilt", 4.5), 1) + " dB/oct");
@@ -375,9 +384,9 @@ namespace
         void rangeMenu()
         {
             juce::PopupMenu m;
-            const int cur = (int) proc.apvts.state.getProperty ("anaRange", 96);
+            const int cur = (int) proc.apvts.state.getProperty ("anaRange", 90);
             for (const int v : { 60, 90, 120 })
-                m.addItem (v, juce::String (v) + " dB", true, cur == v || (v == 90 && cur == 96));
+                m.addItem (v, juce::String (v) + " dB", true, cur == v);
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rangeVal),
                 [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
                 { if (safe != nullptr && r > 0) safe->setProp ("anaRange", r); });
@@ -425,7 +434,14 @@ void TabbyEqEditor::showAnalyzerPanel()
         {
             if (safe != nullptr) { safe->syncViewFromState(); safe->refreshAnalyzerItem(); }
         });
-    juce::CallOutBox::launchAsynchronously (std::move (panel), anaItem.getScreenBounds(), nullptr);
+    // Parent the call-out to the editor, NOT the desktop (the VersionInfo pattern): the panel holds
+    // editor members by reference, so a desktop call-out surviving the editor would be a UAF the
+    // moment Freeze is clicked. As a child of the top-level editor it dies with the window.
+    if (auto* top = getTopLevelComponent())
+        juce::CallOutBox::launchAsynchronously (std::move (panel),
+                                                top->getLocalArea (&anaItem, anaItem.getLocalBounds()), top);
+    else
+        juce::CallOutBox::launchAsynchronously (std::move (panel), anaItem.getScreenBounds(), nullptr);
 }
 
 void TabbyEqEditor::refreshAnalyzerItem()
@@ -450,7 +466,9 @@ void TabbyEqEditor::showPresetMenu()
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetItem),
         [safe = juce::Component::SafePointer<TabbyEqEditor> (this), files] (int r)
         {
-            if (safe == nullptr || r == 0) return;
+            // Preset loads are history-consuming (fromTree/reset) — same gate as every nav path:
+            // a pick landing mid-drag (second input device) must be inert, not an engine misuse.
+            if (safe == nullptr || r == 0 || safe->historyNavBlocked()) return;
             if (r == 1) { safe->resetAll(); return; }             // "Default" = the reset, as a preset
             const auto f = files[r - 100];
             if (safe->proc.loadStateFile (f))                     // fresh clean history (setStateInformation path)
@@ -489,13 +507,18 @@ void TabbyEqEditor::doImportPreset()
         [safe = juce::Component::SafePointer<TabbyEqEditor> (this)] (const juce::FileChooser& fc)
         {
             const auto f = fc.getResult();
-            if (safe == nullptr || f == juce::File()) return;
+            if (safe == nullptr || f == juce::File() || safe->historyNavBlocked()) return;
             if (! safe->proc.loadStateFile (f))
                 return;                                           // not a TabbyEQ state — silently ignore
             // Import = load AND adopt: copy into the preset directory so it shows up in the menu.
-            const auto dest = TabbyEqAudioProcessor::presetDirectory()
-                                  .getChildFile (f.getFileNameWithoutExtension() + ".tabbyeq");
-            if (f != dest) f.copyFileTo (dest);
+            // Never clobber an existing preset of the same name — uniquify instead.
+            auto dest = TabbyEqAudioProcessor::presetDirectory()
+                            .getChildFile (f.getFileNameWithoutExtension() + ".tabbyeq");
+            if (f != dest)
+            {
+                if (dest.existsAsFile()) dest = dest.getNonexistentSibling();
+                f.copyFileTo (dest);
+            }
             safe->currentPresetName = dest.getFileNameWithoutExtension();
             safe->presetItem.setButtonText (safe->currentPresetName);
             safe->afterHistoryNav();
@@ -598,7 +621,9 @@ void TabbyEqEditor::showViewMenu()
 
 void TabbyEqEditor::toggleFullscreen()
 {
-    if (! juce::JUCEApplicationBase::isStandaloneApp()) return;   // don't kiosk a DAW's window
+    // Don't kiosk a DAW's window — and gate on wrapperType, the AUTHORITATIVE check: this also
+    // covers the canvas 'f' key path (isStandaloneApp() lied inside Cubase's wrapper).
+    if (proc.wrapperType != juce::AudioProcessor::wrapperType_Standalone) return;
     auto& d = juce::Desktop::getInstance();
     if (d.getKioskModeComponent() != nullptr) d.setKioskModeComponent (nullptr);          // exit
     else if (auto* top = getTopLevelComponent()) d.setKioskModeComponent (top, false);    // enter (borderless)
@@ -606,6 +631,7 @@ void TabbyEqEditor::toggleFullscreen()
 
 void TabbyEqEditor::resetAll()
 {
+    if (historyNavBlocked()) return;   // reset() asserts on an open gesture — same gate as every nav path
     // Suppressed (Oleh's call): Reset is a programmatic bulk write and records NO undo step — the
     // writes apply, the settle baseline absorbs them, and earlier history still walks back past the
     // reset. (The alternative — a "Reset All" gesture bracket making the reset itself one undoable

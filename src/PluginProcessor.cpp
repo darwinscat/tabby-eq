@@ -656,10 +656,12 @@ bool TabbyEqAudioProcessor::saveStateFile (const juce::File& f)
 
 bool TabbyEqAudioProcessor::loadStateFile (const juce::File& f)
 {
-    // Accept a flat preset OR a full <Workspace> export — both route through setStateInformation,
-    // so every validation/migration rule holds for file input exactly as for host blobs.
+    // Presets are FLAT live-state trees only — a <Workspace> session dump is NOT a preset (it
+    // would smuggle four compare registers through a path labelled "preset", and its engine-side
+    // rejection would be invisible here). The flat route through setStateInformation keeps every
+    // validation/migration rule identical to host blobs, and cannot be rejected past this check.
     const auto xml = juce::XmlDocument::parse (f);
-    if (xml == nullptr || ! (xml->hasTagName (apvts.state.getType()) || xml->hasTagName ("Workspace")))
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
         return false;
     juce::MemoryBlock mb;
     copyXmlToBinary (*xml, mb);

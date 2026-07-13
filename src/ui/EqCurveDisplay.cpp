@@ -91,7 +91,7 @@ eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
     const eqview::PlotMap pm { .width = (float) getWidth(), .height = (float) getHeight(),
                                .plotBottom = (float) plotBottomY(),
                                .freqMin = kFreqMin, .freqMax = kFreqMax, .dbRange = gainRange,
-                               .specTop = kSpecTop, .specBottom = kSpecTop - anaRange };   // Range preset sets the span
+                               .specTop = kSpecTop, .specBottom = -anaRange };   // Range preset = the -range dBFS floor
     // The unit test can't see THIS wiring (it hand-builds maps) — so sanity-pin it here, debug-only:
     // a scrambled field mapping trips on the first paint instead of silently moving pixels.
     // plotBottom may legally EXCEED a sub-40px height (plotBottomY floors at 40 — collapse/mid-layout
@@ -594,11 +594,15 @@ void EqCurveDisplay::pushSpectrum()
         if (proc.pullSpectrum (true, analyzerPrePane.frameInput())) analyzerPrePane.ingest();
         else                                                        analyzerPrePane.starve();
     }
-    if (showAnaPost)
-    {
+    else
+        (void) proc.pullSpectrum (true, tapDrain.data());    // keep the hidden tap fresh: an unpulled
+    if (showAnaPost)                                         // tap holds its frame, so re-enabling
+    {                                                        // would first show STALE audio
         if (proc.pullSpectrum (false, analyzer.frameInput())) analyzer.ingest();
         else                                                  analyzer.starve();
     }
+    else
+        (void) proc.pullSpectrum (false, tapDrain.data());
 }
 
 void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept

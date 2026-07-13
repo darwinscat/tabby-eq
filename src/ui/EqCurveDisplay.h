@@ -171,6 +171,7 @@ private:
     // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
     eqview::SpectrumPane analyzer;          // post-EQ pane (primary, coloured)
     eqview::SpectrumPane analyzerPrePane;   // pre-EQ pane (dimmed grey, drawn behind)
+    std::array<float, eqview::SpectrumPane::fftSize> tapDrain {};   // discard buffer for HIDDEN taps (see pushSpectrum)
 
     // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
     // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().
@@ -199,7 +200,8 @@ private:
     bool   showAnaPost = true;                      // draw the post-EQ spectrum (coloured)
     bool   anaFrozen   = false;                     // hold the panes (no pulls -> spectra stand still)
     double anaTilt     = kTiltDbPerOct;             // display tilt, dB/oct around kTiltPivotHz
-    double anaRange    = kSpecTop - kSpecBottom;    // vertical spectrum span in dB (60/90/120 presets)
+    double anaRange    = -kSpecBottom;              // spectrum RANGE preset: the floor is -range dBFS
+                                                    // (default 90 == the classic -90 floor exactly)
     bool perBandColors = true;                      // each band a fixed distinct colour (else by type)
     bool perBandCurves = true;                      // draw each band's own faint colour curve
     bool perBandFill   = false;                     // fill under each band's curve (off by default)

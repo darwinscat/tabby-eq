@@ -576,6 +576,12 @@ int main()
         check (! p2.loadStateFile (foreign), "19: a foreign XML file is rejected");
         check (std::abs (rv (p2, probeId()) - 5000.0f) < 1e-3f, "19: a rejected file changes nothing");
 
+        // A full <Workspace> session dump is NOT a preset: it would smuggle four compare registers
+        // through a path labelled "preset", and its engine-side rejection would be invisible here.
+        const auto ws = dir.getChildFile ("session.tabbyeq");
+        ws.replaceWithText ("<Workspace schema=\"1\" count=\"4\" active=\"0\"><Live><PARAMS/></Live></Workspace>");
+        check (! p2.loadStateFile (ws), "19: a <Workspace> session dump is rejected (presets are flat trees only)");
+
         dir.deleteRecursively();
     }
 
