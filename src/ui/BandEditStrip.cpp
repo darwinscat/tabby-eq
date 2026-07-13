@@ -64,8 +64,27 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setupField (q);
     setupField (gain);
 
-    freq.onDragEnd = [this] { if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
-    gain.onDragEnd = [this] { if (onEdited) onEdited(); };
+    // A MOUSE bar drag = ONE labelled undo step (grab = begin, release = end): mid-drag pauses
+    // never fragment it into settle bursts, and the editor's key-navigation gate covers the open
+    // bracket. NB JUCE fires onDragStart/onDragEnd for wheel notches, typed entry and double-click
+    // too (each wrapped in its own ScopedDragNotification) — bracketing those would record one
+    // undo step PER WHEEL NOTCH, so the bracket opens only while the mouse button is actually
+    // down; everything else coalesces through the settle timer as before.
+    auto bracket = [this] (juce::Slider& s, const char* what)
+    {
+        auto open = std::make_shared<bool> (false);
+        s.onDragStart = [this, &s, what, open]
+        {
+            if (! s.isMouseButtonDown()) return;
+            *open = true;
+            proc.beginHistoryGesture (juce::String (what) + " Band " + juce::String (curBand + 1));
+        };
+        return open;
+    };
+    const auto freqOpen = bracket (freq, "Freq"), qOpen = bracket (q, "Q"), gainOpen = bracket (gain, "Gain");
+    freq.onDragEnd = [this, freqOpen] { if (*freqOpen) { *freqOpen = false; proc.endHistoryGesture(); } if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
+    q.onDragEnd    = [this, qOpen]    { if (*qOpen)    { *qOpen    = false; proc.endHistoryGesture(); } };
+    gain.onDragEnd = [this, gainOpen] { if (*gainOpen) { *gainOpen = false; proc.endHistoryGesture(); } if (onEdited) onEdited(); };
 
     addMouseListener (this, true);    // also receive child mouse events for the hover-engagement logic
 

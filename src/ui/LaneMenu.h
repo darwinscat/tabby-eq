@@ -262,6 +262,12 @@ namespace tabby::lanemenu
 
             auto& p = ctx->proc; const int b = ctx->band;
 
+            // One lane-menu action = ONE labelled undo step. Without the bracket, the row's multi-
+            // param sequences fragment: setBandActiveLane's suppress scope flushes the pending burst
+            // mid-sequence (e.g. a first split became "lane params" + "link defaults" as two steps).
+            // Inside a gesture the suppress neither flushes nor reseeds — the whole row is one step.
+            const TabbyEqAudioProcessor::ScopedHistoryGesture sg (p, "Lanes Band " + juce::String (b + 1));
+
             if (e.mods.isAltDown())                                            // make-only-lane (stays single)
             {
                 if (! laneOn (p, b, L))
@@ -368,6 +374,10 @@ namespace tabby::lanemenu
 
         void mouseUp (const juce::MouseEvent&) override
         {
+            // One link toggle (including its convergence snap) = ONE labelled undo step.
+            const TabbyEqAudioProcessor::ScopedHistoryGesture sg (ctx->proc,
+                (isFreq ? "Link FQ Band " : "Link Q Band ") + juce::String (ctx->band + 1));
+
             const bool v = ! effectiveLink (ctx->proc, ctx->band, prop(), isFreq ? "defaultLinkFq" : "defaultLinkQ");
             // Snap BEFORE raising the flag: with the link still off, the snap writes aren't re-mirrored
             // by the processor's drain (pure single writes), and the flag only ever goes true over an

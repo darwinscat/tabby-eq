@@ -66,7 +66,8 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     gainScaleCombo.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (gainScaleCombo);
     gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
-    setGainRange ((double) proc.apvts.state.getProperty ("gainRange", 12.0), false);   // restore saved scale (no re-persist)
+    setGainRange ((double) proc.apvts.state.getProperty ("gainRangeLive",              // restore the VISIBLE scale (auto-fit
+                      proc.apvts.state.getProperty ("gainRange", 12.0)), false);       // included), like the post-apply re-sync
     { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
       for (int b = 0; b < tabby::kNumBands; ++b) if (traces.param (b).on)
           for (int L = 0; L < teq::kNumLanes; ++L) if (traces.param (b).lanes[L].on) mx = juce::jmax (mx, std::abs (traces.param (b).lanes[L].gainDb));
@@ -295,6 +296,7 @@ void EqCurveDisplay::endDragGesture()
             if (draggingGain)
                 if (auto* gp = proc.apvts.getParameter (laneParamId (draggingBand, draggingLane, "gain"))) gp->endChangeGesture();
         }
+        proc.endHistoryGesture();   // commit the drag as its ONE labelled undo step (balanced with mouseDown)
     }
     if (momentarySolo) { proc.setSoloBand (prevSoloBand); momentarySolo = false; }   // release momentary solo
     pressBand    = -1;
@@ -502,11 +504,25 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
     for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
     gainRange = snapped;
-    proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range, persist or not —
-                                                                          // the lane menu's split-delta reads what
-                                                                          // the user actually SEES (auto-fit included)
+    // Value-equality FIRST, suppress scope second: even an empty suppress scope flushes a pending
+    // edit burst on entry, so a same-value call (the post-apply re-sync runs this every time) must
+    // return before ever opening the scope — the exact bug class the activeLane guard fixed. The
+    // comparison also normalizes a String-typed post-load property without a "changed" write.
+    const bool liveDiffers    = std::abs ((double) proc.apvts.state.getProperty ("gainRangeLive", -1.0e9) - gainRange) > 1.0e-6;
+    const bool persistDiffers = persist && std::abs ((double) proc.apvts.state.getProperty ("gainRange", -1.0e9) - gainRange) > 1.0e-6;
     gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
-    if (persist) proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    if (liveDiffers || persistDiffers)
+    {
+        // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —
+        // unsuppressed, every zoom would settle into a junk "Parameter Change" step and Cmd+Z after
+        // zooming would revert... the zoom. The properties still ride the snapshot for save/registers.
+        const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+        if (liveDiffers)
+            proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range — the lane menu's
+                                                                                  // split-delta reads what the user SEES
+        if (persistDiffers)
+            proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    }
     positionToolbar();   // dbToY changed → node/strip positions moved
     repaint();
 }
@@ -523,6 +539,12 @@ void EqCurveDisplay::refreshAfterLaneEdit()
     if (selBand >= 0)
     {
         if (! traces.param (selBand).on) { selectBand (-1); repaint(); return; }
+        // Adopt the STATE's active lane (state → UI). After an undo/switch/load the restored
+        // property is authoritative — re-firing the display's CACHED lane would push it back into
+        // the fresh snapshot as a suppressed forward move, clearing the just-built redo (crew P1).
+        const int stateLane = (int) proc.apvts.state.getProperty (tabby::bandId (selBand, "activeLane"), selLane);
+        if (stateLane >= 0 && stateLane < teq::kNumLanes && laneOn (selBand, stateLane))
+            selLane = stateLane;
         if (! laneOn (selBand, selLane))
             for (int L = 0; L < teq::kNumLanes; ++L) if (laneOn (selBand, L)) { selLane = L; break; }
         if (onBandSelected) onBandSelected (selBand, selLane);   // re-bind the strip to the current band/lane
@@ -1012,6 +1034,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
         if (! traces.param (b).on)
         {
             const auto ft = tabby::filterTypeFromChoice (typeIndex);
+            proc.beginHistoryGesture ("Add Band " + juce::String (b + 1));  // the whole multi-param birth = ONE undo step
             setParamGestured (tabby::bandId (b, "type"), typeIndex);        // shared point type
             // A fresh band is an unsplit ST lane. Force the split lanes off (a vacated slot may carry stale
             // on flags), and edit the ST lane's fields.
@@ -1030,6 +1053,7 @@ void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int sl
             proc.apvts.state.removeProperty (tabby::bandId (b, "linkFq"), nullptr);
             proc.apvts.state.removeProperty (tabby::bandId (b, "linkQ"),  nullptr);
             setParamGestured (tabby::bandId (b, "on"), 1.0);               // point on
+            proc.endHistoryGesture();
             selectBand (b);
             return;
         }
@@ -1152,6 +1176,12 @@ void EqCurveDisplay::smartAdd (juce::Point<float> at)
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 {
+    // A second input source (touch/pen) landing mid-drag must not nest a second grab: it would
+    // overwrite the drag state and leak the outer history gesture + the host change-gestures.
+    if (draggingBand >= 0 || placing)
+        return;
+    dragSourceIndex = e.source.getIndex();   // whoever grabs owns the drag (see mouseDrag/mouseUp)
+
     refreshDesigns();
     const Hit  hit  = nodeAt (e.position);
     const int  b    = hit.band;
@@ -1184,7 +1214,12 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             m.addItem (100, "Remove band");
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, lane] (int r) {
                 if (safe == nullptr || r <= 0 || r >= 1000) return;                     // ignore the lane rows' own ids
-                if (r == 100) safe->setParamGestured (tabby::bandId (b, "on"), 0.0);    // remove the whole band (point off)
+                if (r == 100)                                                            // remove the whole band (point off)
+                {
+                    safe->proc.beginHistoryGesture ("Remove Band " + juce::String (b + 1));   // one labelled step
+                    safe->setParamGestured (tabby::bandId (b, "on"), 0.0);
+                    safe->proc.endHistoryGesture();
+                }
                 else if (r <= 9)
                 {
                     const int oldChoice = (int) std::lround (safe->proc.apvts.getRawParameterValue (tabby::bandId (b, "type"))->load());
@@ -1248,6 +1283,8 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
             whiskerSlope = slopeWhisker (selType);   // HP/LP + Notch step the discrete slope; others set Q
             if (auto* prm = proc.apvts.getParameter (laneParamId (selBand, selLane, whiskerSlope ? "slope" : "q")))
                 prm->beginChangeGesture();
+            // The whole whisker drag = ONE undo step (closed in endDragGesture).
+            proc.beginHistoryGesture ((whiskerSlope ? "Slope Band " : "Q Band ") + juce::String (selBand + 1));
             lastDragFreq = (float) traces.param (selBand).lanes[(size_t) selLane].freq;
             grabKeyboardFocus();
             if (e.mods.isAltDown()) driveAudition (true, lastDragFreq, audQSetting);
@@ -1280,6 +1317,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         const auto& lp = traces.param (pb).lanes[(size_t) pl];
         const auto  lt = traces.param (pb).type;                                    // shared point type
         pressBand = pb; pressPos = e.position; pressMs = juce::Time::getMillisecondCounter(); pressMoved = false;
+        // The whole node drag = ONE undo step — the killer use case the history gestures exist for
+        // (grab = begin, release = end in endDragGesture; link mirrors fold in via the bracket drain).
+        proc.beginHistoryGesture ("Move Band " + juce::String (pb + 1));
         if (auto* fp = proc.apvts.getParameter (laneParamId (pb, pl, "freq"))) fp->beginChangeGesture();
         draggingGain = hasGain (lt);
         if (draggingGain)
@@ -1296,6 +1336,9 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 
 void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 {
+    if ((draggingBand >= 0 || placing) && e.source.getIndex() != dragSourceIndex)
+        return;   // only the source that grabbed may move the drag (multi-touch)
+
     if (placing)   // press-drag placement: gain follows Y, freq follows X; preview only (commit on release)
     {
         placePos = e.position;
@@ -1353,6 +1396,9 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
 
 void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
 {
+    if ((draggingBand >= 0 || placing) && e.source.getIndex() != dragSourceIndex)
+        return;   // a second source's release must not end (or commit) another source's drag
+
     driveAudition (false);   // stop any drag-audition
     if (placing)   // release inside -> commit the previewed band; outside -> cancel
     {
@@ -1384,15 +1430,26 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         if (placing) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
     }
 
+    // Selection / edit hotkeys are inert while ANY history gesture is open (a node/whisker drag
+    // here, or a slider-bar drag anywhere): stepping the selection or nudging params would fold
+    // foreign edits into the open gesture's snapshot, and Delete mid-drag would nest "Remove Band"
+    // inside a step labelled "Move Band" (crew round).
+    const bool midDrag = isDragActive() || proc.historyGestureOpen();
+
     // Alt + Left/Right steps the band selection (and picks the first band if none is selected yet).
-    if (alt && code == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }
-    if (alt && code == juce::KeyPress::rightKey) { stepSelection (+1); return true; }
+    if (alt && code == juce::KeyPress::leftKey)  { if (! midDrag) stepSelection (-1); return true; }
+    if (alt && code == juce::KeyPress::rightKey) { if (! midDrag) stepSelection (+1); return true; }
 
     if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
     {
+        if (midDrag)
+            return true;   // every selected-node hotkey (arrows, Alt+Up/Down, Delete) is inert mid-gesture
+
         if (code == juce::KeyPress::backspaceKey || code == juce::KeyPress::deleteKey)
         {
+            proc.beginHistoryGesture ("Remove Band " + juce::String (selBand + 1));   // one labelled step
             setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
+            proc.endHistoryGesture();
             selectBand (-1);
             return true;
         }

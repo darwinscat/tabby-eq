@@ -45,6 +45,19 @@ public:
     bool keyPressed       (const juce::KeyPress&) override;   // Esc cancels an in-progress add-drag
     void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
+    // A node/whisker drag (an open history gesture) or a "+"-placement drag is in flight — the
+    // editor gates history NAVIGATION on this (undo/switch mid-drag is the engine's misuse path).
+    bool isDragActive() const noexcept { return draggingBand >= 0 || placing; }
+
+    // Set the visible dB scale + sync combo/state (public: the editor re-applies the snapshot's
+    // saved scale after every history apply — see syncViewFromState).
+    void setGainRange (double r, bool persist = true);
+
+    // Balance any open begin/endChangeGesture + close the node drag's history gesture — from
+    // mouseUp, this dtor, AND the editor's dtor (which must close the node drag BEFORE force-
+    // closing leftover slider brackets, so nothing double-ends).
+    void endDragGesture();
+
     // Set by the editor: fires when the selected band/lane changes (-1 = none). Drives the edit strip.
     std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
     std::function<void()>    onToggleFullscreen;   // 'f' pressed — editor toggles real fullscreen
@@ -121,7 +134,6 @@ private:
     int    collectNodesAt (juce::Point<float> p, Hit* out, int maxOut) const noexcept;   // all nodes within grab radius
     void   setParam (const juce::String& id, double value);
     void   setParamGestured (const juce::String& id, double value);   // begin+set+end (one-shot UI edits)
-    void   endDragGesture();   // balance any open begin/endChangeGesture — from mouseUp AND the dtor
     void   addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex = -1);   // enable the first free band
     void   smartAdd (juce::Point<float> at);   // add with a smart default type (grid 3x2 -> see predictAdd)
 
@@ -140,7 +152,6 @@ private:
     juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
     juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
-    void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())
@@ -156,6 +167,7 @@ private:
     eqview::TraceSet traces;
 
     int  draggingBand = -1;
+    int  dragSourceIndex = -1;   // the input source that owns the current drag/placement (multi-touch filter)
     int  draggingLane = 0;       // the placement lane of the node being dragged (0..4)
     bool draggingGain = false;
     double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
