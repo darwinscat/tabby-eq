@@ -144,7 +144,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     setWantsKeyboardFocus (true);             // ⌘Z/⇧⌘Z, 1-4, ⌘C/⌘V — see keyPressed()
     setResizable (true, true);
-    setResizeLimits (640, 360, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
+    setResizeLimits (760, 360, 7680, 4320);   // min width holds the centred top-bar group; maximise to any display
     setSize (860, 500);
 
     startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
@@ -657,49 +657,38 @@ void TabbyEqEditor::resized()
 
     auto r   = getLocalBounds();
     auto top = r.removeFromTop (kBarH);                 // the flat band for everything EXCEPT the brand blister
-    const int W      = getWidth();
-    const int brandW = brand.preferredWidth (kBlisterH);
 
-    // Right-side chrome first (fixed): (i) / gear / fullscreen, then Save / Import / Export.
+    // Right corner (pinned, never moves): gear · (i) · fullscreen. Removed right-to-left so they
+    // read gear → (i) → full left-to-right.
     if (fullBtn.isVisible())
         fullBtn.setBounds (top.removeFromRight (26).reduced (2, 4));    // fullscreen — the very corner (standalone)
-    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear
     infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i)
-    exportItem.setBounds (top.removeFromRight (50).reduced (2, 4));
-    importItem.setBounds (top.removeFromRight (50).reduced (2, 4));
-    saveItem.setBounds (top.removeFromRight (42).reduced (2, 4));
+    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear
+    top.removeFromRight (4);
+    const int bandRight = top.getRight();              // the group centres in [0 .. bandRight]
 
-    // Transport = undo/redo + A/B/C/D, one visual block. In a WIDE window the blister floats to the
-    // window centre (FabFilter); the transport then moves to the far left. In a NARROW window (the
-    // default) the blister anchors left and the transport sits right after it. The default 860px is
-    // narrow — the blister only floats to centre once the window is genuinely wide.
-    constexpr int kWideThreshold = 1200;
-    const int  centredX = (W - brandW) / 2;
-    const bool wide     = W >= kWideThreshold && centredX + brandW <= top.getRight() - 100;
+    // ONE contiguous group — [cat + TabbyEQ blister] · undo/redo · A/B/C/D · preset · Save/Import/
+    // Export — that stays TOGETHER and floats to the centre of the free band (FabFilter). The logo
+    // and the buttons never separate; the flexible margins on both sides keep the group centred.
+    const int brandW = brand.preferredWidth (kBlisterH);
+    constexpr int undoW = 22, redoW = 22, tGap = 6, abcdW = 26, gGap = 14;
+    constexpr int presetW = 104, saveW = 42, importW = 50, exportW = 50;
+    const int groupW = brandW + undoW + redoW + tGap + TabbyEqAudioProcessor::kNumSnapshots * abcdW
+                     + gGap + presetW + saveW + importW + exportW;
 
-    auto placeTransport = [this] (juce::Rectangle<int>& band)
-    {
-        undoBtn.setBounds (band.removeFromLeft (24).reduced (2, 5));
-        redoBtn.setBounds (band.removeFromLeft (24).reduced (2, 5));
-        band.removeFromLeft (6);
-        for (auto& b : snapBtn)
-            b.setBounds (band.removeFromLeft (26).reduced (2, 5));
-    };
+    int x = juce::jmax (6, (bandRight - groupW) / 2);   // centred; clamps to a small left margin if it won't fit
+    const auto barItem = [&x] (juce::Component& c, int w, int vInset) { c.setBounds (x, vInset, w, kBarH - 2 * vInset); x += w; };
 
-    if (wide)
-    {
-        brand.setBounds (centredX, 0, brandW, kBlisterH);   // centred, protruding
-        placeTransport (top);                               // far left
-        auto presetCol = top.withLeft (brand.getRight() + 8);   // preset centres to the RIGHT of the blister
-        presetItem.setBounds (presetCol.reduced (8, 4));
-    }
-    else
-    {
-        brand.setBounds (0, 0, brandW, kBlisterH);          // anchored left, protruding
-        top.removeFromLeft (brandW);                        // reserve the blister's footprint in the bar
-        placeTransport (top);
-        presetItem.setBounds (top.reduced (8, 4));          // name centred in the remaining middle
-    }
+    brand.setBounds (x, 0, brandW, kBlisterH);          x += brandW;   // the blister protrudes; the rest sit in the bar
+    barItem (undoBtn, undoW, 5);
+    barItem (redoBtn, redoW, 5);
+    x += tGap;
+    for (auto& b : snapBtn) barItem (b, abcdW, 5);
+    x += gGap;
+    barItem (presetItem, presetW, 4);
+    barItem (saveItem,   saveW,   4);
+    barItem (importItem, importW, 4);
+    barItem (exportItem, exportW, 4);
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
     // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE
