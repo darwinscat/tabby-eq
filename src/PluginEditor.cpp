@@ -378,11 +378,12 @@ void TabbyEqEditor::resized()
     viewButton.setBounds (top.removeFromRight (52).reduced (4, 3));
     resetButton.setBounds (top.removeFromRight (52).reduced (4, 3));
     fullButton.setBounds (top.removeFromRight (46).reduced (4, 3));
-    corrMeter.setBounds (top.removeFromLeft (100).reduced (8, 2));   // middle-left of the top bar
-    for (auto& b : snapBtn)                                          // A/B/C/D registers, after the meter
+    corrMeter.setBounds (top.removeFromLeft (96).reduced (8, 2));    // middle-left of the top bar
+    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // undo/redo arrows LEFT of A/B/C/D —
+    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // one visual block with the registers,
+    top.removeFromLeft (6);                                          // separated by a slim gap
+    for (auto& b : snapBtn)                                          // A/B/C/D registers
         b.setBounds (top.removeFromLeft (26).reduced (2, 5));
-    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // undo/redo arrows, right beside A/B/C/D
-    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
     //  it used to occupy is reserved for the upcoming Helper.)

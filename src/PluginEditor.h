@@ -27,7 +27,7 @@ public:
 
         const auto  b   = getLocalBounds().toFloat();
         const auto  c   = b.getCentre();
-        const float rad = juce::jmin (b.getWidth(), b.getHeight()) * 0.30f;
+        const float rad = juce::jmin (b.getWidth(), b.getHeight()) * 0.26f;
 
         // A 3/4 arc, clockwise from lower-left past 12 o'clock, with a tangent-aligned arrowhead
         // at the end — the classic "redo" shape; undo is its mirror.
@@ -50,7 +50,7 @@ public:
         }
 
         g.setColour (findColour (juce::TextButton::textColourOffId).withAlpha (isEnabled() ? 1.0f : 0.35f));
-        g.strokePath (arc, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.strokePath (arc, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         g.fillPath (head);
     }
 
