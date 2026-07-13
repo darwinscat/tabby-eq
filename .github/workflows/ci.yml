@@ -77,8 +77,8 @@ jobs:
           -DTABBYEQ_BUILD_CORE_TESTS=OFF
           -DTABBYEQ_ENABLE_SANITIZERS=ON
 
-      - name: Build the adapter lifecycle/misuse + schema/migration tests
-        run: cmake --build build-san --target TabbyEQ_LifecycleTest TabbyEQ_AdapterTest -j
+      - name: Build the adapter lifecycle/misuse + schema/migration + history tests
+        run: cmake --build build-san --target TabbyEQ_LifecycleTest TabbyEQ_AdapterTest TabbyEQ_HistoryTest -j
 
       - name: Test
         env:
