@@ -101,11 +101,11 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // params through the timer poll, so host automation moves it too.
     modeItem.onClick   = [this] { showModeMenu(); };
     presetItem.onClick = [this] { showPresetMenu(); };
-    saveItem.onClick   = [this] { doSavePreset(); };
-    importItem.onClick = [this] { doImportPreset(); };
-    exportItem.onClick = [this] { doExportPreset(); };
+    saveItem.onClick   = [this] { doSavePreset(); };    saveItem.setTooltip ("Save preset");
+    importItem.onClick = [this] { doImportPreset(); };  importItem.setTooltip ("Import preset…");
+    exportItem.onClick = [this] { doExportPreset(); };  exportItem.setTooltip ("Export preset…");
     anaItem.onClick    = [this] { showAnalyzerPanel(); };
-    for (auto* it : { &modeItem, &presetItem, &saveItem, &importItem, &exportItem, &anaItem })
+    for (juce::Component* it : std::initializer_list<juce::Component*> { &modeItem, &presetItem, &saveItem, &importItem, &exportItem, &anaItem })
         addAndMakeVisible (*it);
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
@@ -677,12 +677,17 @@ void TabbyEqEditor::resized()
     // and the buttons never separate; the flexible margins on both sides keep the group centred.
     const int brandW = brand.preferredWidth (kBlisterH);
     constexpr int undoW = 22, redoW = 22, tGap = 6, abcdW = 26, gGap = 14;
-    constexpr int presetW = 104, saveW = 42, importW = 50, exportW = 50;
+    constexpr int presetW = 104, saveW = 26, importW = 26, exportW = 26;   // save/import/export are icons now
     const int groupW = brandW + undoW + redoW + tGap + TabbyEqAudioProcessor::kNumSnapshots * abcdW
                      + gGap + presetW + saveW + importW + exportW;
 
-    int x = juce::jmax (0, (bandRight - groupW) / 2);   // centred; hits the left edge at the minimum width
-    brand.setLeftFlush (x <= 3);                        // flush left → the left skirt disappears, straight cut
+    // The whole group floats to the centre of the free band; as the window narrows it slides left.
+    // It may slide PAST x=0 (negative) — but only until the CAT's left edge reaches a small margin;
+    // the blister then keeps sliding its left skirt OFF-SCREEN (the window clips it into a straight
+    // rectangular cut) with NO content jump. The cat never crosses the window edge.
+    constexpr int kCatMargin = 4;
+    const int xMin = kCatMargin - (int) HeaderBrand::contentLeftOffset();   // blister left when the cat butts the edge
+    int x = juce::jmax (xMin, (bandRight - groupW) / 2);
     const auto barItem = [&x] (juce::Component& c, int w, int vInset) { c.setBounds (x, vInset, w, kBarH - 2 * vInset); x += w; };
 
     brand.setBounds (x, 0, brandW, kBlisterH);          x += brandW;   // the blister protrudes; the rest sit in the bar
@@ -692,9 +697,10 @@ void TabbyEqEditor::resized()
     for (auto& b : snapBtn) barItem (b, abcdW, 5);
     x += gGap;
     barItem (presetItem, presetW, 4);
-    barItem (saveItem,   saveW,   4);
-    barItem (importItem, importW, 4);
-    barItem (exportItem, exportW, 4);
+    x += 6;                               // a touch of air between the preset name and the icon trio
+    barItem (saveItem,   saveW,   2);
+    barItem (importItem, importW, 2);
+    barItem (exportItem, exportW, 2);
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
     // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE

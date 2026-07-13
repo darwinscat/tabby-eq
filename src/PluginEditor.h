@@ -90,19 +90,66 @@ private:
 class GlyphButton final : public juce::Button
 {
 public:
-    enum class Glyph { Gear, Fullscreen };
+    enum class Glyph { Gear, Fullscreen, Save, Import, Export };
     explicit GlyphButton (Glyph g) : juce::Button ({}), glyph (g) {}
 
     void paintButton (juce::Graphics& g, bool highlighted, bool) override
     {
         g.setColour ((highlighted ? tabby::palette::text() : tabby::palette::textDim())
                          .withAlpha (isEnabled() ? 1.0f : 0.4f));
-        const auto b = getLocalBounds().toFloat().reduced (4.5f);
-        if (glyph == Glyph::Gear) drawGear (g, b);
-        else                      drawBrackets (g, b);
+        const auto b = getLocalBounds().toFloat().reduced (5.0f);
+        switch (glyph)
+        {
+            case Glyph::Gear:       drawGear (g, b);        break;
+            case Glyph::Fullscreen: drawBrackets (g, b);    break;
+            case Glyph::Save:       drawFloppy (g, b);      break;
+            case Glyph::Import:     drawTrayArrow (g, b, true);  break;   // arrow INTO the tray
+            case Glyph::Export:     drawTrayArrow (g, b, false); break;   // arrow OUT of the tray
+        }
     }
 
 private:
+    // Save = a floppy disk (rounded body, clipped top-right corner, a top shutter + a bottom label).
+    static void drawFloppy (juce::Graphics& g, juce::Rectangle<float> b)
+    {
+        const float w = b.getWidth(), h = b.getHeight(), cut = w * 0.26f;
+        juce::Path body;
+        body.startNewSubPath (b.getX(), b.getY());
+        body.lineTo (b.getRight() - cut, b.getY());
+        body.lineTo (b.getRight(), b.getY() + cut);
+        body.lineTo (b.getRight(), b.getBottom());
+        body.lineTo (b.getX(), b.getBottom());
+        body.closeSubPath();
+        g.strokePath (body, juce::PathStrokeType (1.3f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+        g.fillRect (b.getX() + w * 0.30f, b.getY(), w * 0.30f, h * 0.30f);                          // top shutter
+        g.drawRect (b.getX() + w * 0.24f, b.getBottom() - h * 0.42f, w * 0.52f, h * 0.42f, 1.0f);   // label
+    }
+
+    // Import/Export = an open tray with an arrow going IN (down) or OUT (up).
+    static void drawTrayArrow (juce::Graphics& g, juce::Rectangle<float> b, bool into)
+    {
+        const float w = b.getWidth(), h = b.getHeight();
+        const float ty = b.getBottom(), th = h * 0.34f;   // open tray at the bottom
+        juce::Path tray;
+        tray.startNewSubPath (b.getX(), ty - th);
+        tray.lineTo (b.getX(), ty);
+        tray.lineTo (b.getRight(), ty);
+        tray.lineTo (b.getRight(), ty - th);
+        g.strokePath (tray, juce::PathStrokeType (1.3f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+
+        const float ax = b.getCentreX();
+        const float top = b.getY() + h * 0.04f;
+        const float bot = ty - th - h * 0.14f;             // just above the tray
+        const float hy  = into ? bot : top;                // arrowhead tip
+        const float hd  = into ? -1.0f : 1.0f;             // head opens upward (into) / downward (out)
+        g.drawLine (ax, top, ax, bot, 1.3f);               // shaft
+        juce::Path head;
+        head.startNewSubPath (ax - w * 0.20f, hy + hd * h * 0.20f);
+        head.lineTo (ax, hy);
+        head.lineTo (ax + w * 0.20f, hy + hd * h * 0.20f);
+        g.strokePath (head, juce::PathStrokeType (1.3f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+    }
+
     static void drawGear (juce::Graphics& g, juce::Rectangle<float> b)
     {
         const auto  c = b.getCentre();
@@ -149,10 +196,15 @@ public:
         const auto  bb   = brand.getBounds();
         const float ly   = HeaderBrand::kLineY();
         const float yMax = (float) bb.getBottom() - 1.0f;   // the blister's plateau depth
+        // One continuous line. When the blister has slid its left edge OFF-SCREEN (bb.getX() < 0),
+        // start the path at the blister's (negative) left edge so the dip is uninterrupted — the
+        // window clips the off-screen part into a straight rectangular cut. Otherwise the far-left
+        // flat run starts at the window edge.
         juce::Path p;
-        p.startNewSubPath (0.0f, ly);
-        p.lineTo ((float) bb.getX(), ly);                    // flat, left of the blister
-        HeaderBrand::appendBottomLine (p, (float) bb.getX(), (float) bb.getWidth(), ly, yMax, brand.isLeftFlush());
+        p.startNewSubPath ((float) juce::jmin (0, bb.getX()), ly);
+        if (bb.getX() > 0)
+            p.lineTo ((float) bb.getX(), ly);                // flat, left of the blister
+        HeaderBrand::appendBottomLine (p, (float) bb.getX(), (float) bb.getWidth(), ly, yMax);
         p.lineTo ((float) getWidth(), ly);                   // flat, right of the blister
         g.setColour (juce::Colours::white.withAlpha (0.07f));
         g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved));
@@ -269,7 +321,9 @@ private:
     FlatItem   modeItem;                       // "Zero Latency" / "Natural Phase – 70" / "Linear Phase – High"
     juce::Label latencyLabel;                  // reported latency — yellow (Natural) / red (Linear), beside the mode
     FlatItem   presetItem { "Default" };       // preset name -> menu (Default + user presets)
-    FlatItem   saveItem { "Save" }, importItem { "Import" }, exportItem { "Export" };
+    GlyphButton saveItem   { GlyphButton::Glyph::Save };     // floppy · save the current sound
+    GlyphButton importItem { GlyphButton::Glyph::Import };   // tray+down · import a .tabbyeq file
+    GlyphButton exportItem { GlyphButton::Glyph::Export };   // tray+up · export the current sound
     FlatItem   anaItem;                        // "Analyzer: Post" -> settings popover
     juce::String currentPresetName { "Default" };
     std::unique_ptr<juce::FileChooser> chooser;                         // async save/import/export

@@ -36,25 +36,21 @@ public:
     std::function<void()> onLaunch;
     float                 toolbarBottom = 30.0f;   // the toolbar's bottom line = the bell's "0" (set by the editor)
 
-    // Suppress the left skirt (straight left cut) when the badge is flush against the window edge.
-    void setLeftFlush (bool f) { if (leftFlush != f) { leftFlush = f; repaint(); } }
-    bool isLeftFlush() const noexcept { return leftFlush; }
+    // The content's left edge (the cat) sits this far from the blister's own left edge. The editor
+    // clamps the group so the CAT never crosses the window edge: the blister then slides its left
+    // skirt OFF-SCREEN (clipped by the window → a straight rectangular cut) with NO content jump.
+    static constexpr float contentLeftOffset() { return kEndFlat + kTransW + kPadL; }
 
     // Append the bulge bottom profile (left flat run + dip + right flat run) to `p`, in ABSOLUTE
     // coords, continuing from the current point at (x0, y0). Ends at (x0 + w, y0). Shared by this
     // badge's own fill AND the full-width toolbar underline overlay, so the line is ONE path.
-    static void appendBottomLine (juce::Path& p, float x0, float w, float y0, float yMax, bool leftFlush)
+    static void appendBottomLine (juce::Path& p, float x0, float w, float y0, float yMax)
     {
-        const float dipL = x0 + (leftFlush ? 0.0f : kEndFlat);
+        const float dipL = x0 + kEndFlat;
         const float dipR = x0 + w - kEndFlat;
-        if (leftFlush)
-            p.lineTo (x0, yMax);                            // straight cut down at the window edge
-        else
-        {
-            p.lineTo (dipL, y0);                            // left flat run
-            for (int i = 1; i <= kN; ++i)                   // left S-transition
-                p.lineTo (dipL + (float) i / (float) kN * kTransW, y0 + (yMax - y0) * smoothstep ((float) i / (float) kN));
-        }
+        p.lineTo (dipL, y0);                                // left flat run
+        for (int i = 1; i <= kN; ++i)                       // left S-transition
+            p.lineTo (dipL + (float) i / (float) kN * kTransW, y0 + (yMax - y0) * smoothstep ((float) i / (float) kN));
         p.lineTo (dipR - kTransW, yMax);                    // flat plateau under the content
         for (int i = 1; i <= kN; ++i)                       // right S-transition
             p.lineTo (dipR - kTransW + (float) i / (float) kN * kTransW, y0 + (yMax - y0) * smoothstep (1.0f - (float) i / (float) kN));
@@ -93,8 +89,8 @@ public:
         const float yMax = H - 1.0f;
 
         juce::Path fill;
-        fill.startNewSubPath (0.0f, leftFlush ? yMax : y0);
-        appendBottomLine (fill, 0.0f, W, y0, yMax, leftFlush);   // dip profile, ends at (W, y0)
+        fill.startNewSubPath (0.0f, y0);
+        appendBottomLine (fill, 0.0f, W, y0, yMax);   // dip profile, ends at (W, y0)
         fill.lineTo (W, 0.0f);
         fill.lineTo (0.0f, 0.0f);
         fill.closeSubPath();
@@ -106,7 +102,7 @@ public:
         // keeps the cat's ears off the top edge.
         const float ms = markSize (H);
         const float cy = kTopPad + ms * 0.5f;              // marks hang a hair below the top edge
-        float x = (leftFlush ? kPadL : kEndFlat + kTransW + kPadL);   // the transition zone lives left of the content
+        float x = contentLeftOffset();                     // ALWAYS fixed — the left skirt lives to its left (may be off-screen)
 
         auto catArea = juce::Rectangle<float> (x, cy - ms * 0.5f, ms, ms);
         if (catLogo != nullptr)
@@ -136,7 +132,7 @@ private:
 
     juce::Font wordFont (float h) const { return tabby::brand::wordmarkFont (wordmarkTypeface, wordH (h)); }
 
-    bool hover = false, leftFlush = false;
+    bool hover = false;
     static constexpr int   kN       = 30;                   // dip curve resolution
     static constexpr float kTransW  = 30.0f;                // width of each soft S-transition
     static constexpr float kEndFlat = 12.0f;               // flat run along the toolbar line at each end (tangent)
