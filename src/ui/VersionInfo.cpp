@@ -13,9 +13,24 @@ namespace tabby
     const char* currentDescribe() { return version::kDescribe; }
 
     //==========================================================================
+    // The 14-digit UTC build stamp (YYYYMMDDHHMMSS) sliced into human blocks:
+    // 20260713092444 -> "2026-07-13 09:24:44 UTC". Falls back to the raw digits if the stamp
+    // ever isn't the expected shape (generator failure paths bake a 0).
+    static juce::String prettyBuildStamp()
+    {
+        const auto raw = juce::String (version::kBuildNumber);
+        if (raw.length() != 14)
+            return raw;
+        return raw.substring (0, 4)  + "-" + raw.substring (4, 6)   + "-" + raw.substring (6, 8)
+             + " "
+             + raw.substring (8, 10) + ":" + raw.substring (10, 12) + ":" + raw.substring (12, 14)
+             + " UTC";
+    }
+
+    //==========================================================================
     // The build-info block, assembled once from the baked constants:
     //   TabbyEQ v0.1.0-3-g1234abc
-    //   build 20260702191423
+    //   build 2026-07-13 09:24:44 UTC
     //   g1234abc (dirty) · oleh
     //   core v0.2.0
     static juce::String buildInfoText()
@@ -26,7 +41,7 @@ namespace tabby
 
         juce::StringArray lines;
         lines.add (juce::String ("TabbyEQ ") + version::kDescribe);
-        lines.add (juce::String ("build ")   + juce::String (version::kBuildNumber));
+        lines.add (juce::String ("build ")   + prettyBuildStamp());
         lines.add (hashLine);
         lines.add (juce::String ("core ")    + version::kCoreVersion);
         return lines.joinIntoString ("\n");
