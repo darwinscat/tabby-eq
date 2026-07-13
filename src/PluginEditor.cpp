@@ -35,6 +35,13 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     output.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (output);
     outputAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "output", output);
+    // AFTER the attachment (it installs the param's text conversion): the param formats the default
+    // as "-0.00" — a floating-point negative zero. Snap the dust to a plain 0.
+    output.textFromValueFunction = [] (double v)
+    {
+        return juce::String (std::abs (v) < 0.005 ? 0.0 : v, 2);
+    };
+    output.updateText();
     // A MOUSE fader drag = ONE labelled undo step (and keyPressed's navigation gate covers it
     // while open). Mouse-only, like the strip bars: JUCE also fires the drag pair for wheel
     // notches / typed entry / double-click — those coalesce through the settle timer instead.
