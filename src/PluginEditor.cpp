@@ -81,8 +81,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     }
     undoBtn.setButtonText (juce::String::charToString (0x21b6));   // ↶
     redoBtn.setButtonText (juce::String::charToString (0x21b7));   // ↷
-    undoBtn.onClick = [this] { proc.undo(); afterHistoryNav(); };
-    redoBtn.onClick = [this] { proc.redo(); afterHistoryNav(); };
+    undoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } };
+    redoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } };
     refreshHistoryUi();
 
     prePost.setButtonText ("POST");
@@ -422,8 +422,18 @@ void TabbyEqEditor::updateSnapshotButtons()
     }
 }
 
+// History NAVIGATION is blocked while any gesture is open — for the keyboard AND for the pointer
+// paths (undo/redo buttons, A/B/C/D clicks, snapshot drag-drop, menu copy/paste): with a second
+// input source a click can land mid-drag, force-close the engine gesture and bleed the drag's
+// tail into the post-undo / recalled register.
+bool TabbyEqEditor::historyNavBlocked() const
+{
+    return display.isDragActive() || proc.historyGestureOpen();
+}
+
 void TabbyEqEditor::switchSnapshot (int i)
 {
+    if (historyNavBlocked()) return;
     // Recall register i (the engine stashes the live state into the register we leave first),
     // then re-sync the editor — lane sets, links, colours and view properties may all have changed.
     proc.switchToSnapshot (i);
@@ -477,7 +487,8 @@ bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
     // drag), history-navigation keys are inert: a switch/undo/paste mid-gesture would hit the
     // engine's gesture×navigation misuse path (force-commit + debug assert), and a register switch
     // under a live slider drag would bleed the drag's tail into the recalled register. Swallow.
-    const bool midDrag = display.isDragActive() || proc.historyGestureOpen();
+    // (The pointer nav paths — buttons, drag-drop, menus — check the same gate at their entries.)
+    const bool midDrag = historyNavBlocked();
 
     // ⌘Z / ⇧⌘Z — undo/redo on the active register's own history. Swallowed even when there is
     // nothing to undo (the plugin owns the shortcut while focused; letting it fall through would
@@ -546,7 +557,7 @@ void TabbyEqEditor::showSnapshotMenu (int i)
 
 void TabbyEqEditor::applySnapshotCopy (int from, int to)
 {
-    if (from == to) return;
+    if (from == to || historyNavBlocked()) return;
     proc.copySnapshot (from, to);
     afterHistoryNav();   // live may have changed (copy INTO the active register); markers always
 }
@@ -565,7 +576,7 @@ bool TabbyEqEditor::pasteSnapshotFromClipboard (int toReg)
     // The clipboard is untrusted input: accept only a tree of this plugin's state type (the same
     // predicate the menu enablement showed; applyLiveState re-validates at the apply seam).
     const auto t = juce::ValueTree::fromXml (juce::SystemClipboard::getTextFromClipboard());
-    if (! proc.canPasteState (t))
+    if (historyNavBlocked() || ! proc.canPasteState (t))
         return false;
     proc.pasteState (toReg, t);
     afterHistoryNav();

@@ -504,19 +504,25 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
     for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
     gainRange = snapped;
-    // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —
-    // unsuppressed, every zoom would settle into a junk "Parameter Change" step and Cmd+Z after
-    // zooming would revert... the zoom. The properties still ride the snapshot for save/registers.
-    // Value-equality skips normalize a String-typed post-load property without a "changed" write
-    // (a retype counts as a forward move and would wipe an armed redo — same guard as activeLane).
-    const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
-    if (std::abs ((double) proc.apvts.state.getProperty ("gainRangeLive", -1.0e9) - gainRange) > 1.0e-6)
-        proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range, persist or not —
-                                                                              // the lane menu's split-delta reads what
-                                                                              // the user actually SEES (auto-fit included)
+    // Value-equality FIRST, suppress scope second: even an empty suppress scope flushes a pending
+    // edit burst on entry, so a same-value call (the post-apply re-sync runs this every time) must
+    // return before ever opening the scope — the exact bug class the activeLane guard fixed. The
+    // comparison also normalizes a String-typed post-load property without a "changed" write.
+    const bool liveDiffers    = std::abs ((double) proc.apvts.state.getProperty ("gainRangeLive", -1.0e9) - gainRange) > 1.0e-6;
+    const bool persistDiffers = persist && std::abs ((double) proc.apvts.state.getProperty ("gainRange", -1.0e9) - gainRange) > 1.0e-6;
     gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
-    if (persist && std::abs ((double) proc.apvts.state.getProperty ("gainRange", -1.0e9) - gainRange) > 1.0e-6)
-        proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    if (liveDiffers || persistDiffers)
+    {
+        // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —
+        // unsuppressed, every zoom would settle into a junk "Parameter Change" step and Cmd+Z after
+        // zooming would revert... the zoom. The properties still ride the snapshot for save/registers.
+        const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+        if (liveDiffers)
+            proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range — the lane menu's
+                                                                                  // split-delta reads what the user SEES
+        if (persistDiffers)
+            proc.apvts.state.setProperty ("gainRange", gainRange, nullptr);
+    }
     positionToolbar();   // dbToY changed → node/strip positions moved
     repaint();
 }

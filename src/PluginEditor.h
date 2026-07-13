@@ -66,6 +66,7 @@ private:
     void syncViewFromState();                     // re-read the view properties the state tree carries
     void afterHistoryNav();                       // full editor re-sync after undo/redo/switch/copy/paste
     void revalidateSolo();                        // clear a solo whose band a history apply turned off
+    bool historyNavBlocked() const;               // any gesture open — keys AND pointer nav paths are inert
 
     void showViewMenu();
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)
