@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Stripe-cat head: five spectrum bars, outer bars peak into ears, centre bar = boosted band -->
+  <path d="M12,88 V26 L24,46 V88 Z" fill="#9170FF"/>
+  <rect x="28" y="46" width="12" height="42" rx="2" fill="#B39BFF"/>
+  <rect x="44" y="40" width="12" height="48" rx="2" fill="#FF8A3D"/>
+  <rect x="60" y="46" width="12" height="42" rx="2" fill="#B39BFF"/>
+  <path d="M88,88 V26 L76,46 V88 Z" fill="#9170FF"/>
+</svg>

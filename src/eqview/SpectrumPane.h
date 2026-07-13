@@ -31,7 +31,9 @@ struct SpectrumPane
     static constexpr int fftSize = felitronics::analysis::kSpectrumFftSize;
     static constexpr int numBins = fftSize / 2 + 1;
 
-    float peakFallDb = 0.8f;          // peak-hold decay per tick (~24 dB/s at 30 Hz)
+    float peakFallDb  = 0.8f;         // peak-hold decay per tick (~24 dB/s at 30 Hz)
+    float smoothCoeff = 0.25f;        // per-tick smoothing toward the new frame (the analyzer "speed":
+                                      // smaller = slower attack/release, larger = snappier)
 
     SpectrumPane()
     {
@@ -65,7 +67,7 @@ struct SpectrumPane
             const float mag = std::sqrt (re * re + im * im);      // |bin| of the unnormalized forward
             const double g  = (double) mag / norm;                // == juce::Decibels::gainToDecibels (g, -120)
             const double db = g > 0.0 ? std::max (-120.0, 20.0 * std::log10 (g)) : -120.0;
-            specDb[(size_t) i]  += 0.25f * ((float) db - specDb[(size_t) i]);   // smooth toward target
+            specDb[(size_t) i]  += smoothCoeff * ((float) db - specDb[(size_t) i]);   // smooth toward target
             specPeak[(size_t) i] = std::max (specPeak[(size_t) i] - peakFallDb, specDb[(size_t) i]);
         }
     }

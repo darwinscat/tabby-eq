@@ -3,14 +3,18 @@
 
 #include "PluginEditor.h"
 #include "ui/Palette.h"
+#include "BinaryData.h"   // TabbyEQData — the embedded Michroma wordmark font
 
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
 {
-    title.setText ("TabbyEQ", juce::dontSendNotification);
-    title.setFont (juce::Font (juce::FontOptions (18.0f).withStyle ("Bold")));
-    title.setColour (juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible (title);
+    // The clickable brand header — the orbitcab pattern (same Michroma wordmark + byline), the
+    // stripe-cat mark instead of the orbit. Links to the product page.
+    brand.wordmarkTypeface = juce::Typeface::createSystemTypefaceFor (BinaryData::MichromaRegular_ttf,
+                                                                      (size_t) BinaryData::MichromaRegular_ttfSize);
+    brand.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
+    brand.setTooltip ("darwinscat.com/tabbyeq");
+    addAndMakeVisible (brand);
 
     addAndMakeVisible (display);
 
@@ -84,86 +88,39 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     redoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } };
     refreshHistoryUi();
 
-    prePost.setButtonText ("POST");
-    prePost.setClickingTogglesState (true);
-    prePost.onClick = [this]
-    {
-        const bool pre = prePost.getToggleState();
-        prePost.setButtonText (pre ? "PRE" : "POST");
-        display.setAnalyzerPre (pre);
-    };
-    addAndMakeVisible (prePost);
+    addAndMakeVisible (infoButton);   // (i) build/version popover — top-bar right
 
-    addAndMakeVisible (infoButton);   // (i) build/version popover — sits just left of POST
-
-    // Phase + quality combos. NB: AudioProcessorValueTreeState::ComboBoxAttachment does NOT reliably
-    // auto-populate from the choice param here (getAllValueStrings() comes back empty -> "(no choices)"),
-    // so we fill each combo from the parameter's own `choices` (single source of truth for the strings)
-    // and let the attachment only sync the selection. Item ids are 1..N (the attachment maps id-1 -> index).
-    for (auto* c : { &phaseCombo, &qualityCombo })
-    {
-        c->setColour (juce::ComboBox::textColourId,       tabby::palette::text());
-        c->setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel());
-        c->setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
-        c->setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
-    }
-
-    // Phase mode (Zero Latency / Natural Phase / Linear Phase) — all three live now. The attachment is the
-    // single source of truth (param <-> combo), which also kills the old button/label one-event lag.
-    addAndMakeVisible (phaseCombo);
-    if (auto* pm = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("phaseMode")))
-    {
-        phaseCombo.addItemList (pm->choices, 1);
-        phaseAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "phaseMode", phaseCombo);
-    }
-    // Refresh the latency readout from the combo's OWN selection (always current) on its onChange — NOT
-    // from getRawParameterValue(), whose atom can lag the attachment by one event (that lag is what
-    // showed the wrong mode: "Linear Phase" with 0 ms, "Zero Latency" with 1365 ms). Set after the
-    // attachment so its sendInitialUpdate doesn't fire this before the quality combo exists.
-    phaseCombo.onChange = [this] { updatePhaseUi(); };
-
-    // Linear-phase FIR quality — promoted out of the View menu into its own combo beside the mode.
-    addAndMakeVisible (qualityCombo);
-    if (auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality")))
-    {
-        qualityCombo.addItemList (lq->choices, 1);
-        qualityAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "lpQuality", qualityCombo);
-    }
-    qualityCombo.onChange = [this] { updatePhaseUi(); };
-
-    // Natural-phase blend knob (0 linear … 1 minimum phase) — shown only in Natural mode, in the SAME
-    // top-bar slot as the quality combo (which is Linear-only).
-    phaseAmountSlider.setSliderStyle (juce::Slider::LinearBar);
-    phaseAmountSlider.setColour (juce::Slider::trackColourId,          tabby::palette::violet().withAlpha (0.55f));
-    phaseAmountSlider.setColour (juce::Slider::textBoxTextColourId,    tabby::palette::text());
-    phaseAmountSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    phaseAmountSlider.setTooltip ("Phase blend: linear (0) … minimum-phase (1)");
-    addAndMakeVisible (phaseAmountSlider);
-    phaseAmountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "phaseAmount", phaseAmountSlider);
-    phaseAmountSlider.onValueChange = [this] { updatePhaseUi(); };
-    {
-        auto open = std::make_shared<bool> (false);   // mouse-only bracket, same rationale as the output fader
-        phaseAmountSlider.onDragStart = [this, open] { if (phaseAmountSlider.isMouseButtonDown()) { *open = true; proc.beginHistoryGesture ("Phase Blend"); } };
-        phaseAmountSlider.onDragEnd   = [this, open] { if (*open) { *open = false; proc.endHistoryGesture(); } };
-    }
+    // ---- bottom toolbar (FabFilter-style): flat items, every popup opens UPWARD ----
+    // Phase mode + Natural blend + Linear quality all live in ONE item now ("Zero Latency" /
+    // "Natural Phase – 70" / "Linear Phase – High"); the old combos and the blend slider are gone.
+    // The menu writes the params (a real edit — one labelled undo step); the label follows the
+    // params through the timer poll, so host automation moves it too.
+    modeItem.onClick   = [this] { showModeMenu(); };
+    presetItem.onClick = [this] { showPresetMenu(); };
+    saveItem.onClick   = [this] { doSavePreset(); };
+    importItem.onClick = [this] { doImportPreset(); };
+    exportItem.onClick = [this] { doExportPreset(); };
+    anaItem.onClick    = [this] { showAnalyzerPanel(); };
+    for (auto* it : { &modeItem, &presetItem, &saveItem, &importItem, &exportItem, &anaItem })
+        addAndMakeVisible (*it);
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (latencyLabel);
-    updatePhaseUi();   // initial latency text + quality-combo enable state
+    updatePhaseUi();        // initial mode label + latency text
+    refreshAnalyzerItem();  // initial "Analyzer: …" label
 
-    viewButton.setButtonText ("View");
-    viewButton.onClick = [this] { showViewMenu(); };
-    addAndMakeVisible (viewButton);
+    gearBtn.onClick = [this] { showViewMenu(); };   // Reset lives in the preset menu ("Default")
+    gearBtn.setTooltip ("View options");
+    addAndMakeVisible (gearBtn);
 
-    resetButton.setButtonText ("Reset");
-    resetButton.onClick = [this] { resetAll(); };
-    addAndMakeVisible (resetButton);
-
-    fullButton.setButtonText ("Full");
-    fullButton.onClick = [this] { toggleFullscreen(); };
-    fullButton.setVisible (juce::JUCEApplicationBase::isStandaloneApp());   // kiosk only makes sense standalone
-    addAndMakeVisible (fullButton);
+    fullBtn.onClick = [this] { toggleFullscreen(); };
+    fullBtn.setTooltip ("Fullscreen (f)");
+    // Kiosk fullscreen only works on a window WE own. JUCEApplicationBase::isStandaloneApp() is
+    // unreliable inside plugin wrappers (it keyed off a static and showed the button in Cubase);
+    // the processor's wrapperType is the authoritative answer.
+    fullBtn.setVisible (proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone);
+    addAndMakeVisible (fullBtn);
     display.onToggleFullscreen = [this] { toggleFullscreen(); };            // 'f' key
 
     syncViewFromState();   // the view properties ride the state tree — also re-read on every history apply
@@ -214,6 +171,14 @@ void TabbyEqEditor::syncViewFromState()
                               proc.apvts.state.getProperty ("gainRange", 12.0)), false);
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
+
+    // The analyzer settings ride the snapshot too (view state, suppressed writes — AnalyzerPanel).
+    display.setAnalyzerShow  ((bool) proc.apvts.state.getProperty ("anaPre", false),
+                              (bool) proc.apvts.state.getProperty ("anaPost", true));
+    display.setAnalyzerRange ((double) proc.apvts.state.getProperty ("anaRange", 96.0));
+    display.setAnalyzerSpeed ((int) proc.apvts.state.getProperty ("anaSpeed", 1));
+    display.setAnalyzerTilt  ((double) proc.apvts.state.getProperty ("anaTilt", 4.5));
+    refreshAnalyzerItem();
 }
 
 TabbyEqEditor::~TabbyEqEditor()
@@ -229,9 +194,23 @@ TabbyEqEditor::~TabbyEqEditor()
 
 void TabbyEqEditor::updatePhaseUi()
 {
-    const int mode = phaseCombo.getSelectedItemIndex();   // 0 Zero Latency / 1 Natural Phase / 2 Linear Phase
-    qualityCombo.setVisible     (mode == 2);              // quality combo: Linear only
-    phaseAmountSlider.setVisible (mode == 1);             // blend knob: Natural only (same top-bar slot)
+    // Param-driven (the old combos are gone): the bottom-bar mode item shows mode + its detail
+    // ("Natural Phase – 70" / "Linear Phase – High"), the latency label sits beside it, coloured
+    // dim (Zero) / yellow (Natural) / red (Linear). The timer poll re-runs this when the params
+    // move, so host automation is reflected too.
+    const int   mode = juce::jlimit (0, 2, (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f));
+    const int   q    = juce::jlimit (0, 4, (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f));
+    const float k    = proc.apvts.getRawParameterValue ("phaseAmount")->load();
+
+    const auto dash = " " + juce::String::charToString (0x2013) + " ";   // en-dash (a char* literal would mojibake)
+    juce::String label = "Zero Latency";
+    if (mode == 1) label = "Natural Phase" + dash + juce::String (juce::roundToInt (k * 100.0f));
+    if (mode == 2)
+    {
+        auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality"));
+        label = "Linear Phase" + dash + (lq != nullptr ? lq->choices[q] : juce::String (q));
+    }
+    modeItem.setButtonText (label);
 
     if (mode <= 0)   // Zero Latency — no added delay
     {
@@ -239,7 +218,6 @@ void TabbyEqEditor::updatePhaseUi()
         latencyLabel.setColour (juce::Label::textColourId, tabby::palette::textDim());
         return;
     }
-    // FIR mode — compute the reported latency directly from the UI state (avoids the param-atomic lag):
     const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
     double samples; juce::Colour col;
     if (mode == 1)   // Natural: FIXED bulk delay = L/4 (L = 4096) — does NOT move with the blend knob. YELLOW.
@@ -250,13 +228,294 @@ void TabbyEqEditor::updatePhaseUi()
     else             // Linear: N/2. RED (heavy).
     {
         static constexpr int sizes[] = { 4096, 8192, 16384, 32768, 131072 };
-        const int q = juce::jlimit (0, 4, qualityCombo.getSelectedItemIndex());
         samples = (double) sizes[q] / 2.0;
         col = juce::Colour (0xffff5a5a);
     }
     const double ms = samples / sr * 1000.0;
-    latencyLabel.setText (juce::String (ms, ms < 100.0 ? 1 : 0) + " ms", juce::dontSendNotification);
+    // NB juce::String(double, 0) ignores the "0 decimals" and prints everything — round explicitly.
+    latencyLabel.setText ((ms < 100.0 ? juce::String (ms, 1) : juce::String (juce::roundToInt (ms))) + " ms",
+                          juce::dontSendNotification);
     latencyLabel.setColour (juce::Label::textColourId, col);
+}
+
+void TabbyEqEditor::showModeMenu()
+{
+    const int   mode = juce::jlimit (0, 2, (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f));
+    const int   q    = juce::jlimit (0, 4, (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f));
+    const int   kPct = juce::roundToInt (proc.apvts.getRawParameterValue ("phaseAmount")->load() * 10.0f) * 10;
+
+    // Natural blend as fixed steps (10..100; 0 is omitted — k=0 IS linear phase, the mode below).
+    juce::PopupMenu natural;
+    for (int p = 10; p <= 100; p += 10)
+        natural.addItem (100 + p / 10, juce::String (p), true, mode == 1 && kPct == p);
+
+    juce::PopupMenu linear;
+    if (auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality")))
+        for (int i = 0; i < lq->choices.size(); ++i)
+            linear.addItem (200 + i, lq->choices[i], true, mode == 2 && q == i);
+
+    juce::PopupMenu m;
+    m.addItem (1, "Zero Latency", true, mode == 0);
+    m.addSubMenu ("Natural Phase", natural, true, nullptr, mode == 1);
+    m.addSubMenu ("Linear Phase",  linear,  true, nullptr, mode == 2);
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&modeItem),
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            auto& p = safe->proc;
+            // One menu pick = ONE labelled undo step (mode + its detail param move together).
+            const TabbyEqAudioProcessor::ScopedHistoryGesture sg (p, "Phase Mode");
+            auto set = [&p] (const char* id, float real)
+            {
+                if (auto* prm = p.apvts.getParameter (id))
+                    prm->setValueNotifyingHost (prm->convertTo0to1 (real));
+            };
+            if      (r == 1)   { set ("phaseMode", 0.0f); }
+            else if (r < 200)  { set ("phaseMode", 1.0f); set ("phaseAmount", (float) (r - 100) / 10.0f); }
+            else               { set ("phaseMode", 2.0f); set ("lpQuality", (float) (r - 200)); }
+            safe->updatePhaseUi();
+        });
+}
+
+namespace
+{
+    // The analyzer settings popover (the bottom bar's "Analyzer:" item) — FabFilter-style rows.
+    // Every value is VIEW state on the state tree: suppressed writes (no undo steps; the props
+    // still ride the snapshot), re-applied by syncViewFromState after each history apply. Freeze
+    // is runtime-only and never persisted.
+    class AnalyzerPanel final : public juce::Component
+    {
+    public:
+        AnalyzerPanel (TabbyEqAudioProcessor& p, EqCurveDisplay& d, std::function<void()> onChangedFn)
+            : proc (p), display (d), onChanged (std::move (onChangedFn))
+        {
+            auto initToggle = [this] (juce::TextButton& b, const char* text, bool on)
+            {
+                b.setButtonText (text);
+                b.setClickingTogglesState (true);
+                b.setToggleState (on, juce::dontSendNotification);
+                b.setColour (juce::TextButton::buttonColourId,   tabby::palette::panel());
+                b.setColour (juce::TextButton::buttonOnColourId, tabby::palette::violet().withAlpha (0.55f));
+                b.setColour (juce::TextButton::textColourOffId,  tabby::palette::textDim());
+                b.setColour (juce::TextButton::textColourOnId,   juce::Colours::white);
+                addAndMakeVisible (b);
+            };
+            initToggle (preBtn,  "Pre",  (bool) proc.apvts.state.getProperty ("anaPre",  false));
+            initToggle (postBtn, "Post", (bool) proc.apvts.state.getProperty ("anaPost", true));
+            preBtn.onClick  = [this] { setProp ("anaPre",  preBtn.getToggleState()); };
+            postBtn.onClick = [this] { setProp ("anaPost", postBtn.getToggleState()); };
+
+            auto initRow = [this] (juce::Label& l, const char* text, FlatItem& v)
+            {
+                l.setText (text, juce::dontSendNotification);
+                l.setFont (juce::Font (juce::FontOptions (12.0f)));
+                l.setColour (juce::Label::textColourId, tabby::palette::textDim());
+                addAndMakeVisible (l);
+                addAndMakeVisible (v);
+            };
+            initRow (rangeLbl, "Range:", rangeVal);
+            initRow (speedLbl, "Speed:", speedVal);
+            initRow (tiltLbl,  "Tilt:",  tiltVal);
+            rangeVal.onClick = [this] { rangeMenu(); };
+            speedVal.onClick = [this] { speedMenu(); };
+            tiltVal.onClick  = [this] { tiltMenu(); };
+
+            initToggle (freezeBtn, "Freeze", display.analyzerFrozen());
+            freezeBtn.onClick = [this] { display.setAnalyzerFrozen (freezeBtn.getToggleState()); };
+
+            refreshValues();
+            setSize (216, 150);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (tabby::palette::panel());   // the CallOutBox draws its own bubble; keep rows readable
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (10, 8);
+            auto rowTop = r.removeFromTop (24);
+            preBtn.setBounds (rowTop.removeFromLeft (62));
+            rowTop.removeFromLeft (6);
+            postBtn.setBounds (rowTop.removeFromLeft (62));
+            r.removeFromTop (6);
+            for (auto row : { std::pair<juce::Label*, FlatItem*> { &rangeLbl, &rangeVal },
+                              { &speedLbl, &speedVal }, { &tiltLbl, &tiltVal } })
+            {
+                auto line = r.removeFromTop (22);
+                row.first->setBounds (line.removeFromLeft (86));
+                row.second->setBounds (line);
+            }
+            r.removeFromTop (6);
+            freezeBtn.setBounds (r.removeFromTop (24).removeFromLeft (86));
+        }
+
+    private:
+        void setProp (const juce::Identifier& id, const juce::var& v)
+        {
+            // View state, not an edit: suppressed — records no undo step. The editor's refresh
+            // callback re-applies the state to the display and relabels the bottom-bar item.
+            const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
+            proc.apvts.state.setProperty (id, v, nullptr);
+            if (onChanged) onChanged();
+            refreshValues();
+        }
+
+        void refreshValues()
+        {
+            const int range = (int) proc.apvts.state.getProperty ("anaRange", 96);
+            rangeVal.setButtonText (juce::String (range == 96 ? 90 : range) + " dB");
+            static const char* speeds[] = { "Slow", "Medium", "Fast" };
+            speedVal.setButtonText (speeds[juce::jlimit (0, 2, (int) proc.apvts.state.getProperty ("anaSpeed", 1))]);
+            tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty ("anaTilt", 4.5), 1) + " dB/oct");
+        }
+
+        void rangeMenu()
+        {
+            juce::PopupMenu m;
+            const int cur = (int) proc.apvts.state.getProperty ("anaRange", 96);
+            for (const int v : { 60, 90, 120 })
+                m.addItem (v, juce::String (v) + " dB", true, cur == v || (v == 90 && cur == 96));
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rangeVal),
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp ("anaRange", r); });
+        }
+
+        void speedMenu()
+        {
+            juce::PopupMenu m;
+            const int cur = juce::jlimit (0, 2, (int) proc.apvts.state.getProperty ("anaSpeed", 1));
+            static const char* speeds[] = { "Slow", "Medium", "Fast" };
+            for (int i = 0; i < 3; ++i)
+                m.addItem (i + 1, speeds[i], true, cur == i);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&speedVal),
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp ("anaSpeed", r - 1); });
+        }
+
+        void tiltMenu()
+        {
+            juce::PopupMenu m;
+            const double cur = (double) proc.apvts.state.getProperty ("anaTilt", 4.5);
+            static constexpr double tilts[] = { 0.0, 1.5, 3.0, 4.5, 6.0 };
+            for (int i = 0; i < 5; ++i)
+                m.addItem (i + 1, juce::String (tilts[i], 1) + " dB/oct", true, std::abs (cur - tilts[i]) < 0.01);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tiltVal),
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp ("anaTilt", tilts[r - 1]); });
+        }
+
+        TabbyEqAudioProcessor& proc;
+        EqCurveDisplay&        display;
+        std::function<void()>  onChanged;
+        juce::TextButton preBtn, postBtn, freezeBtn;
+        juce::Label rangeLbl, speedLbl, tiltLbl;
+        FlatItem    rangeVal, speedVal, tiltVal;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerPanel)
+    };
+}
+
+void TabbyEqEditor::showAnalyzerPanel()
+{
+    auto panel = std::make_unique<AnalyzerPanel> (proc, display,
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this)]
+        {
+            if (safe != nullptr) { safe->syncViewFromState(); safe->refreshAnalyzerItem(); }
+        });
+    juce::CallOutBox::launchAsynchronously (std::move (panel), anaItem.getScreenBounds(), nullptr);
+}
+
+void TabbyEqEditor::refreshAnalyzerItem()
+{
+    const bool pre  = (bool) proc.apvts.state.getProperty ("anaPre",  false);
+    const bool post = (bool) proc.apvts.state.getProperty ("anaPost", true);
+    anaItem.setButtonText ("Analyzer:  " + juce::String (pre && post ? "Pre+Post" : pre ? "Pre" : post ? "Post" : "Off"));
+}
+
+void TabbyEqEditor::showPresetMenu()
+{
+    juce::PopupMenu m;
+    m.addItem (1, "Default", true, currentPresetName == "Default");
+    auto files = TabbyEqAudioProcessor::presetDirectory().findChildFiles (juce::File::findFiles, false, "*.tabbyeq");
+    std::sort (files.begin(), files.end(),
+               [] (const juce::File& a, const juce::File& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+    if (! files.isEmpty()) m.addSeparator();
+    for (int i = 0; i < files.size(); ++i)
+        m.addItem (100 + i, files[i].getFileNameWithoutExtension(), true,
+                   files[i].getFileNameWithoutExtension() == currentPresetName);
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetItem),
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this), files] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1) { safe->resetAll(); return; }             // "Default" = the reset, as a preset
+            const auto f = files[r - 100];
+            if (safe->proc.loadStateFile (f))                     // fresh clean history (setStateInformation path)
+            {
+                safe->currentPresetName = f.getFileNameWithoutExtension();
+                safe->presetItem.setButtonText (safe->currentPresetName);
+                safe->afterHistoryNav();
+            }
+        });
+}
+
+void TabbyEqEditor::doSavePreset()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Save preset",
+        TabbyEqAudioProcessor::presetDirectory().getChildFile (
+            (currentPresetName == "Default" ? juce::String ("My Preset") : currentPresetName) + ".tabbyeq"),
+        "*.tabbyeq");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this)] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (safe == nullptr || f == juce::File()) return;
+            if (safe->proc.saveStateFile (f.withFileExtension ("tabbyeq")))
+            {
+                safe->currentPresetName = f.getFileNameWithoutExtension();
+                safe->presetItem.setButtonText (safe->currentPresetName);
+            }
+        });
+}
+
+void TabbyEqEditor::doImportPreset()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Import preset", juce::File(), "*.tabbyeq;*.xml");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this)] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (safe == nullptr || f == juce::File()) return;
+            if (! safe->proc.loadStateFile (f))
+                return;                                           // not a TabbyEQ state — silently ignore
+            // Import = load AND adopt: copy into the preset directory so it shows up in the menu.
+            const auto dest = TabbyEqAudioProcessor::presetDirectory()
+                                  .getChildFile (f.getFileNameWithoutExtension() + ".tabbyeq");
+            if (f != dest) f.copyFileTo (dest);
+            safe->currentPresetName = dest.getFileNameWithoutExtension();
+            safe->presetItem.setButtonText (safe->currentPresetName);
+            safe->afterHistoryNav();
+        });
+}
+
+void TabbyEqEditor::doExportPreset()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Export preset",
+        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+            .getChildFile ((currentPresetName == "Default" ? juce::String ("TabbyEQ Preset") : currentPresetName) + ".tabbyeq"),
+        "*.tabbyeq");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe = juce::Component::SafePointer<TabbyEqEditor> (this)] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (safe != nullptr && f != juce::File())
+                safe->proc.saveStateFile (f.withFileExtension ("tabbyeq"));
+        });
 }
 
 void TabbyEqEditor::showViewMenu()
@@ -310,7 +569,7 @@ void TabbyEqEditor::showViewMenu()
     m.addSubMenu ("Leader line", leadMenu);
 
     juce::Component::SafePointer<TabbyEqEditor> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&viewButton), [safe] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&gearBtn), [safe] (int r)
     {
         if (safe == nullptr || r == 0) return;
         auto& d  = safe->display;
@@ -355,6 +614,8 @@ void TabbyEqEditor::resetAll()
     proc.resetAllToDefaults();
     proc.setSoloBand (-1);                         // clear any solo
     display.clearSelection();                       // deselect + hide the floating toolbar
+    currentPresetName = "Default";                  // Reset lives in the preset menu as "Default"
+    presetItem.setButtonText ("Default");
     afterHistoryNav();                              // markers/enablement (redo is now stale by contract)
 }
 
@@ -367,26 +628,30 @@ void TabbyEqEditor::resized()
 {
     auto r = getLocalBounds();
     auto top = r.removeFromTop (30);
-    title.setBounds (top.removeFromLeft (110).reduced (8, 4));
-    prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
-    infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i) — just left of POST
-    latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
-    const auto firSlot = top.removeFromRight (84).reduced (4, 4);      // shared slot: quality (Linear) / blend knob (Natural)
-    qualityCombo.setBounds (firSlot);
-    phaseAmountSlider.setBounds (firSlot);
-    phaseCombo.setBounds (top.removeFromRight (110).reduced (4, 4));    // phase mode
-    viewButton.setBounds (top.removeFromRight (52).reduced (4, 3));
-    resetButton.setBounds (top.removeFromRight (52).reduced (4, 3));
-    fullButton.setBounds (top.removeFromRight (46).reduced (4, 3));
-    corrMeter.setBounds (top.removeFromLeft (96).reduced (8, 2));    // middle-left of the top bar
+    brand.setBounds (top.removeFromLeft (brand.preferredWidth (26)).reduced (0, 2));
+    if (fullBtn.isVisible())
+        fullBtn.setBounds (top.removeFromRight (26).reduced (2, 4));    // fullscreen — the very corner (standalone)
+    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear, left of it
+    infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i)
     undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // undo/redo arrows LEFT of A/B/C/D —
     redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // one visual block with the registers,
     top.removeFromLeft (6);                                          // separated by a slim gap
     for (auto& b : snapBtn)                                          // A/B/C/D registers
         b.setBounds (top.removeFromLeft (26).reduced (2, 5));
 
-    // (The per-band editor is now a floating toolbar parented in the display; the bottom area
-    //  it used to occupy is reserved for the upcoming Helper.)
+    // Presets live in the TOP bar (FabFilter-style): the name centred in the free middle,
+    // Save / Import / Export to its right.
+    exportItem.setBounds (top.removeFromRight (50).reduced (2, 4));
+    importItem.setBounds (top.removeFromRight (50).reduced (2, 4));
+    saveItem.setBounds (top.removeFromRight (42).reduced (2, 4));
+    presetItem.setBounds (top.reduced (8, 4));                       // remaining top middle = the preset name
+
+    // ---- bottom toolbar: mode+latency left · Analyzer centred · correlation right ----
+    auto bottom = r.removeFromBottom (22);
+    modeItem.setBounds (bottom.removeFromLeft (150).reduced (2, 1));
+    latencyLabel.setBounds (bottom.removeFromLeft (58).reduced (0, 1));
+    corrMeter.setBounds (bottom.removeFromRight (76).reduced (2, 5));
+    anaItem.setBounds (bottom.withSizeKeepingCentre (140, bottom.getHeight()).reduced (2, 1));
 
     // IN / OUT rails flank the graph; the OUT rail also holds the output trim fader.
     auto leftRail  = r.removeFromLeft (30);

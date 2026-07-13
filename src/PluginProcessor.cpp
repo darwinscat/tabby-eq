@@ -635,6 +635,39 @@ void TabbyEqAudioProcessor::resetAllToDefaults()
 }
 
 //==============================================================================
+juce::File TabbyEqAudioProcessor::presetDirectory()
+{
+    const auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                         .getChildFile ("Darwin's Cat").getChildFile ("TabbyEQ").getChildFile ("Presets");
+    dir.createDirectory();
+    return dir;
+}
+
+bool TabbyEqAudioProcessor::saveStateFile (const juce::File& f)
+{
+    // A preset carries the LIVE sound only (flat v3 tree) — portable across sessions and machines;
+    // the compare workspace (A/B/C/D) is session state and stays out.
+    auto state = apvts.copyState();
+    state.setProperty ("stateVersion", 3, nullptr);
+    if (auto xml = state.createXml())
+        return f.replaceWithText (xml->toString());
+    return false;
+}
+
+bool TabbyEqAudioProcessor::loadStateFile (const juce::File& f)
+{
+    // Accept a flat preset OR a full <Workspace> export — both route through setStateInformation,
+    // so every validation/migration rule holds for file input exactly as for host blobs.
+    const auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! (xml->hasTagName (apvts.state.getType()) || xml->hasTagName ("Workspace")))
+        return false;
+    juce::MemoryBlock mb;
+    copyXmlToBinary (*xml, mb);
+    setStateInformation (mb.getData(), (int) mb.getSize());
+    return true;
+}
+
+//==============================================================================
 // The CompareHistory applyLive seam AND the shared load routine: replace the APVTS state from a
 // snapshot, then re-sync everything derived from it. Runs on every apply (undo / redo / register
 // switch / copy / session load). Deep-copies the incoming tree so the live tree never aliases an
