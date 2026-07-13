@@ -225,7 +225,6 @@ private:
     LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
     LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
     CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
-    juce::Label    inCap, outCap;
     HeaderBrand    brand;                    // [stripe-cat mark] TabbyEQ · by Darwin's Cat / Semantic EQ → website
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
 

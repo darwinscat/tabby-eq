@@ -198,15 +198,11 @@ namespace tabby
 
     void InfoButton::paintButton (juce::Graphics& g, bool over, bool down)
     {
-        // A rounded tile with a drawn lower-case "i" (dot + rounded stem). Fill + subtle outline so it
-        // reads as a button next to the top-bar's View/POST, brightening on hover like the icon tiles.
+        // FLAT, like the rest of the top-bar chrome (gear / fullscreen / A-D): no tile, no frame —
+        // just the drawn lower-case "i" (dot + rounded stem), dim at rest, lifting on hover.
         auto b = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (tabby::palette::panel().brighter (over ? 0.34f : 0.22f));
-        g.fillRoundedRectangle (b, 4.0f);
-        g.setColour (tabby::palette::textDim().withAlpha (over ? 0.9f : 0.5f));
-        g.drawRoundedRectangle (b, 4.0f, 1.0f);
 
-        const auto ink = (over || down) ? tabby::palette::violetLo() : tabby::palette::text();
+        const auto ink = (over || down) ? tabby::palette::violetLo() : tabby::palette::textDim();
         g.setColour (ink);
 
         const float cx  = b.getCentreX();

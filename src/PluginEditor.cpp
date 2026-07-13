@@ -26,7 +26,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
 
     // OUT rail trim — a minimalist vertical fader; double-click returns to 0 dB.
-    output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 40, 14);
+    output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 52, 16);   // the 0 dB editor, full rail width
     output.setNumDecimalPlacesToDisplay (1);
     output.setDoubleClickReturnValue (true, 0.0);
     output.setColour (juce::Slider::trackColourId,         tabby::palette::violet());
@@ -44,19 +44,9 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
         output.onDragEnd   = [this, open] { if (*open) { *open = false; proc.endHistoryGesture(); } };
     }
 
-    addAndMakeVisible (inMeter);
+    addAndMakeVisible (inMeter);    // no IN/OUT captions — the meters carry tooltips
     addAndMakeVisible (outMeter);
     addAndMakeVisible (corrMeter);
-    auto setupCap = [this] (juce::Label& l, const juce::String& t)
-    {
-        l.setText (t, juce::dontSendNotification);
-        l.setFont (juce::Font (juce::FontOptions (9.5f)));
-        l.setJustificationType (juce::Justification::centred);
-        l.setColour (juce::Label::textColourId, tabby::palette::textDim());
-        addAndMakeVisible (l);
-    };
-    setupCap (inCap, "IN");
-    setupCap (outCap, "OUT");
 
     // A/B/C/D compare registers — recall on click, copy via right-click menu / drag / clipboard.
     // Toggle look: the ACTIVE register is violet (the family accent), siblings sit on the panel.
@@ -672,28 +662,31 @@ void TabbyEqEditor::resized()
     saveItem.setBounds (top.removeFromRight (42).reduced (2, 4));
     presetItem.setBounds (top.reduced (8, 4));                       // remaining top middle = the preset name
 
-    // ---- bottom toolbar: mode+latency left · Analyzer centred · correlation right ----
-    auto bottom = r.removeFromBottom (22);
-    modeItem.setBounds (bottom.removeFromLeft (150).reduced (2, 1));
-    latencyLabel.setBounds (bottom.removeFromLeft (58).reduced (0, 1));
-    corrMeter.setBounds (bottom.removeFromRight (76).reduced (2, 5));
-    anaItem.setBounds (bottom.withSizeKeepingCentre (140, bottom.getHeight()).reduced (2, 1));
-
-    // IN / OUT rails flank the graph; the OUT rail also holds the output trim fader.
+    // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
+    // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE
+    // block only. No IN/OUT captions — the meters carry tooltips instead.
     auto leftRail  = r.removeFromLeft (30);
     auto rightRail = r.removeFromRight (64);
+
+    inMeter.setBounds (leftRail.reduced (7, 6));
     {
-        auto lr = leftRail.reduced (7, 6);
-        inCap.setBounds (lr.removeFromBottom (14));
-        inMeter.setBounds (lr);
-    }
-    {
-        auto rr = rightRail.reduced (7, 6);
-        outCap.setBounds (rr.removeFromBottom (14));
-        outMeter.setBounds (rr.removeFromLeft (14));
-        rr.removeFromLeft (6);
+        auto rr = rightRail.reduced (5, 6);
+        // The output VALUE editor (the slider's own text box) sits at the rail's bottom, under BOTH
+        // the meter and the fader — the slider spans the full rail width so its TextBoxBelow lands
+        // there; the meter overlaps the slider's (empty) left margin, clear of the centred track.
+        outMeter.setBounds (rr.getX(), rr.getY(), 14, rr.getHeight() - 20);
         output.setBounds (rr);
     }
+
+    // ---- bottom toolbar (middle block only): mode+latency left · Analyzer centred · corr right --
+    auto bottom = r.removeFromBottom (22);
+    bottom.reduce (8, 0);                                            // align with the display's insets
+    const auto middleStrip = bottom;                                 // full middle width (for centring)
+    modeItem.setBounds (bottom.removeFromLeft (150).reduced (2, 1));
+    latencyLabel.setBounds (bottom.removeFromLeft (58).reduced (0, 1));
+    corrMeter.setBounds (bottom.removeFromRight (76).reduced (0, 5));   // right end == the spectrum's right edge
+    anaItem.setBounds (juce::Rectangle<int> (middleStrip.getCentreX() - 70, middleStrip.getY() + 1, 140,
+                                             middleStrip.getHeight() - 2));
 
     display.setBounds (r.reduced (8, 4));
 }
