@@ -17,10 +17,13 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
                                                                       (size_t) BinaryData::MichromaRegular_ttfSize);
     brand.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
     brand.setTooltip ("darwinscat.com/tabbyeq");
+    brand.toolbarBottom = 30.0f;   // the toolbar's bottom line = the bell's "0" (kBarH in resized())
     addAndMakeVisible (brand);
 
     addAndMakeVisible (display);
     brand.toFront (false);   // the blister protrudes below the toolbar, ON TOP of the display's top edge
+    addAndMakeVisible (underline);   // the continuous toolbar-bottom line, ON TOP of the blister + graph
+    underline.toFront (false);
 
     display.setToolbar (&strip);                                      // floating toolbar parented over the canvas
     display.onBandSelected = [this] (int b, int lane) { strip.setBand (b); strip.setActiveLane (lane); };   // node+lane -> toolbar
@@ -144,7 +147,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     setWantsKeyboardFocus (true);             // ⌘Z/⇧⌘Z, 1-4, ⌘C/⌘V — see keyPressed()
     setResizable (true, true);
-    setResizeLimits (760, 360, 7680, 4320);   // min width holds the centred top-bar group; maximise to any display
+    setResizeLimits (120, 120, 7680, 4320);   // TEMP: limits off for tuning — the WxH HUD reads the current size
     setSize (860, 500);
 
     startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
@@ -649,6 +652,8 @@ void TabbyEqEditor::resetAll()
 void TabbyEqEditor::paint (juce::Graphics& g)
 {
     g.fillAll (tabby::palette::bg());
+    // The toolbar-bottom line is one continuous stroke drawn by the ToolbarUnderline overlay (on
+    // top), so it is a single uniform hairline that dips under the blister — no junction here.
 }
 
 void TabbyEqEditor::resized()
@@ -717,7 +722,12 @@ void TabbyEqEditor::resized()
     anaItem.setBounds (juce::Rectangle<int> (middleStrip.getCentreX() - 70, middleStrip.getY() + 1, 140,
                                              middleStrip.getHeight() - 2));
 
-    display.setBounds (r.reduced (8, 4));
+    // The graph starts RIGHT under the toolbar line — no black inset strip below it (the toolbar
+    // must end AT the line). Keep the side/bottom insets, drop the top one.
+    display.setBounds (r.reduced (8, 0).withTrimmedBottom (4));
+
+    underline.setBounds (getLocalBounds());   // full-width overlay; draws only the toolbar-bottom hairline
+    underline.toFront (false);                // stay on top after any child re-add
 }
 
 //==============================================================================

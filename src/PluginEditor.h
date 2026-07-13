@@ -135,6 +135,41 @@ private:
 };
 
 //==============================================================================
+// The toolbar's bottom line as ONE continuous path across the FULL width: flat, DIPPING under the
+// brand blister (the same appendBottomLine the blister fills with), flat again. Drawn by a single
+// stroke in a mouse-transparent overlay ON TOP of everything, so there is no line-junction to
+// mismatch in thickness/position — the border is one uniform hairline that just happens to dip.
+class ToolbarUnderline final : public juce::Component
+{
+public:
+    explicit ToolbarUnderline (HeaderBrand& b) : brand (b) { setInterceptsMouseClicks (false, false); }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto  bb   = brand.getBounds();
+        const float ly   = HeaderBrand::kLineY();
+        const float yMax = (float) bb.getBottom() - 1.0f;   // the blister's plateau depth
+        juce::Path p;
+        p.startNewSubPath (0.0f, ly);
+        p.lineTo ((float) bb.getX(), ly);                    // flat, left of the blister
+        HeaderBrand::appendBottomLine (p, (float) bb.getX(), (float) bb.getWidth(), ly, yMax, brand.isLeftFlush());
+        p.lineTo ((float) getWidth(), ly);                   // flat, right of the blister
+        g.setColour (juce::Colours::white.withAlpha (0.07f));
+        g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved));
+
+        // TEMP tuning HUD: the current window size, top-left of the graph (clear of the top bar).
+        g.setColour (juce::Colours::yellow.withAlpha (0.9f));
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.drawText (juce::String (getWidth()) + " x " + juce::String (getHeight()),
+                    juce::Rectangle<int> (44, 34, 130, 16), juce::Justification::left);
+    }
+
+private:
+    HeaderBrand& brand;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToolbarUnderline)
+};
+
+//==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
 // The semantic layer (source/role pickers, trait knobs, search->treat) lands on top next.
 class TabbyEqEditor final : public juce::AudioProcessorEditor,
@@ -227,6 +262,7 @@ private:
     CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
     std::unique_ptr<juce::Drawable> catLogo; // Darwin's Cat mark (BinaryData SVG), drawn inside the blister
     HeaderBrand    brand;                    // [cat] TabbyEQ · by Darwin's Cat blister → website
+    ToolbarUnderline underline { brand };    // the one continuous toolbar-bottom line (dips under the blister)
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
 
     // ---- bottom toolbar (FabFilter-style flat items; every popup opens upward) ----
