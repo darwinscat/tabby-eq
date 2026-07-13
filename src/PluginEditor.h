@@ -208,12 +208,6 @@ public:
         p.lineTo ((float) getWidth(), ly);                   // flat, right of the blister
         g.setColour (juce::Colours::white.withAlpha (0.07f));
         g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved));
-
-        // TEMP tuning HUD: the current window size, top-left of the graph (clear of the top bar).
-        g.setColour (juce::Colours::yellow.withAlpha (0.9f));
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        g.drawText (juce::String (getWidth()) + " x " + juce::String (getHeight()),
-                    juce::Rectangle<int> (44, 34, 130, 16), juce::Justification::left);
     }
 
 private:

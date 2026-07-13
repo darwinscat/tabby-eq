@@ -57,15 +57,19 @@ EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
 
-    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB.
-    for (int i = 0; i < 4; ++i) gainScaleCombo.addItem (juce::String ((int) kGainSteps[i]) + " dB", i + 1);
-    gainScaleCombo.setColour (juce::ComboBox::textColourId,       tabby::palette::text());
-    gainScaleCombo.setColour (juce::ComboBox::backgroundColourId, tabby::palette::panel().withAlpha (0.85f));
-    gainScaleCombo.setColour (juce::ComboBox::outlineColourId,    tabby::palette::panel().brighter (0.20f));
-    gainScaleCombo.setColour (juce::ComboBox::arrowColourId,      tabby::palette::textDim());
-    gainScaleCombo.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (gainScaleCombo);
-    gainScaleCombo.onChange = [this] { const int i = gainScaleCombo.getSelectedItemIndex(); if (i >= 0) setGainRange (kGainSteps[i]); };
+    // Vertical-scale picker (top-right overlay): ±3 / ±6 / ±12 / ±30 dB. Flat text (no frame, no
+    // background, no arrow) so it never boxes over the graph's axis; a click opens a plain menu.
+    gainScaleBtn.setTooltip ("Vertical scale (dB)");
+    addAndMakeVisible (gainScaleBtn);
+    gainScaleBtn.onClick = [this]
+    {
+        juce::PopupMenu m;
+        for (int i = 0; i < 4; ++i)
+            m.addItem (i + 1, juce::String ((int) kGainSteps[i]) + " dB", true, std::abs (gainRange - kGainSteps[i]) < 0.5);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&gainScaleBtn),
+            [safe = juce::Component::SafePointer<EqCurveDisplay> (this)] (int r)
+            { if (safe != nullptr && r > 0) safe->setGainRange (kGainSteps[r - 1]); });
+    };
     setGainRange ((double) proc.apvts.state.getProperty ("gainRangeLive",              // restore the VISIBLE scale (auto-fit
                       proc.apvts.state.getProperty ("gainRange", 12.0)), false);       // included), like the post-apply re-sync
     { refreshDesigns(); double mx = 0.0;                                               // then fit: bump out until the biggest saved gain shows
@@ -481,7 +485,7 @@ void EqCurveDisplay::positionToolbar()
 
 void EqCurveDisplay::resized()
 {
-    gainScaleCombo.setBounds (getWidth() - 82, 6, 74, 22);   // top-right overlay, above the dB scale
+    gainScaleBtn.setBounds (getWidth() - 96, 6, 70, 20);   // flat top-right overlay, clear of the right axis labels
     positionToolbar();
 }
 
@@ -510,7 +514,8 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     // comparison also normalizes a String-typed post-load property without a "changed" write.
     const bool liveDiffers    = std::abs ((double) proc.apvts.state.getProperty ("gainRangeLive", -1.0e9) - gainRange) > 1.0e-6;
     const bool persistDiffers = persist && std::abs ((double) proc.apvts.state.getProperty ("gainRange", -1.0e9) - gainRange) > 1.0e-6;
-    gainScaleCombo.setSelectedItemIndex (gainStepIndex(), juce::dontSendNotification);
+    gainScaleBtn.text = juce::String ((int) gainRange) + " dB";   // reflect the current scale on the flat picker
+    gainScaleBtn.repaint();
     if (liveDiffers || persistDiffers)
     {
         // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —

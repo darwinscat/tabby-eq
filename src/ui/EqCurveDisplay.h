@@ -12,6 +12,23 @@
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
 #include "PluginProcessor.h"
+#include "ui/Palette.h"
+
+//==============================================================================
+// A flat text overlay button — no frame, no background, no dropdown arrow. Used for the vertical-
+// scale picker so it never boxes over the graph's axis; a click opens a plain PopupMenu.
+class FlatScaleButton final : public juce::Button
+{
+public:
+    FlatScaleButton() : juce::Button ({}) {}
+    juce::String text;
+    void paintButton (juce::Graphics& g, bool highlighted, bool) override
+    {
+        g.setColour (highlighted ? tabby::palette::text() : tabby::palette::textDim());
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawText (text, getLocalBounds(), juce::Justification::centredRight);
+    }
+};
 
 //==============================================================================
 // The classic EQ canvas — log-frequency / dB grid, a live post spectrum (FFT of the engine's
@@ -244,7 +261,7 @@ private:
     // while dragging a node past the edge (kGainSteps), so a node never gets stranded under the floating strip.
     double gainRange = 12.0;                          // visible ± dB (curve y-axis); NOT the gain clamp (that's kGainMax)
     juce::uint32 lastZoomMs = 0;                      // rate-limit for drag auto-zoom (one step per interval)
-    juce::ComboBox gainScaleCombo;                    // vertical-scale picker (±3/6/12/30 dB) — top-right overlay
+    FlatScaleButton gainScaleBtn;                     // vertical-scale picker (±3/6/12/30 dB) — flat, top-right
 
     bool  audLockGain = true;                         // Alt-drag sweeps frequency only (gain frozen)
     float lastDragFreq = 1000.0f;                     // last audition centre (for crisp modifier toggling)

@@ -147,7 +147,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     setWantsKeyboardFocus (true);             // ⌘Z/⇧⌘Z, 1-4, ⌘C/⌘V — see keyPressed()
     setResizable (true, true);
-    setResizeLimits (120, 120, 7680, 4320);   // TEMP: limits off for tuning — the WxH HUD reads the current size
+    setResizeLimits (720, 256, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
     setSize (860, 500);
 
     startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
