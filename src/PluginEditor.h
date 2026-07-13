@@ -48,6 +48,7 @@ private:
             lastApplyRev = r;
             display.refreshAfterLaneEdit();   // an apply replaced the live state wholesale
             syncViewFromState();              // view properties may have travelled with it
+            revalidateSolo();                 // the soloed band may not exist in the applied state
         }
     }
 
@@ -64,6 +65,7 @@ private:
     void refreshHistoryUi();                      // undo/redo enablement + peek-label tooltips
     void syncViewFromState();                     // re-read the view properties the state tree carries
     void afterHistoryNav();                       // full editor re-sync after undo/redo/switch/copy/paste
+    void revalidateSolo();                        // clear a solo whose band a history apply turned off
 
     void showViewMenu();
     void resetAll();          // clear every band + output to defaults (temporary dev convenience)

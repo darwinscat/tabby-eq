@@ -601,6 +601,12 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
 {
     if (band < 0 || band >= tabby::kNumBands) return;
     const int L = juce::jlimit (0, tabby::kNumLanes - 1, lane);
+    // No-op echo guard: the editor re-fires its lane binding on every history re-sync; writing the
+    // value that is already there must be a TRUE no-op — a suppressed write that "moves" the state
+    // clears the freshly-built redo by engine contract (crew P1: undo would wipe its own redo).
+    if (activeLaneAtom[(size_t) band].load (std::memory_order_relaxed) == L
+        && (int) apvts.state.getProperty (tabby::bandId (band, "activeLane"), -1) == L)
+        return;
     activeLaneAtom[(size_t) band].store (L, std::memory_order_relaxed);
     // Suppressed: selecting a lane TAB is view state, not an edit — unsuppressed, every tab click
     // would settle into a junk "Parameter Change" undo step. The property still rides the snapshot
@@ -608,6 +614,19 @@ void TabbyEqAudioProcessor::setBandActiveLane (int band, int lane) noexcept
     // move it invalidates a stale redo — the cost of view props living in the opaque snapshot (D1).
     const felitronics::appkit::CompareHistory::ScopedSuppress ss (history);
     apvts.state.setProperty (tabby::bandId (band, "activeLane"), L, nullptr);
+}
+
+// Reset every parameter to its default — suppressed (no undo step, per the phase decision). The
+// link-FIFO is drained INSIDE the scope on both sides: mirror events queued BEFORE the reset must
+// not replay stale pre-reset values after the scope closes (junk step + non-default linked lanes),
+// and the reset's own enqueues must not settle post-scope either.
+void TabbyEqAudioProcessor::resetAllToDefaults()
+{
+    const felitronics::appkit::CompareHistory::ScopedSuppress ss (history);
+    drainLinkFifo();
+    for (auto* p : getParameters())
+        p->setValueNotifyingHost (p->getDefaultValue());
+    drainLinkFifo();
 }
 
 //==============================================================================

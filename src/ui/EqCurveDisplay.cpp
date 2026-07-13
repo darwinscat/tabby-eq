@@ -503,6 +503,10 @@ void EqCurveDisplay::setGainRange (double r, bool persist)
     double snapped = kGainSteps[0], bd = 1.0e9;                       // snap to the nearest defined step
     for (double s : kGainSteps) { const double d = std::abs (s - r); if (d < bd) { bd = d; snapped = s; } }
     gainRange = snapped;
+    // Suppressed: the vertical scale is VIEW state, not an edit (same policy as the lane tabs) —
+    // unsuppressed, every zoom would settle into a junk "Parameter Change" step and Cmd+Z after
+    // zooming would revert... the zoom. The properties still ride the snapshot for save/registers.
+    const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
     proc.apvts.state.setProperty ("gainRangeLive", gainRange, nullptr);   // the VISIBLE range, persist or not —
                                                                           // the lane menu's split-delta reads what
                                                                           // the user actually SEES (auto-fit included)
@@ -524,6 +528,12 @@ void EqCurveDisplay::refreshAfterLaneEdit()
     if (selBand >= 0)
     {
         if (! traces.param (selBand).on) { selectBand (-1); repaint(); return; }
+        // Adopt the STATE's active lane (state → UI). After an undo/switch/load the restored
+        // property is authoritative — re-firing the display's CACHED lane would push it back into
+        // the fresh snapshot as a suppressed forward move, clearing the just-built redo (crew P1).
+        const int stateLane = (int) proc.apvts.state.getProperty (tabby::bandId (selBand, "activeLane"), selLane);
+        if (stateLane >= 0 && stateLane < teq::kNumLanes && laneOn (selBand, stateLane))
+            selLane = stateLane;
         if (! laneOn (selBand, selLane))
             for (int L = 0; L < teq::kNumLanes; ++L) if (laneOn (selBand, L)) { selLane = L; break; }
         if (onBandSelected) onBandSelected (selBand, selLane);   // re-bind the strip to the current band/lane
@@ -1155,6 +1165,11 @@ void EqCurveDisplay::smartAdd (juce::Point<float> at)
 
 void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
 {
+    // A second input source (touch/pen) landing mid-drag must not nest a second grab: it would
+    // overwrite the drag state and leak the outer history gesture + the host change-gestures.
+    if (draggingBand >= 0 || placing)
+        return;
+
     refreshDesigns();
     const Hit  hit  = nodeAt (e.position);
     const int  b    = hit.band;
@@ -1397,14 +1412,21 @@ bool EqCurveDisplay::keyPressed (const juce::KeyPress& k)
         if (placing) { placing = false; placeMoved = false; driveAudition (false); repaint(); return true; }
     }
 
+    // Selection / structure changes are inert while a drag (an open history gesture) is in flight:
+    // stepping the selection would push another band's lane state into the open gesture snapshot,
+    // and Delete mid-drag would nest "Remove Band" inside a step labelled "Move Band" (crew round).
+    const bool midDrag = isDragActive();
+
     // Alt + Left/Right steps the band selection (and picks the first band if none is selected yet).
-    if (alt && code == juce::KeyPress::leftKey)  { stepSelection (-1); return true; }
-    if (alt && code == juce::KeyPress::rightKey) { stepSelection (+1); return true; }
+    if (alt && code == juce::KeyPress::leftKey)  { if (! midDrag) stepSelection (-1); return true; }
+    if (alt && code == juce::KeyPress::rightKey) { if (! midDrag) stepSelection (+1); return true; }
 
     if (selBand >= 0 && selBand < tabby::kNumBands)   // hotkeys for the selected node
     {
         if (code == juce::KeyPress::backspaceKey || code == juce::KeyPress::deleteKey)
         {
+            if (midDrag)
+                return true;   // no structure change under an open drag gesture
             proc.beginHistoryGesture ("Remove Band " + juce::String (selBand + 1));   // one labelled step
             setParamGestured (tabby::bandId (selBand, "on"), 0.0);   // remove the band (free the slot)
             proc.endHistoryGesture();

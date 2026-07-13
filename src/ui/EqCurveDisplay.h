@@ -45,9 +45,13 @@ public:
     bool keyPressed       (const juce::KeyPress&) override;   // Esc cancels an in-progress add-drag
     void modifierKeysChanged (const juce::ModifierKeys&) override;   // crisp Alt-audition toggle mid-drag
 
-    // A node/whisker drag (an open history gesture) is in flight — the editor gates history
-    // NAVIGATION keys on this (undo/redo/register switch mid-drag is the engine's misuse path).
-    bool isDragActive() const noexcept { return draggingBand >= 0; }
+    // A node/whisker drag (an open history gesture) or a "+"-placement drag is in flight — the
+    // editor gates history NAVIGATION on this (undo/switch mid-drag is the engine's misuse path).
+    bool isDragActive() const noexcept { return draggingBand >= 0 || placing; }
+
+    // Set the visible dB scale + sync combo/state (public: the editor re-applies the snapshot's
+    // saved scale after every history apply — see syncViewFromState).
+    void setGainRange (double r, bool persist = true);
 
     // Set by the editor: fires when the selected band/lane changes (-1 = none). Drives the edit strip.
     std::function<void(int, int)> onBandSelected;   // (band, lane 0..4); band -1 = none
@@ -144,7 +148,6 @@ private:
     juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
     juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
-    void   setGainRange (double r, bool persist = true);   // set the visible dB scale + sync combo/state
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
     void   buildSpectrumPaths (juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())

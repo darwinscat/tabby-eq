@@ -64,8 +64,15 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setupField (q);
     setupField (gain);
 
-    freq.onDragEnd = [this] { if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
-    gain.onDragEnd = [this] { if (onEdited) onEdited(); };
+    // A bar drag = ONE labelled undo step (grab = begin, release = end): mid-drag pauses never
+    // fragment it into settle bursts, and the editor's key-navigation gate covers the open bracket.
+    // (Typed numeric entry bypasses the drag callbacks and settles normally.)
+    freq.onDragStart = [this] { proc.beginHistoryGesture ("Freq Band " + juce::String (curBand + 1)); };
+    q.onDragStart    = [this] { proc.beginHistoryGesture ("Q Band "    + juce::String (curBand + 1)); };
+    gain.onDragStart = [this] { proc.beginHistoryGesture ("Gain Band " + juce::String (curBand + 1)); };
+    freq.onDragEnd = [this] { proc.endHistoryGesture(); if (onEdited) onEdited(); };   // re-place the toolbar AFTER the bar drag ends
+    q.onDragEnd    = [this] { proc.endHistoryGesture(); };
+    gain.onDragEnd = [this] { proc.endHistoryGesture(); if (onEdited) onEdited(); };
 
     addMouseListener (this, true);    // also receive child mouse events for the hover-engagement logic
 

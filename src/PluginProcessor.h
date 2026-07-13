@@ -243,8 +243,26 @@ public:
     // the step boundary: pre-gesture mirrors fold into the flushed pre-burst, and the drag's last
     // mirrors fold into the gesture step instead of leaking out as a separate settle burst ~33 ms
     // after mouse-up (the drain timer would otherwise race endGesture).
-    void beginHistoryGesture (const juce::String& label) { drainLinkFifo(); history.beginGesture (label); }
-    void endHistoryGesture()                             { drainLinkFifo(); history.endGesture(); }
+    void beginHistoryGesture (const juce::String& label) { ++openHistoryGestures; drainLinkFifo(); history.beginGesture (label); }
+    void endHistoryGesture()                             { drainLinkFifo(); history.endGesture(); openHistoryGestures = juce::jmax (0, openHistoryGestures - 1); }
+    // Any history gesture (node drag, slider drag, lane-menu action) is open — the editor gates
+    // history NAVIGATION on this (a switch/undo/paste mid-gesture is the engine's misuse path).
+    bool historyGestureOpen() const noexcept             { return openHistoryGestures > 0; }
+
+    // RAII bracket for UI actions with early returns — goes through begin/endHistoryGesture (NOT
+    // the engine's raw ScopedGesture), so the FIFO drains and the open-gesture gate stay correct.
+    struct ScopedHistoryGesture
+    {
+        TabbyEqAudioProcessor& p;
+        ScopedHistoryGesture (TabbyEqAudioProcessor& proc, const juce::String& label) : p (proc) { p.beginHistoryGesture (label); }
+        ~ScopedHistoryGesture() { p.endHistoryGesture(); }
+        JUCE_DECLARE_NON_COPYABLE (ScopedHistoryGesture)
+    };
+
+    // Reset every parameter to its default as ONE non-undoable programmatic bulk write (the phase
+    // decision: Reset records no step; earlier history still walks back past it). See the .cpp for
+    // why the link-FIFO is drained inside the scope.
+    void resetAllToDefaults();
 
     // Programmatic bulk-write gate (preset apply / reset / search->treat): writes apply but record
     // no history. RAII: felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
@@ -339,6 +357,7 @@ private:
     felitronics::appkit::CompareHistory history;
     std::atomic<unsigned> historyRev { 0 };    // bumped by onHistoryChanged; the editor polls historyRevision()
     std::atomic<unsigned> applyRev   { 0 };    // bumped by onAfterApply; the editor polls applyRevision()
+    int openHistoryGestures = 0;               // refcount of open begin/endHistoryGesture brackets (message thread)
 
     static constexpr int kStateVersion = 4;   // v4: session root = CompareHistory <Workspace> envelope (live +
                                               // A/B/C/D + active); the inner state trees keep the v3 lane format

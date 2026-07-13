@@ -31,6 +31,9 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     output.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (output);
     outputAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "output", output);
+    // A fader drag = ONE labelled undo step (and keyPressed's navigation gate covers it while open).
+    output.onDragStart = [this] { proc.beginHistoryGesture ("Output Trim"); };
+    output.onDragEnd   = [this] { proc.endHistoryGesture(); };
 
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
@@ -134,6 +137,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (phaseAmountSlider);
     phaseAmountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "phaseAmount", phaseAmountSlider);
     phaseAmountSlider.onValueChange = [this] { updatePhaseUi(); };
+    phaseAmountSlider.onDragStart   = [this] { proc.beginHistoryGesture ("Phase Blend"); };
+    phaseAmountSlider.onDragEnd     = [this] { proc.endHistoryGesture(); };
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
@@ -194,6 +199,12 @@ void TabbyEqEditor::syncViewFromState()
     display.setAuditionLockGain ((bool) proc.apvts.state.getProperty ("audLockGain", true));
     display.setToolbarPlacement ((int)  proc.apvts.state.getProperty ("toolbarPlace", 0));   // floating edit-strip behaviour
     display.setLeaderMode       ((int)  proc.apvts.state.getProperty ("leaderMode",   1));   // node<->strip leader: default Flash
+
+    // The vertical dB scale rides the snapshot too — restore the VISIBLE range (gainRangeLive
+    // first: what the user saw at capture, auto-fit included), so a recalled register's +20 dB
+    // node never sits off-plot. Same-value re-writes inside setGainRange are suppressed no-ops.
+    display.setGainRange ((double) proc.apvts.state.getProperty ("gainRangeLive",
+                              proc.apvts.state.getProperty ("gainRange", 12.0)), false);
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
 }
@@ -288,6 +299,9 @@ void TabbyEqEditor::showViewMenu()
         if (safe == nullptr || r == 0) return;
         auto& d  = safe->display;
         auto& st = safe->proc.apvts.state;
+        // Suppressed: View-menu toggles are view state, not edits (same policy as the lane tabs
+        // and the vertical scale) — they must not settle into junk "Parameter Change" undo steps.
+        const felitronics::appkit::CompareHistory::ScopedSuppress ss (safe->proc.compareHistory());
         if (r == 1) { const bool v = ! d.viewBandColors(); d.setViewBandColors (v); st.setProperty ("viewBandColors", v, nullptr); }
         if (r == 2) { const bool v = ! d.viewBandCurves(); d.setViewBandCurves (v); st.setProperty ("viewBandCurves", v, nullptr); }
         if (r == 3) { const bool v = ! d.viewBandFill();   d.setViewBandFill (v);   st.setProperty ("viewBandFill", v, nullptr); }
@@ -320,12 +334,9 @@ void TabbyEqEditor::resetAll()
     // Suppressed (Oleh's call): Reset is a programmatic bulk write and records NO undo step — the
     // writes apply, the settle baseline absorbs them, and earlier history still walks back past the
     // reset. (The alternative — a "Reset All" gesture bracket making the reset itself one undoable
-    // step — was raised and can be flipped later without touching anything else.)
-    {
-        const felitronics::appkit::CompareHistory::ScopedSuppress ss (proc.compareHistory());
-        for (auto* p : proc.getParameters())      // every band param + output back to its default
-            p->setValueNotifyingHost (p->getDefaultValue());
-    }
+    // step — was raised and can be flipped later without touching anything else.) The processor
+    // method also drains the link-mirror FIFO inside the scope on both sides.
+    proc.resetAllToDefaults();
     proc.setSoloBand (-1);                         // clear any solo
     display.clearSelection();                       // deselect + hide the floating toolbar
     afterHistoryNav();                              // markers/enablement (redo is now stale by contract)
@@ -409,8 +420,22 @@ void TabbyEqEditor::afterHistoryNav()
 {
     display.refreshAfterLaneEdit();
     syncViewFromState();
+    revalidateSolo();
     updateSnapshotButtons();
     refreshHistoryUi();
+    lastHistoryRev = proc.historyRevision();   // this re-sync already covered these revisions —
+    lastApplyRev   = proc.applyRevision();     // don't repeat the full refresh on the next tick
+}
+
+// The band-listen solo is processor-transient (not part of the snapshot): a history apply that
+// turns the soloed band off would otherwise keep the audio band-passed with zero UI indication
+// (the SOLO overlay and the node both vanish with the band).
+void TabbyEqEditor::revalidateSolo()
+{
+    const int s = proc.getSoloBand();
+    if (s >= 0)
+        if (auto* on = proc.apvts.getRawParameterValue (tabby::bandId (s, "on")); on == nullptr || on->load() <= 0.5f)
+            proc.setSoloBand (-1);
 }
 
 void TabbyEqEditor::refreshHistoryUi()
@@ -431,10 +456,11 @@ bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
 {
     using MK = juce::ModifierKeys;
 
-    // While a node/whisker drag is in flight (an OPEN history gesture), history-navigation keys are
-    // inert: a switch/undo/paste mid-drag would hit the engine's gesture×navigation misuse path
-    // (force-commit + debug assert). Acting mid-drag was never meaningful — swallow, don't act.
-    const bool midDrag = display.isDragActive();
+    // While ANY history gesture is open (node/whisker drag, a strip/fader slider drag, a "+"-place
+    // drag), history-navigation keys are inert: a switch/undo/paste mid-gesture would hit the
+    // engine's gesture×navigation misuse path (force-commit + debug assert), and a register switch
+    // under a live slider drag would bleed the drag's tail into the recalled register. Swallow.
+    const bool midDrag = display.isDragActive() || proc.historyGestureOpen();
 
     // ⌘Z / ⇧⌘Z — undo/redo on the active register's own history. Swallowed even when there is
     // nothing to undo (the plugin owns the shortcut while focused; letting it fall through would
@@ -453,10 +479,11 @@ bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
         }
 
     // ⌘C / ⌘V — copy/paste the ACTIVE register via the system clipboard (the right-click menu
-    // reaches any register). ⌘C stays live mid-drag (read-only). An unrecognised clipboard falls
-    // through to the host (return false), so a stray ⌘V isn't swallowed.
+    // reaches any register). ⌘C stays live mid-drag (read-only). Mid-drag ⌘V is swallowed like the
+    // other navigation keys (same policy: inert, never the host's). Otherwise an unrecognised
+    // clipboard falls through to the host (return false), so a stray ⌘V isn't swallowed.
     if (key == juce::KeyPress ('c', MK::commandModifier, 0)) { copySnapshotToClipboard (proc.getActiveSnapshot()); return true; }
-    if (key == juce::KeyPress ('v', MK::commandModifier, 0)) return ! midDrag && pasteSnapshotFromClipboard (proc.getActiveSnapshot());
+    if (key == juce::KeyPress ('v', MK::commandModifier, 0)) return midDrag || pasteSnapshotFromClipboard (proc.getActiveSnapshot());
 
     return false;
 }

@@ -504,6 +504,39 @@ int main()
         check (p.redo() && std::abs (rv (p, probeId()) - 2000.0f) < 1e-3f, "17: redo still applies after the round-trip");
     }
 
+    // ====== 18. Crew-round UI seams: the active-lane echo guard, suppressed reset, gesture gate ======
+    {
+        TabbyEqAudioProcessor p;
+        const float def = rv (p, probeId());
+
+        // (a) The editor re-fires its lane binding on every history re-sync; an exact-value echo
+        // must be a TRUE no-op — a suppressed write that "moves" the state clears the fresh redo.
+        p.setBandActiveLane (0, 3);
+        setReal (p, probeId(), 2000.0f); settle (p);
+        p.undo();
+        check (p.canRedo(), "18: redo armed after undo");
+        p.setBandActiveLane (0, 3);                        // exact echo of the restored value
+        for (int i = 0; i < 20; ++i) p.undoTick();
+        check (p.canRedo(), "18: a no-op active-lane echo keeps the redo stack (crew P1 guard)");
+
+        // (b) Reset is a suppressed bulk write: defaults land, NO undo step records, nothing
+        // phantom settles afterwards.
+        check (p.redo(), "18: redo still applies");
+        const int depth = p.undoDepth();
+        p.resetAllToDefaults();
+        check (std::abs (rv (p, probeId()) - def) < 1e-3f, "18: reset restores the defaults");
+        check (p.undoDepth() == depth, "18: reset records no undo step");
+        for (int i = 0; i < 20; ++i) p.undoTick();
+        check (p.undoDepth() == depth, "18: reset leaves no pending phantom step");
+
+        // (c) The open-gesture gate the editor's navigation keys check.
+        check (! p.historyGestureOpen(), "18: no gesture open at rest");
+        p.beginHistoryGesture ("T");
+        check (p.historyGestureOpen(), "18: the gate reflects an open bracket");
+        p.endHistoryGesture();
+        check (! p.historyGestureOpen(), "18: the gate clears at end");
+    }
+
     if (failures == 0)
         std::cout << "TabbyEQ CompareHistory adapter harness: ALL OK\n";
     else
