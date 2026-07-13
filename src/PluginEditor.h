@@ -14,6 +14,52 @@
 #include "ui/SnapshotButton.h"
 
 //==============================================================================
+// Undo / redo buttons — self-painted curved arrows. Unicode arrow glyphs (↶/↷ etc.) render as
+// mismatched emoji or tofu depending on the host's font stack, so the icon is a Path instead.
+class HistoryArrowButton final : public juce::TextButton
+{
+public:
+    explicit HistoryArrowButton (bool pointsRight) : redoArrow (pointsRight) {}
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        TextButton::paintButton (g, highlighted, down);   // stock background (no text set)
+
+        const auto  b   = getLocalBounds().toFloat();
+        const auto  c   = b.getCentre();
+        const float rad = juce::jmin (b.getWidth(), b.getHeight()) * 0.30f;
+
+        // A 3/4 arc, clockwise from lower-left past 12 o'clock, with a tangent-aligned arrowhead
+        // at the end — the classic "redo" shape; undo is its mirror.
+        const float a0 = -2.4f, a1 = 1.0f;                 // radians, clockwise from 12 o'clock
+        juce::Path arc;
+        arc.addCentredArc (c.x, c.y, rad, rad, 0.0f, a0, a1, true);
+
+        const juce::Point<float> end  (c.x + rad * std::sin (a1), c.y - rad * std::cos (a1));
+        const juce::Point<float> dir  (std::cos (a1), std::sin (a1));   // clockwise tangent at a1
+        const juce::Point<float> perp (-dir.y, dir.x);
+        const float hl = rad * 0.85f, hw = rad * 0.55f;
+        juce::Path head;
+        head.addTriangle (end + dir * hl, end + perp * hw, end - perp * hw);
+
+        if (! redoArrow)
+        {
+            const auto flip = juce::AffineTransform::scale (-1.0f, 1.0f, c.x, c.y);
+            arc.applyTransform (flip);
+            head.applyTransform (flip);
+        }
+
+        g.setColour (findColour (juce::TextButton::textColourOffId).withAlpha (isEnabled() ? 1.0f : 0.35f));
+        g.strokePath (arc, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.fillPath (head);
+    }
+
+private:
+    bool redoArrow;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HistoryArrowButton)
+};
+
+//==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
 // The semantic layer (source/role pickers, trait knobs, search->treat) lands on top next.
 class TabbyEqEditor final : public juce::AudioProcessorEditor,
@@ -78,7 +124,7 @@ private:
     EqCurveDisplay display;
     BandEditStrip  strip;
     tabby::ui::SnapshotButton snapBtn[TabbyEqAudioProcessor::kNumSnapshots];   // A/B/C/D compare registers
-    juce::TextButton undoBtn, redoBtn;                                         // ↶ / ↷ — enabled from the history revision
+    HistoryArrowButton undoBtn { false }, redoBtn { true };                    // curved-arrow undo/redo, next to A/B/C/D
     juce::TooltipWindow tooltips { this, 700 };                                // hosts the undo-label (and phase-blend) tooltips
     unsigned lastHistoryRev = 0;                                               // last seen historyRevision()
     unsigned lastApplyRev   = 0;                                               // last seen applyRevision()

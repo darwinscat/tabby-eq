@@ -73,14 +73,13 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     updateSnapshotButtons();
 
     // Undo / redo — enablement + peek-label tooltips follow historyRevision() (see timerCallback).
+    // The arrow icons are self-painted (HistoryArrowButton) — no button text.
     for (auto* b : { &undoBtn, &redoBtn })
     {
         b->setColour (juce::TextButton::buttonColourId,  tabby::palette::panel());
         b->setColour (juce::TextButton::textColourOffId, tabby::palette::text());
         addAndMakeVisible (*b);
     }
-    undoBtn.setButtonText (juce::String::charToString (0x21b6));   // ↶
-    redoBtn.setButtonText (juce::String::charToString (0x21b7));   // ↷
     undoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } };
     redoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } };
     refreshHistoryUi();
@@ -369,8 +368,6 @@ void TabbyEqEditor::resized()
     auto r = getLocalBounds();
     auto top = r.removeFromTop (30);
     title.setBounds (top.removeFromLeft (110).reduced (8, 4));
-    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));   // ↶ / ↷ next to the title
-    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));
     prePost.setBounds (top.removeFromRight (70).reduced (6, 3));
     infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i) — just left of POST
     latencyLabel.setBounds (top.removeFromRight (56).reduced (2, 4));   // red latency readout (separate from the combo)
@@ -384,6 +381,8 @@ void TabbyEqEditor::resized()
     corrMeter.setBounds (top.removeFromLeft (100).reduced (8, 2));   // middle-left of the top bar
     for (auto& b : snapBtn)                                          // A/B/C/D registers, after the meter
         b.setBounds (top.removeFromLeft (26).reduced (2, 5));
+    undoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));      // undo/redo arrows, right beside A/B/C/D
+    redoBtn.setBounds (top.removeFromLeft (24).reduced (2, 5));
 
     // (The per-band editor is now a floating toolbar parented in the display; the bottom area
     //  it used to occupy is reserved for the upcoming Helper.)
