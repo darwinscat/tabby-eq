@@ -17,6 +17,7 @@
 
 #include <array>
 #include <atomic>
+#include <memory>
 #include <vector>
 
 //==============================================================================
@@ -121,7 +122,7 @@ public:
     }
     // Pull the latest analyzer frame; reports the FFT order it was captured at (the UI discards a frame
     // whose order != the resolution it currently wants, so a live switch never shows a wrong-size frame).
-    bool pullSpectrum (bool pre, float* dst, int& outOrder) noexcept { return (pre ? preTap : postTap).tryPull (dst, outOrder); }
+    bool pullSpectrum (bool pre, float* dst, int& outOrder) noexcept { return (pre ? *preTap : *postTap).tryPull (dst, outOrder); }
 
     // Analyzer domain: which signal the spectrum shows — 0 Stereo (ch0) / 1 Mid (L+R)/2 / 2 Side (L-R)/2.
     void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
@@ -324,9 +325,13 @@ private:
     teq::EqEngine engine;
 
     // Analyzer rolling taps (pre/post) — owned here, NOT borrowed from the engine: the resolution + the
-    // Mid/Side domain are plugin concerns, and the FIR paths bypass engine.process() entirely. The order-13
-    // ring (8192) serves any selected FFT size 1024..8192 from one buffer; fed + published in processBlock.
-    felitronics::analysis::RollingSpectrumTap preTap, postTap;
+    // Mid/Side domain are plugin concerns, and the FIR paths bypass engine.process() entirely. The order-14
+    // ring (16384) serves any selected FFT size 1024..16384 from one buffer; fed + published in processBlock.
+    // Heap-allocated (each is ~128 KB): kept off the AudioProcessor's inline footprint so stack-allocating
+    // the processor (unit tests do, ×25) stays cheap. Allocated once at construction — never in processBlock.
+    // (const unique_ptr → `preTap->reset()` is the tap's reset; a stray `preTap.reset()` won't compile.)
+    const std::unique_ptr<felitronics::analysis::RollingSpectrumTap> preTap  { std::make_unique<felitronics::analysis::RollingSpectrumTap>() };
+    const std::unique_ptr<felitronics::analysis::RollingSpectrumTap> postTap { std::make_unique<felitronics::analysis::RollingSpectrumTap>() };
     std::atomic<int> analyzerHopBase { 1600 };                    // ~30 fps hop target in samples (set from fs in prepareToPlay; atomic — read on the audio thread)
 
     LinearPhaseEq lp;                                             // Linear-phase convolution path (exact zero-phase)

@@ -18,6 +18,7 @@
 #include <juce_events/juce_events.h>
 
 #include <iostream>
+#include <memory>
 
 namespace
 {
@@ -82,7 +83,7 @@ int main()
 
     // ====== 1. Settle-timer undo/redo through the adapter ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const float def = rv (p, probeId());
         check (! p.canUndo() && ! p.canRedo(), "1: fresh processor has no history");
 
@@ -99,7 +100,7 @@ int main()
 
     // ====== 2. Undo inside the settle window reverts EXACTLY the last edit (flush-first, §2.1) ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);          // committed S1
         setReal (p, probeId(), 3000.0f);                      // unsettled S2
         check (p.undo(), "2: undo mid-burst succeeds");
@@ -110,7 +111,7 @@ int main()
 
     // ====== 3. Gesture brackets: a drag = ONE labelled step ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const float def = rv (p, probeId());
 
         setReal (p, probeId(), 1500.0f);                      // pre-gesture tweak, unsettled
@@ -143,7 +144,7 @@ int main()
 
     // ====== 4. Per-register isolation: switch is NOT an undo step; each register has its own history ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);
         check (p.snapshotEdited (0) && ! p.snapshotEdited (1), "4: edited marker set on A only");
 
@@ -167,7 +168,7 @@ int main()
 
     // ====== 5. Copy / paste ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);
         const int depthBefore = p.undoDepth();
 
@@ -229,7 +230,7 @@ int main()
     // So a sparse/foreign PARAMS tree = present-params-applied + absent-params-defaulted. No crash,
     // one undoable step, fully undoable.
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const float def     = rv (p, probeId());
         const float defGain = rv (p, tabby::laneParamId (0, 0, "gain"));
         setReal (p, probeId(), 2000.0f); settle (p);
@@ -251,7 +252,7 @@ int main()
 
     // ====== 6. v4 session round-trip ======
     {
-        TabbyEqAudioProcessor p1;
+        auto p1_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p1 = *p1_;
         setReal (p1, probeId(), 2000.0f); settle (p1);
         p1.switchToSnapshot (1);
         setReal (p1, probeId(), 5000.0f); settle (p1);
@@ -262,7 +263,7 @@ int main()
         check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 4, "6: the envelope carries stateVersion=4");
         check (xml != nullptr && xml->getIntAttribute ("count") == 4, "6: the envelope stamps the register count");
 
-        TabbyEqAudioProcessor p2;
+        auto p2_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p2 = *p2_;
         loadState (p2, blob);
         check (p2.getActiveSnapshot() == 1, "6: the active register survives the round trip");
         check (std::abs (rv (p2, probeId()) - 5000.0f) < 1e-3f, "6: the live sound survives the round trip");
@@ -276,7 +277,7 @@ int main()
 
     // ====== 7. Save purity: a host autosave poll must not mutate history ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);
         setReal (p, probeId(), 3000.0f);                      // unsettled burst
 
@@ -285,7 +286,7 @@ int main()
         check (mb1 == mb2, "7: two back-to-back saves are byte-identical (pure capture)");
         check (p.undoDepth() == 1, "7: saving does not flush the pending burst");
 
-        TabbyEqAudioProcessor p2;
+        auto p2_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p2 = *p2_;
         loadState (p2, mb1);
         check (std::abs (rv (p2, probeId()) - 3000.0f) < 1e-3f, "7: an unsettled edit still saves as current live");
 
@@ -295,13 +296,13 @@ int main()
 
     // ====== 8. Legacy v3 session (flat state tree) ======
     {
-        TabbyEqAudioProcessor donor;                           // build a v3-format blob the way old builds did
+        auto donor_ = std::make_unique<TabbyEqAudioProcessor>(); auto& donor = *donor_;                           // build a v3-format blob the way old builds did
         setReal (donor, probeId(), 2500.0f);
         auto flat = donor.apvts.copyState();
         flat.setProperty ("stateVersion", 3, nullptr);
         const auto blob = treeToBinary (flat);
 
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         loadState (p, blob);
         check (std::abs (rv (p, probeId()) - 2500.0f) < 1e-3f, "8: a v3 session loads as the live state");
         check (p.getActiveSnapshot() == 0, "8: a v3 session lands on register A");
@@ -327,7 +328,7 @@ int main()
         add (tabby::bandId (0, "on"),   1.0);
         add (tabby::bandId (0, "freq"), 2345.0);               // v2 flat freq -> v3 ST-lane freq
 
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         loadState (p, treeToBinary (v2));
         check (std::abs (rv (p, probeId()) - 2345.0f) < 1e-3f, "9: a v2 flat band migrates onto the ST lane");
         check (rv (p, tabby::bandId (0, "on")) > 0.5f, "9: the migrated band is on");
@@ -335,7 +336,7 @@ int main()
 
     // ====== 10. A corrupt <Workspace> (no Live payload) must not destroy the current state ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 4000.0f); settle (p);
 
         juce::ValueTree bad ("Workspace");
@@ -363,7 +364,7 @@ int main()
 
     // ====== 11. No phantom steps: idle ticks after an apply never create history ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);
         p.undo();
         const int depth = p.undoDepth();
@@ -373,7 +374,7 @@ int main()
 
     // ====== 12. applyLiveState re-syncs derived state: the per-band active lane rides the registers ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         p.setBandActiveLane (0, 3);                            // stored as a state-tree property
         p.switchToSnapshot (1);
         p.setBandActiveLane (0, 4);
@@ -389,7 +390,7 @@ int main()
 
     // ====== 12b. applyLiveState re-syncs the analyzer-domain mirror (specDomain property -> atomic) ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         p.apvts.state.setProperty ("specDomain", 2, nullptr);   // Side — as the editor's view menu writes it
         p.setSpectrumDomain (2);
         p.switchToSnapshot (1);
@@ -401,7 +402,7 @@ int main()
 
     // ====== 13. historyRevision bumps on every history mutation the UI must reflect ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const auto r0 = p.historyRevision();
         setReal (p, probeId(), 2000.0f); settle (p);
         const auto r1 = p.historyRevision();
@@ -417,7 +418,7 @@ int main()
     // debug — loading inside an open scope is documented misuse, but a host can still do it) ======
    #if ! JUCE_DEBUG
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         setReal (p, probeId(), 2000.0f); settle (p);
         const auto blob = saveState (p);                       // v4 blob: probe = 2000
 
@@ -435,19 +436,19 @@ int main()
 
     // ====== 15. Newer-schema envelope: best-effort load (forward compat) ======
     {
-        TabbyEqAudioProcessor donor;
+        auto donor_ = std::make_unique<TabbyEqAudioProcessor>(); auto& donor = *donor_;
         setReal (donor, probeId(), 3210.0f); settle (donor);
         auto ws = juce::ValueTree::fromXml (*parseState (saveState (donor)));
         ws.setProperty ("schema", 2, nullptr);                 // a future build's envelope
 
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         loadState (p, treeToBinary (ws));
         check (std::abs (rv (p, probeId()) - 3210.0f) < 1e-3f, "15: a newer-schema envelope still loads best-effort");
     }
 
     // ====== 16. Register-count mismatch: extras dropped, callback fires (skip-not-clamp) ======
     {
-        TabbyEqAudioProcessor donor;
+        auto donor_ = std::make_unique<TabbyEqAudioProcessor>(); auto& donor = *donor_;
         setReal (donor, probeId(), 2000.0f); settle (donor);
         auto ws = juce::ValueTree::fromXml (*parseState (saveState (donor)));
         ws.setProperty ("count", 6, nullptr);                  // a 6-register build's session
@@ -457,7 +458,7 @@ int main()
         s5.appendChild (donor.apvts.copyState(), nullptr);     // a dialed-in out-of-range register
         snaps.appendChild (s5, nullptr);
 
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         int savedC = 0, buildC = 0;
         p.compareHistory().onRegisterCountMismatch = [&] (int s, int b) { savedC = s; buildC = b; };
         loadState (p, treeToBinary (ws));
@@ -470,7 +471,7 @@ int main()
     // lands is proof the BRACKET drained it. Regression: remove drainLinkFifo() from the brackets
     // and both mirror checks below fail (the linked lane stays put).
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const juce::String linkedId = tabby::laneParamId (0, 1, "freq");   // the L lane mirrors ST when linked
         p.apvts.state.setProperty (tabby::bandId (0, "linkFq"), true, nullptr);
         setReal (p, tabby::laneParamId (0, 1, "on"), 1.0f);                // enable the mirror target lane
@@ -493,7 +494,7 @@ int main()
 
     // ====== 17. Redo stack survives a register switch round-trip ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const float def = rv (p, probeId());
         setReal (p, probeId(), 2000.0f); settle (p);
         p.undo();
@@ -506,7 +507,7 @@ int main()
 
     // ====== 18. Crew-round UI seams: the active-lane echo guard, suppressed reset, gesture gate ======
     {
-        TabbyEqAudioProcessor p;
+        auto p_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p = *p_;
         const float def = rv (p, probeId());
 
         // (a) The editor re-fires its lane binding on every history re-sync; an exact-value echo
@@ -555,7 +556,7 @@ int main()
         dir.createDirectory();
         const auto f = dir.getChildFile ("probe.tabbyeq");
 
-        TabbyEqAudioProcessor p1;
+        auto p1_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p1 = *p1_;
         setReal (p1, probeId(), 2000.0f); settle (p1);
         p1.switchToSnapshot (1);                               // dial in a workspace too
         setReal (p1, probeId(), 5000.0f); settle (p1);
@@ -564,7 +565,7 @@ int main()
         const auto xml = juce::XmlDocument::parse (f);
         check (xml != nullptr && xml->hasTagName ("PARAMS"), "19: a preset is the FLAT live tree (portable, no workspace)");
 
-        TabbyEqAudioProcessor p2;
+        auto p2_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p2 = *p2_;
         setReal (p2, probeId(), 700.0f); settle (p2);
         check (p2.loadStateFile (f), "19: loadStateFile accepts our preset");
         check (std::abs (rv (p2, probeId()) - 5000.0f) < 1e-3f, "19: the preset's live sound lands");

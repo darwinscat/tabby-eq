@@ -289,7 +289,7 @@ TabbyEqAudioProcessor::~TabbyEqAudioProcessor()
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels());   // engine clamps to teq::kMaxChannels
-    preTap.reset(); postTap.reset();                                          // rolling analyzer histories start empty (warm after one window)
+    preTap->reset(); postTap->reset();                                        // rolling analyzer histories start empty (warm after one window)
     analyzerHopBase.store (juce::jmax (1, juce::roundToInt (sampleRate / 30.0)), std::memory_order_relaxed);   // ~30 fps analyzer publish cadence, independent of window size
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
@@ -364,7 +364,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         else if (aDom == 1)           for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] + R[s]));
         else                          for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] - R[s]));
     };
-    if (meter) feed (preTap);   // pre-EQ = input, captured before audition/solo/EQ modify the buffer in place
+    if (meter) feed (*preTap);   // pre-EQ = input, captured before audition/solo/EQ modify the buffer in place
 
     auto meterOutput = [this, &buffer, n, nc, meter, &feed, aOrder, aHop]() noexcept
     {
@@ -387,9 +387,9 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
         // Analyzer: capture the post-EQ output under the same domain, then publish both frames. publishIfDue
         // is a bounded ring copy (no alloc/lock) and force-publishes on an order change → click-free switch.
-        feed (postTap);
-        preTap.publishIfDue  (aOrder, aHop);
-        postTap.publishIfDue (aOrder, aHop);
+        feed (*postTap);
+        preTap->publishIfDue  (aOrder, aHop);
+        postTap->publishIfDue (aOrder, aHop);
     };
 
     // Drag-audition: a narrow band-pass at an arbitrary frequency. Takes precedence over the normal path.
