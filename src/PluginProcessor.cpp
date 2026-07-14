@@ -289,6 +289,8 @@ TabbyEqAudioProcessor::~TabbyEqAudioProcessor()
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels());   // engine clamps to teq::kMaxChannels
+    preTap.reset(); postTap.reset();                                          // rolling analyzer histories start empty (warm after one window)
+    analyzerHopBase.store (juce::jmax (1, juce::roundToInt (sampleRate / 30.0)), std::memory_order_relaxed);   // ~30 fps analyzer publish cadence, independent of window size
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
@@ -345,7 +347,26 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         accMax (inPeak, inPk);
         if (inPk >= 1.0f) inClip.store (true, std::memory_order_relaxed);
     }
-    auto meterOutput = [this, &buffer, n, nc, meter]() noexcept
+
+    // Analyzer feed (RollingSpectrumTap). The domain + resolution order are read ONCE per block (no torn
+    // request split across the pre/post feeds); the hop is min(window, ~30 fps target) so the cadence stays
+    // UI-rate at every resolution. PRE is the domain-mixed INPUT, captured here BEFORE any in-place
+    // processing; POST is the domain-mixed OUTPUT, captured + both frames published in meterOutput() on
+    // EVERY exit path (so a resolution switch during audition/solo still completes).
+    const int aDom   = spectrumDomain.load (std::memory_order_relaxed);   // 0 Stereo ch0 / 1 Mid / 2 Side
+    const int aOrder = analyzerOrder.load  (std::memory_order_relaxed);   // FFT order 10..14 (1024..16384)
+    const int aHop   = juce::jmin (1 << aOrder, analyzerHopBase.load (std::memory_order_relaxed));
+    auto feed = [&buffer, n, nc, aDom] (auto& tap) noexcept
+    {
+        const float* L = buffer.getReadPointer (0);
+        const float* R = nc > 1 ? buffer.getReadPointer (1) : L;
+        if      (nc < 2 || aDom == 0) for (int s = 0; s < n; ++s) tap.push (L[s]);
+        else if (aDom == 1)           for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] + R[s]));
+        else                          for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] - R[s]));
+    };
+    if (meter) feed (preTap);   // pre-EQ = input, captured before audition/solo/EQ modify the buffer in place
+
+    auto meterOutput = [this, &buffer, n, nc, meter, &feed, aOrder, aHop]() noexcept
     {
         if (! meter) return;
         const float pk = buffer.getMagnitude (0, n);
@@ -363,17 +384,12 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
         corrState = 0.85f * corrState + 0.15f * corr;                       // light smoothing for a steady meter
         correlation.store (corrState, std::memory_order_relaxed);
-    };
 
-    // Feed the analyzer FIFOs the chosen domain (Stereo ch0 / Mid / Side).
-    auto pushDomain = [this, &buffer, n, nc] (teq::SpectrumTap& tap) noexcept
-    {
-        const int dom = spectrumDomain.load (std::memory_order_relaxed);
-        const float* L = buffer.getReadPointer (0);
-        const float* R = nc > 1 ? buffer.getReadPointer (1) : L;
-        if      (nc < 2 || dom == 0) for (int s = 0; s < n; ++s) tap.push (L[s]);
-        else if (dom == 1)           for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] + R[s]));
-        else                         for (int s = 0; s < n; ++s) tap.push (0.5f * (L[s] - R[s]));
+        // Analyzer: capture the post-EQ output under the same domain, then publish both frames. publishIfDue
+        // is a bounded ring copy (no alloc/lock) and force-publishes on an order change → click-free switch.
+        feed (postTap);
+        preTap.publishIfDue  (aOrder, aHop);
+        postTap.publishIfDue (aOrder, aHop);
     };
 
     // Drag-audition: a narrow band-pass at an arbitrary frequency. Takes precedence over the normal path.
@@ -423,18 +439,14 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int mode = (int) (phaseMode->load (std::memory_order_relaxed) + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
     if (mode >= 1)
     {
-        if (meter) pushDomain (engine.inputTap());
         if (mode == 2) lp.process (buffer, nc);
         else           np.process (buffer, nc);
-        if (meter) pushDomain (engine.outputTap());
     }
     else
     {
-        if (meter) pushDomain (engine.inputTap());
         for (int b = 0; b < tabby::kNumBands; ++b)
             engine.setBand (b, readBand (b));
         engine.process (buffer.getArrayOfWritePointers(), nc, n);
-        if (meter) pushDomain (engine.outputTap());
     }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
@@ -703,6 +715,7 @@ void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
     for (int i = 0; i < tabby::kNumBands; ++i)
         activeLaneAtom[(size_t) i].store ((int) apvts.state.getProperty (tabby::bandId (i, "activeLane"), -1), std::memory_order_relaxed);
     spectrumDomain.store ((int) apvts.state.getProperty ("specDomain", 0), std::memory_order_relaxed);   // analyzer Stereo/Mid/Side (see PluginEditor)
+    analyzerOrder.store (juce::jlimit (10, 14, (int) apvts.state.getProperty ("specResolution", 11)), std::memory_order_relaxed);   // analyzer FFT size (see PluginEditor)
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)

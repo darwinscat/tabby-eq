@@ -594,20 +594,25 @@ void EqCurveDisplay::pushSpectrum()
     // the panes hold their arrays, so the drawn spectra stand perfectly still.
     if (anaFrozen)
         return;
+    // The resolution the UI currently wants (FFT order 10..13). A frame captured at a DIFFERENT order
+    // is a stale pre-switch frame: drop it (still drains the tap slot so the new-order frame can land)
+    // and hold the last drawn curve — never a blank or a wrong-size (garbage) frame across a live switch.
+    const int want = proc.getSpectrumResolution();
+    int got = -1;
     if (showAnaPre)
     {
-        if (proc.pullSpectrum (true, analyzerPrePane.frameInput())) analyzerPrePane.ingest();
-        else                                                        analyzerPrePane.starve();
+        if (proc.pullSpectrum (true, analyzerPrePane.frameInput(), got)) { if (got == want) analyzerPrePane.ingest (got); }
+        else                                                             analyzerPrePane.starve();
     }
     else
-        (void) proc.pullSpectrum (true, tapDrain.data());    // keep the hidden tap fresh: an unpulled
-    if (showAnaPost)                                         // tap holds its frame, so re-enabling
-    {                                                        // would first show STALE audio
-        if (proc.pullSpectrum (false, analyzer.frameInput())) analyzer.ingest();
-        else                                                  analyzer.starve();
+        (void) proc.pullSpectrum (true, tapDrain.data(), got);   // keep the hidden tap fresh: an unpulled
+    if (showAnaPost)                                             // tap holds its frame, so re-enabling
+    {                                                            // would first show STALE audio
+        if (proc.pullSpectrum (false, analyzer.frameInput(), got)) { if (got == want) analyzer.ingest (got); }
+        else                                                       analyzer.starve();
     }
     else
-        (void) proc.pullSpectrum (false, tapDrain.data());
+        (void) proc.pullSpectrum (false, tapDrain.data(), got);
 }
 
 void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept

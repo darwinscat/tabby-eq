@@ -4,8 +4,7 @@
 #pragma once
 
 #include <felitronics/core/Fft.h>
-#include <felitronics/analysis/SpectrumTap.h>   // canonical home of kSpectrumFftSize (not the teq shim —
-                                                // the future lib move must not depend on compat targets)
+#include <felitronics/analysis/RollingSpectrumTap.h>   // kMaxOrder / kMaxSize — the max analysis window
 #include "PlotMap.h"
 
 #include <algorithm>
@@ -20,16 +19,25 @@
 // column spans LESS than one bin, interpolate between neighbours (smooth lows), where it spans
 // several, take the bin PEAK (narrow HF resonances stay visible) — applies the pink-noise display
 // tilt and maps through PlotMap. The owner draws the emitted points (path building stays JUCE-side)
-// and owns the frame SOURCE: fill frameInput() and call ingest(), or starve() when no frame arrived
-// this tick (normal at 30 Hz vs ~23 fps frames — the pane holds, then fades once genuinely starved).
-// Message-thread only; the audio thread is never touched (frames arrive via a lock-free tap).
+// and owns the frame SOURCE: fill frameInput() and call ingest(order), or starve() when no frame
+// arrived this tick. Message-thread only; the audio thread is never touched (frames arrive via a
+// lock-free tap).
+//
+// RESOLUTION: the analysis size N is chosen at RUNTIME (1024 / 2048 / 4096 / 8192 = FFT order
+// 10..13). All FFT plans are prebuilt in the ctor, so switching resolution costs no allocation — a
+// live switch just starts FFTing at the new N. On the frame where the order changes, the dB state is
+// SEEDED directly from the new bins (not smoothed up from the −120 floor) so the display cuts cleanly
+// to the new resolution instead of fading in. Storage is sized to the maximum window; a smaller N
+// uses the leading portion.
 namespace eqview
 {
 
 struct SpectrumPane
 {
-    static constexpr int fftSize = felitronics::analysis::kSpectrumFftSize;
-    static constexpr int numBins = fftSize / 2 + 1;
+    static constexpr int kMaxOrder = felitronics::analysis::RollingSpectrumTap::kMaxOrder;   // 13
+    static constexpr int kMaxSize  = felitronics::analysis::RollingSpectrumTap::kMaxSize;    // 8192
+    static constexpr int kMaxBins  = kMaxSize / 2 + 1;
+    static constexpr int kMinOrder = 10;                                                     // 1024
 
     float peakFallDb  = 0.8f;         // peak-hold decay per tick (~24 dB/s at 30 Hz)
     float smoothCoeff = 0.25f;        // per-tick smoothing toward the new frame (the analyzer "speed":
@@ -37,27 +45,45 @@ struct SpectrumPane
 
     SpectrumPane()
     {
-        constexpr float pi = 3.14159265358979323846f;
-        for (int i = 0; i < fftSize; ++i)
-            window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * pi * (float) i / (float) (fftSize - 1));
-        fft.prepare (fftSize);        // plan/alloc once, on the owner's (UI) thread — never per tick
+        for (int o = kMinOrder; o <= kMaxOrder; ++o)
+            fft[(std::size_t) (o - kMinOrder)].prepare (1 << o);   // plan/alloc once, on the owner's (UI) thread
+        buildWindow (order);          // Hann for the default order
         specDb.fill (-120.0f);
         specPeak.fill (-120.0f);
     }
 
-    // Fill with fftSize samples (the tap frame), then call ingest(). PROTOCOL: exactly one
-    // ingest() per fill — the window is applied IN PLACE, so ingesting the same buffer twice
-    // would Hann² the data. The debug guard trips on the first violation.
+    // The active analysis size (message-thread reads for buildColumns geometry).
+    int  activeOrder()   const noexcept { return order; }
+    int  activeFftSize() const noexcept { return fftSize; }
+
+    // Fill with up to (1<<order) samples (the tap frame), then call ingest(order). PROTOCOL: exactly
+    // one ingest() per fill — the window is applied IN PLACE, so ingesting the same buffer twice would
+    // Hann² the data. The debug guard trips on the first violation. The buffer is max-sized, so it
+    // holds any order's frame; ingest(order) says how many of those samples are live.
     float* frameInput() noexcept { frameArmed = true; return fftBuf.data(); }
 
-    void ingest() noexcept
+    // Transform the frame at FFT `newOrder` (10..13). When the order changes vs the last ingest, the
+    // window is rebuilt and the dB/peak state is seeded straight from the new bins (a clean cut, no
+    // fade-in); otherwise the usual per-tick smoothing + peak-hold runs.
+    void ingest (int newOrder) noexcept
     {
         assert (frameArmed && "SpectrumPane: fill frameInput() before every ingest()");
         frameArmed = false;
         starveTicks = 0;
 
-        for (int i = 0; i < fftSize; ++i) fftBuf[(size_t) i] *= window[(size_t) i];
-        fft.forward (fftBuf.data(), spec.data());                 // real[N] -> spectrum [DC, Nyquist, re1,im1, …]
+        if (newOrder < kMinOrder) newOrder = kMinOrder;
+        if (newOrder > kMaxOrder) newOrder = kMaxOrder;
+        const bool orderChanged = (newOrder != order);
+        if (orderChanged)
+        {
+            order   = newOrder;
+            fftSize = 1 << newOrder;
+            numBins = fftSize / 2 + 1;
+            buildWindow (newOrder);
+        }
+
+        for (int i = 0; i < fftSize; ++i) fftBuf[(std::size_t) i] *= window[(std::size_t) i];
+        fft[(std::size_t) (order - kMinOrder)].forward (fftBuf.data(), spec.data());   // real[N] -> [DC, Nyq, re1,im1, …]
 
         const double norm = (double) fftSize * 0.25;              // Hann single-bin compensation
         for (int i = 0; i < numBins; ++i)
@@ -67,19 +93,29 @@ struct SpectrumPane
             const float mag = std::sqrt (re * re + im * im);      // |bin| of the unnormalized forward
             const double g  = (double) mag / norm;                // == juce::Decibels::gainToDecibels (g, -120)
             const double db = g > 0.0 ? std::max (-120.0, 20.0 * std::log10 (g)) : -120.0;
-            specDb[(size_t) i]  += smoothCoeff * ((float) db - specDb[(size_t) i]);   // smooth toward target
-            specPeak[(size_t) i] = std::max (specPeak[(size_t) i] - peakFallDb, specDb[(size_t) i]);
+            if (orderChanged)                                     // seed the new-resolution bins directly (no fade-in)
+            {
+                specDb[(size_t) i]   = (float) db;
+                specPeak[(size_t) i] = (float) db;
+            }
+            else
+            {
+                specDb[(size_t) i]  += smoothCoeff * ((float) db - specDb[(size_t) i]);          // smooth toward target
+                specPeak[(size_t) i] = std::max (specPeak[(size_t) i] - peakFallDb, specDb[(size_t) i]);
+            }
         }
     }
 
-    // No new frame this tick is NORMAL (a 2048-pt window arrives at ~23 fps vs the 30 Hz timer).
-    // Hold the last spectrum; only fade once genuinely starved (audio stopped ~0.5 s).
+    // No new frame this tick is NORMAL (a window arrives at up to ~30 fps vs the 30 Hz timer). Hold the
+    // last spectrum; only fade once genuinely starved (audio stopped ~0.5 s). Bounded to the active bins.
     void starve() noexcept
     {
         if (starveTicks < 16) ++starveTicks;                      // bounded — never overflows over long silence
-        if (starveTicks > 15)
-            for (auto& v : specDb) v += 0.05f * (-120.0f - v);
-        for (auto& v : specPeak) v = std::max (-120.0f, v - peakFallDb);
+        for (int i = 0; i < numBins; ++i)
+        {
+            if (starveTicks > 15) specDb[(size_t) i] += 0.05f * (-120.0f - specDb[(size_t) i]);
+            specPeak[(size_t) i] = std::max (-120.0f, specPeak[(size_t) i] - peakFallDb);
+        }
     }
 
     // Sample the bins into N+1 log-frequency columns and emit plot points through the map.
@@ -124,12 +160,27 @@ private:
         return m;
     }
 
-    felitronics::core::fft::DefaultRealFft fft;
-    std::array<float, fftSize>     window {};
-    std::array<float, fftSize * 2> fftBuf {};
-    std::array<float, fftSize>     spec {};
-    std::array<float, numBins>     specDb {};
-    std::array<float, numBins>     specPeak {};                   // slow-decay peak-hold
+    void buildWindow (int ord) noexcept
+    {
+        const int    n  = 1 << ord;
+        constexpr float pi = 3.14159265358979323846f;
+        for (int i = 0; i < n; ++i)
+            window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * pi * (float) i / (float) (n - 1));
+    }
+
+    // Prebuilt real-FFT plans for orders kMinOrder..kMaxOrder (index = order − kMinOrder); switching
+    // resolution picks a plan — never allocates.
+    felitronics::core::fft::DefaultRealFft fft[(std::size_t) (kMaxOrder - kMinOrder + 1)];
+
+    int order   = 11;                                             // active FFT order (default 2048)
+    int fftSize = 1 << 11;
+    int numBins = (1 << 11) / 2 + 1;
+
+    std::array<float, kMaxSize>     window {};                    // Hann for the active order (leading fftSize used)
+    std::array<float, kMaxSize * 2> fftBuf {};                    // frame input + FFT workspace
+    std::array<float, kMaxSize>     spec {};                      // packed real-FFT output
+    std::array<float, kMaxBins>     specDb {};
+    std::array<float, kMaxBins>     specPeak {};                  // slow-decay peak-hold
     int starveTicks = 0;                                          // consecutive ticks with no new frame
     bool frameArmed = false;                                      // debug protocol guard (see frameInput)
 };
