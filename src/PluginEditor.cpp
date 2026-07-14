@@ -5,23 +5,28 @@
 #include "ui/Palette.h"
 #include "BinaryData.h"   // TabbyEQData — the embedded Michroma wordmark font
 
+using tabby::ui::FlatItem;   // the flat toolbar item (moved to ui/ChromeButtons.h); AnalyzerPanel below uses it unqualified
+
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
 {
     // The clickable brand blister — FabFilter-style badge (the Darwin's Cat mark + "TabbyEQ"
-    // Michroma wordmark + byline). Links to the product page.
+    // Michroma wordmark). The blister is the FRAME (it fills the bulge, driven by chromeMetrics);
+    // the product mark draws the content and owns the click-to-website. Its bottom line = the bell's
+    // "0" is now a single source (chromeMetrics.barHeight) shared by the fill and the underline.
     catLogo = juce::Drawable::createFromImageData (BinaryData::logodarwinscat_svg,
                                                    (size_t) BinaryData::logodarwinscat_svgSize);
-    brand.catLogo = catLogo.get();
-    brand.wordmarkTypeface = juce::Typeface::createSystemTypefaceFor (BinaryData::MichromaRegular_ttf,
-                                                                      (size_t) BinaryData::MichromaRegular_ttfSize);
-    brand.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
-    brand.setTooltip ("darwinscat.com/tabbyeq");
-    brand.toolbarBottom = 30.0f;   // the toolbar's bottom line = the bell's "0" (kBarH in resized())
-    addAndMakeVisible (brand);
+    mark.catLogo = catLogo.get();
+    mark.wordmarkTypeface = juce::Typeface::createSystemTypefaceFor (BinaryData::MichromaRegular_ttf,
+                                                                     (size_t) BinaryData::MichromaRegular_ttfSize);
+    mark.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
+    mark.setTooltip ("darwinscat.com/tabbyeq");
+    blister.setMark (&mark);
+    blister.onMoved = [this] { underline.repaint(); };   // repaint the hairline whenever the blister slides
+    addAndMakeVisible (blister);
 
     addAndMakeVisible (display);
-    brand.toFront (false);   // the blister protrudes below the toolbar, ON TOP of the display's top edge
+    blister.toFront (false);   // the blister protrudes below the toolbar, ON TOP of the display's top edge
     addAndMakeVisible (underline);   // the continuous toolbar-bottom line, ON TOP of the blister + graph
     underline.toFront (false);
 
@@ -62,35 +67,20 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (outMeter);
     addAndMakeVisible (corrMeter);
 
-    // A/B/C/D compare registers — recall on click, copy via right-click menu / drag / clipboard.
-    // Toggle look: the ACTIVE register is violet (the family accent), siblings sit on the panel.
-    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
-    {
-        auto& b = snapBtn[i];
-        b.setRegisterIndex (i);
-        b.setButtonText (juce::String::charToString ((juce::juce_wchar) ('A' + i)));
-        b.setColour (juce::TextButton::buttonColourId,   tabby::palette::panel());
-        b.setColour (juce::TextButton::buttonOnColourId, tabby::palette::violet());
-        b.setColour (juce::TextButton::textColourOffId,  tabby::palette::textDim());
-        b.setColour (juce::TextButton::textColourOnId,   juce::Colours::white);
-        b.onClick    = [this, i] { switchSnapshot (i); };
-        b.onPopup    = [this, i] { showSnapshotMenu (i); };
-        b.onCopyDrop = [this] (int from, int to) { applySnapshotCopy (from, to); };
-        addAndMakeVisible (b);
-    }
-    updateSnapshotButtons();
-
-    // Undo / redo — enablement + peek-label tooltips follow historyRevision() (see timerCallback).
-    // The arrow icons are self-painted (HistoryArrowButton) — no button text.
-    for (auto* b : { &undoBtn, &redoBtn })
-    {
-        b->setColour (juce::TextButton::buttonColourId,  tabby::palette::panel());
-        b->setColour (juce::TextButton::textColourOffId, tabby::palette::text());
-        addAndMakeVisible (*b);
-    }
-    undoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } };
-    redoBtn.onClick = [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } };
-    refreshHistoryUi();
+    // A/B/C/D compare registers + undo/redo — one chrome cell (its OWN DragAndDropContainer) driven
+    // by a PUSHED model (see pushCompareModel). Its actions call back into the product: recall/undo/
+    // redo carry the same navigation gate as before; copy lands one undoable edit in the target.
+    compareCell.setActions ({
+        /* recall             */ [this] (int i)        { switchSnapshot (i); },
+        /* copy               */ [this] (int f, int t) { applySnapshotCopy (f, t); },
+        /* undo               */ [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } },
+        /* redo               */ [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } },
+        /* showMenu           */ [this] (int i)        { showSnapshotMenu (i); },
+        /* copyToClipboard    */ [this] (int i)        { copySnapshotToClipboard (i); },
+        /* pasteFromClipboard */ [this] (int i)        { return pasteSnapshotFromClipboard (i); }
+    });
+    addAndMakeVisible (compareCell);
+    pushCompareModel();               // active register + edited dots + undo/redo enable + peek labels
 
     addAndMakeVisible (infoButton);   // (i) build/version popover — top-bar right
 
@@ -99,14 +89,15 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // "Natural Phase – 70" / "Linear Phase – High"); the old combos and the blend slider are gone.
     // The menu writes the params (a real edit — one labelled undo step); the label follows the
     // params through the timer poll, so host automation moves it too.
-    modeItem.onClick   = [this] { showModeMenu(); };
-    presetItem.onClick = [this] { showPresetMenu(); };
-    saveItem.onClick   = [this] { doSavePreset(); };    saveItem.setTooltip ("Save preset");
-    importItem.onClick = [this] { doImportPreset(); };  importItem.setTooltip ("Import preset…");
-    exportItem.onClick = [this] { doExportPreset(); };  exportItem.setTooltip ("Export preset…");
-    anaItem.onClick    = [this] { showAnalyzerPanel(); };
-    for (juce::Component* it : std::initializer_list<juce::Component*> { &modeItem, &presetItem, &saveItem, &importItem, &exportItem, &anaItem })
-        addAndMakeVisible (*it);
+    modeItem.onClick = [this] { showModeMenu(); };
+    anaItem.onClick  = [this] { showAnalyzerPanel(); };
+    // Preset name — one chrome cell; its click opens the preset menu, which now also holds
+    // Save/Import/Export (folded in from the old toolbar icon trio).
+    presetCell.setActions ({ /* showList */ [this] { showPresetMenu(); } });
+    presetCell.setCurrentName (currentPresetName);
+    addAndMakeVisible (presetCell);
+    addAndMakeVisible (modeItem);
+    addAndMakeVisible (anaItem);
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
@@ -123,8 +114,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // Kiosk fullscreen only works on a window WE own. JUCEApplicationBase::isStandaloneApp() is
     // unreliable inside plugin wrappers (it keyed off a static and showed the button in Cubase);
     // the processor's wrapperType is the authoritative answer.
-    fullBtn.setVisible (proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone);
-    addAndMakeVisible (fullBtn);
+    addChildComponent (fullBtn);   // add HIDDEN; addAndMakeVisible would force visible=true and defeat the gate below
+    fullBtn.setVisible (proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone);   // → the cell collapses in DAWs
     display.onToggleFullscreen = [this] { toggleFullscreen(); };            // 'f' key
 
     syncViewFromState();   // the view properties ride the state tree — also re-read on every history apply
@@ -147,7 +138,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
 
     setWantsKeyboardFocus (true);             // ⌘Z/⇧⌘Z, 1-4, ⌘C/⌘V — see keyPressed()
     setResizable (true, true);
-    setResizeLimits (720, 256, 7680, 4320);   // drag-resize freely; maximise / fullscreen to any display
+    setResizeLimits (640, 360, 7680, 4320);   // min window size (dialled in during (c))
     setSize (860, 500);
 
     startTimerHz (10);   // undo settle pump — see timerCallback() (10 Hz × settleTicks 4 ≈ 0.4 s window)
@@ -485,18 +476,27 @@ void TabbyEqEditor::showPresetMenu()
         m.addItem (100 + i, files[i].getFileNameWithoutExtension(), true,
                    files[i].getFileNameWithoutExtension() == currentPresetName);
 
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetItem),
+    m.addSeparator();                                              // Save/Import/Export now live in the menu
+    m.addItem (10, juce::String::fromUTF8 ("Save\xe2\x80\xa6"));
+    m.addItem (11, juce::String::fromUTF8 ("Import\xe2\x80\xa6"));
+    m.addItem (12, juce::String::fromUTF8 ("Export\xe2\x80\xa6"));
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (presetCell.nameAnchor()),
         [safe = juce::Component::SafePointer<TabbyEqEditor> (this), files] (int r)
         {
             // Preset loads are history-consuming (fromTree/reset) — same gate as every nav path:
             // a pick landing mid-drag (second input device) must be inert, not an engine misuse.
-            if (safe == nullptr || r == 0 || safe->historyNavBlocked()) return;
-            if (r == 1) { safe->resetAll(); return; }             // "Default" = the reset, as a preset
+            if (safe == nullptr || r == 0) return;
+            if (r == 10) { safe->doSavePreset();   return; }      // Save/Export are read-only serializations —
+            if (r == 12) { safe->doExportPreset(); return; }      // NOT history navigation, so never gated.
+            if (safe->historyNavBlocked()) return;                // everything below DOES navigate history:
+            if (r == 1)  { safe->resetAll();       return; }      // "Default" = the reset, as a preset
+            if (r == 11) { safe->doImportPreset(); return; }      // import loads state
             const auto f = files[r - 100];
             if (safe->proc.loadStateFile (f))                     // fresh clean history (setStateInformation path)
             {
                 safe->currentPresetName = f.getFileNameWithoutExtension();
-                safe->presetItem.setButtonText (safe->currentPresetName);
+                safe->presetCell.setCurrentName (safe->currentPresetName);
                 safe->afterHistoryNav();
             }
         });
@@ -517,7 +517,7 @@ void TabbyEqEditor::doSavePreset()
             if (safe->proc.saveStateFile (f.withFileExtension ("tabbyeq")))
             {
                 safe->currentPresetName = f.getFileNameWithoutExtension();
-                safe->presetItem.setButtonText (safe->currentPresetName);
+                safe->presetCell.setCurrentName (safe->currentPresetName);
             }
         });
 }
@@ -539,10 +539,10 @@ void TabbyEqEditor::doImportPreset()
             if (f != dest)
             {
                 if (dest.existsAsFile()) dest = dest.getNonexistentSibling();
-                f.copyFileTo (dest);
+                if (! f.copyFileTo (dest)) dest = f;   // copy failed → name after the file actually loaded, not a phantom
             }
             safe->currentPresetName = dest.getFileNameWithoutExtension();
-            safe->presetItem.setButtonText (safe->currentPresetName);
+            safe->presetCell.setCurrentName (safe->currentPresetName);
             safe->afterHistoryNav();
         });
 }
@@ -663,62 +663,45 @@ void TabbyEqEditor::resetAll()
     proc.setSoloBand (-1);                         // clear any solo
     display.clearSelection();                       // deselect + hide the floating toolbar
     currentPresetName = "Default";                  // Reset lives in the preset menu as "Default"
-    presetItem.setButtonText ("Default");
+    presetCell.setCurrentName ("Default");
     afterHistoryNav();                              // markers/enablement (redo is now stale by contract)
 }
 
 void TabbyEqEditor::paint (juce::Graphics& g)
 {
     g.fillAll (tabby::palette::bg());
-    // The toolbar-bottom line is one continuous stroke drawn by the ToolbarUnderline overlay (on
-    // top), so it is a single uniform hairline that dips under the blister — no junction here.
+    // The toolbar-bottom line is one continuous stroke drawn by the shell's ChromeUnderline overlay
+    // (on top), so it is a single uniform hairline that dips under the blister — no junction here.
 }
 
 void TabbyEqEditor::resized()
 {
-    static constexpr int kBarH = 30, kBlisterH = 46;   // the flat toolbar band + the taller brand badge
+    const int kBarH     = (int) chromeMetrics.barHeight;       // the flat toolbar band (ONE source: chromeMetrics)
+    const int kBlisterH = (int) chromeMetrics.blisterHeight;   // the taller brand badge that overhangs the bar
 
-    auto r   = getLocalBounds();
-    auto top = r.removeFromTop (kBarH);                 // the flat band for everything EXCEPT the brand blister
+    auto r = getLocalBounds();
+    r.removeFromTop (kBarH);                                    // the flat band belongs to the top chrome; content starts below
+    const auto topBar = getLocalBounds().removeFromTop (kBarH); // (0, 0, width, kBarH) — the chrome bar's slot
 
-    // Right corner (pinned, never moves): gear · (i) · fullscreen. Removed right-to-left so they
-    // read gear → (i) → full left-to-right.
-    if (fullBtn.isVisible())
-        fullBtn.setBounds (top.removeFromRight (26).reduced (2, 4));    // fullscreen — the very corner (standalone)
-    infoButton.setBounds (top.removeFromRight (24).reduced (3, 5));     // (i)
-    gearBtn.setBounds (top.removeFromRight (26).reduced (2, 4));        // view options gear
-    top.removeFromRight (4);
-    const int bandRight = top.getRight();              // the group centres in [0 .. bandRight]
+    // The top chrome is three zones (ChromeBar). RigidCenter = ONE contiguous run — [cat + TabbyEQ
+    // blister] · [undo/redo + A/B/C/D compare cell] · [preset name cell] — that stays TOGETHER and
+    // floats to the centre of the free band (FabFilter); it may slide PAST x=0. RightPinned = gear ·
+    // (i) · fullscreen, laid out right-to-left; its left edge is the free band's right. (Save/Import/
+    // Export moved into the preset menu, which retired the old +3px legacy centre bias.)
+    using Cell = tabby::chrome::Cell;
+    tabby::chrome::ChromeBar bar;
+    bar.add ({ &blister,     Cell::Region::RigidCenter, blister.preferredWidth (kBlisterH), 0,  false, kBlisterH });
+    bar.add ({ &compareCell, Cell::Region::RigidCenter, compareCell.fixedWidth(),            0,  false });
+    bar.add ({ &presetCell,  Cell::Region::RigidCenter, presetCell.fixedWidth(),            14,  false });   // gGap before preset
+    bar.add ({ &gearBtn,     Cell::Region::RightPinned, 26, 4, false, 0, 2, 4 });   // gear (4px leading gap → free band)
+    bar.add ({ &infoButton,  Cell::Region::RightPinned, 24, 0, false, 0, 3, 5 });   // (i)
+    bar.add ({ &fullBtn,     Cell::Region::RightPinned, 26, 0, true,  0, 2, 4 });   // fullscreen (collapses when hidden — standalone only)
 
-    // ONE contiguous group — [cat + TabbyEQ blister] · undo/redo · A/B/C/D · preset · Save/Import/
-    // Export — that stays TOGETHER and floats to the centre of the free band (FabFilter). The logo
-    // and the buttons never separate; the flexible margins on both sides keep the group centred.
-    const int brandW = brand.preferredWidth (kBlisterH);
-    constexpr int undoW = 22, redoW = 22, tGap = 6, abcdW = 26, gGap = 14;
-    constexpr int presetW = 104, saveW = 26, importW = 26, exportW = 26;   // save/import/export are icons now
-    const int groupW = brandW + undoW + redoW + tGap + TabbyEqAudioProcessor::kNumSnapshots * abcdW
-                     + gGap + presetW + saveW + importW + exportW;
-
-    // The whole group floats to the centre of the free band; as the window narrows it slides left.
-    // It may slide PAST x=0 (negative) — but only until the CAT's left edge reaches a small margin;
-    // the blister then keeps sliding its left skirt OFF-SCREEN (the window clips it into a straight
-    // rectangular cut) with NO content jump. The cat never crosses the window edge.
+    // Clamp the RigidCenter run so the CAT's left edge only just reaches a small margin; past that
+    // the blister keeps sliding its left skirt OFF-SCREEN (the window clips it into a straight cut).
     constexpr int kCatMargin = 4;
-    const int xMin = kCatMargin - (int) HeaderBrand::contentLeftOffset();   // blister left when the cat butts the edge
-    int x = juce::jmax (xMin, (bandRight - groupW) / 2);
-    const auto barItem = [&x] (juce::Component& c, int w, int vInset) { c.setBounds (x, vInset, w, kBarH - 2 * vInset); x += w; };
-
-    brand.setBounds (x, 0, brandW, kBlisterH);          x += brandW;   // the blister protrudes; the rest sit in the bar
-    barItem (undoBtn, undoW, 5);
-    barItem (redoBtn, redoW, 5);
-    x += tGap;
-    for (auto& b : snapBtn) barItem (b, abcdW, 5);
-    x += gGap;
-    barItem (presetItem, presetW, 4);
-    x += 6;                               // a touch of air between the preset name and the icon trio
-    barItem (saveItem,   saveW,   2);
-    barItem (importItem, importW, 2);
-    barItem (exportItem, exportW, 2);
+    const int minStartX = kCatMargin - (int) tabby::chrome::BrandBlister::contentLeftOffset();
+    bar.layout (topBar, kBarH, minStartX);
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
     // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE
@@ -751,7 +734,8 @@ void TabbyEqEditor::resized()
     display.setBounds (r.reduced (8, 0).withTrimmedBottom (4));
 
     underline.setBounds (getLocalBounds());   // full-width overlay; draws only the toolbar-bottom hairline
-    underline.toFront (false);                // stay on top after any child re-add
+    blister.toFront (false);                  // blister ALWAYS above content — its bulge overhangs the graph/meters
+    underline.toFront (false);                // then the hairline on top of everything (mouse-transparent)
 }
 
 //==============================================================================
@@ -759,14 +743,26 @@ void TabbyEqEditor::resized()
 // Every copy path lands in the engine (copyRegister / applyEdit): ONE discrete undoable edit in
 // the TARGET register's own history; a byte-equal copy records nothing.
 //==============================================================================
-void TabbyEqEditor::updateSnapshotButtons()
+void TabbyEqEditor::pushCompareModel()
 {
-    const int a = proc.getActiveSnapshot();
-    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
+    // The product PUSHES its history/register state into the compare cell (the cell never reaches
+    // back into CompareHistory — its onHistoryChanged/onAfterApply are single slots owned by the
+    // processor). Folds together the old updateSnapshotButtons() + refreshHistoryUi() jobs.
+    tabby::chrome::CompareModel m;
+    m.registerCount = TabbyEqAudioProcessor::kNumSnapshots;
+    m.active        = proc.getActiveSnapshot();
+    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots && i < tabby::chrome::CompareModel::kMaxRegisters; ++i)
     {
-        snapBtn[i].setToggleState (i == a, juce::dontSendNotification);
-        snapBtn[i].setEdited (proc.snapshotEdited (i));   // "modified since you dialed it in" dot
+        m.edited[(size_t) i]     = proc.snapshotEdited (i);       // "modified since you dialed it in" dot
+        m.hasContent[(size_t) i] = proc.snapshotHasContent (i);   // contract completeness (the copy menu reads it)
     }
+    m.canUndo   = proc.canUndo();
+    m.canRedo   = proc.canRedo();
+    m.undoLabel = proc.peekUndoLabel();   // raw peek — the cell prettifies ("" → "Parameter Change") + the ⌘Z hint
+    m.redoLabel = proc.peekRedoLabel();
+    m.pasteAvailable    = proc.canPasteState (juce::ValueTree::fromXml (juce::SystemClipboard::getTextFromClipboard()));
+    m.navigationBlocked = historyNavBlocked();
+    compareCell.setModel (m);
 }
 
 // History NAVIGATION is blocked while any gesture is open — for the keyboard AND for the pointer
@@ -795,8 +791,7 @@ void TabbyEqEditor::afterHistoryNav()
     display.refreshAfterLaneEdit();
     syncViewFromState();
     revalidateSolo();
-    updateSnapshotButtons();
-    refreshHistoryUi();
+    pushCompareModel();                        // markers + undo/redo enablement + peek labels, all in one push
     lastHistoryRev = proc.historyRevision();   // this re-sync already covered these revisions —
     lastApplyRev   = proc.applyRevision();     // don't repeat the full refresh on the next tick
 }
@@ -810,20 +805,6 @@ void TabbyEqEditor::revalidateSolo()
     if (s >= 0)
         if (auto* on = proc.apvts.getRawParameterValue (tabby::bandId (s, "on")); on == nullptr || on->load() <= 0.5f)
             proc.setSoloBand (-1);
-}
-
-void TabbyEqEditor::refreshHistoryUi()
-{
-    undoBtn.setEnabled (proc.canUndo());
-    redoBtn.setEnabled (proc.canRedo());
-    // Peek-label tooltips: an unlabelled settle burst reads as "Parameter Change".
-    const auto pretty = [] (const juce::String& l) { return l.isEmpty() ? juce::String ("Parameter Change") : l; };
-    const auto hint   = [] (juce::ModifierKeys::Flags mods)
-    { return " (" + juce::KeyPress ('z', mods, 0).getTextDescriptionWithIcons() + ")"; };
-    undoBtn.setTooltip ((proc.canUndo() ? "Undo " + pretty (proc.peekUndoLabel()) : juce::String ("Undo"))
-                        + hint (juce::ModifierKeys::commandModifier));
-    redoBtn.setTooltip ((proc.canRedo() ? "Redo " + pretty (proc.peekRedoLabel()) : juce::String ("Redo"))
-                        + hint (juce::ModifierKeys::Flags (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier)));
 }
 
 bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
@@ -844,14 +825,11 @@ bool TabbyEqEditor::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress ('z', MK::commandModifier | MK::shiftModifier, 0)) { if (! midDrag) { proc.redo(); afterHistoryNav(); } return true; }
 
     // 1..4 → A/B/C/D register switch. Digit row, no modifiers — a focused text field consumes its
-    // own digits before they bubble here, so numeric entry is unaffected.
-    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots; ++i)
-        if (key == juce::KeyPress ((juce::juce_wchar) ('1' + i)))
-        {
-            if (! midDrag)
-                switchSnapshot (i);
-            return true;
-        }
+    // own digits before they bubble here, so numeric entry is unaffected. OPT-IN: the editor forwards
+    // these to the compare cell; recall() carries the same nav gate, so a mid-drag key is a swallowed
+    // no-op exactly as before.
+    if (compareCell.handleRegisterKey (key))
+        return true;
 
     // ⌘C / ⌘V — copy/paste the ACTIVE register via the system clipboard (the right-click menu
     // reaches any register). ⌘C stays live mid-drag (read-only). Mid-drag ⌘V is swallowed like the
@@ -871,7 +849,7 @@ void TabbyEqEditor::showSnapshotMenu (int i)
     for (int j = 0; j < TabbyEqAudioProcessor::kNumSnapshots; ++j)
     {
         if (j == i) continue;
-        const auto name = snapBtn[j].getButtonText();
+        const auto name = compareCell.registerName (j);
         if (proc.snapshotHasContent (j))
             from.addItem (100 + j, name);
         to.addItem (200 + j, name);
@@ -879,7 +857,7 @@ void TabbyEqEditor::showSnapshotMenu (int i)
 
     const bool hasContent = proc.snapshotHasContent (i);
     juce::PopupMenu m;
-    m.addSectionHeader ("Snapshot " + snapBtn[i].getButtonText());
+    m.addSectionHeader ("Snapshot " + compareCell.registerName (i));
     m.addSubMenu ("Copy here from", from, from.getNumItems() > 0);
     m.addSubMenu ("Copy this to",   to,   hasContent);
     m.addSeparator();
@@ -891,7 +869,7 @@ void TabbyEqEditor::showSnapshotMenu (int i)
         m.addItem (2, "Paste state", proc.canPasteState (clip));
     }
 
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&snapBtn[i]),
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (compareCell.registerAnchor (i)),
         [this, safe = juce::Component::SafePointer<TabbyEqEditor> (this), i] (int r)
         {
             if (safe == nullptr || r == 0) return;
