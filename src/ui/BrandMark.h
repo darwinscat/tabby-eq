@@ -7,8 +7,8 @@
 
 //==============================================================================
 // tabby::brand — the shared TabbyEQ brand primitives: the stripe-cat mark and the Michroma
-// wordmark font. One source of truth so the editor header (HeaderBrand) and any popover render an
-// IDENTICAL mark. Pure drawing helpers — the caller supplies the embedded typeface.
+// wordmark font. One source of truth so the header blister mark (tabby::ui::TabbyMark) and any
+// popover render an IDENTICAL mark. Pure drawing helpers — the caller supplies the embedded typeface.
 //
 // The mark: five spectrum bars whose OUTER bars peak into cat ears, the centre (orange) bar is
 // "the boosted band" — tabby stripes ARE the spectrum. Oleh's pick (logo-d1) from the 2026-07
