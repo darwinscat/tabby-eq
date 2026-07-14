@@ -5,7 +5,7 @@
 #include "ui/Palette.h"
 #include "BinaryData.h"   // TabbyEQData — the embedded Michroma wordmark font
 
-using tabby::ui::FlatItem;   // the flat toolbar item (moved to ui/ChromeButtons.h); AnalyzerPanel below uses it unqualified
+using felitronics::appkit::chrome::FlatItem;   // the flat toolbar item (now in appkit); AnalyzerPanel below uses it unqualified
 
 TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p), display (p), strip (p)
@@ -22,7 +22,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     mark.onLaunch = [] { juce::URL ("https://darwinscat.com/tabbyeq").launchInDefaultBrowser(); };
     mark.setTooltip ("darwinscat.com/tabbyeq");
     blister.setMark (&mark);
-    blister.onMoved = [this] { underline.repaint(); };   // repaint the hairline whenever the blister slides
+    // (No manual onMoved wiring: the appkit ChromeUnderline self-subscribes as a ComponentListener on
+    //  the blister and repaints on any move/resize — foolproof, one less wire for the shell to forget.)
     addAndMakeVisible (blister);
 
     addAndMakeVisible (display);
@@ -70,14 +71,14 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // A/B/C/D compare registers + undo/redo — one chrome cell (its OWN DragAndDropContainer) driven
     // by a PUSHED model (see pushCompareModel). Its actions call back into the product: recall/undo/
     // redo carry the same navigation gate as before; copy lands one undoable edit in the target.
+    // ⌘C/⌘V clipboard handling stays in the product (keyPressed + the copy menu) — the appkit
+    // CompareActions is deliberately register-only (no clipboard fields).
     compareCell.setActions ({
-        /* recall             */ [this] (int i)        { switchSnapshot (i); },
-        /* copy               */ [this] (int f, int t) { applySnapshotCopy (f, t); },
-        /* undo               */ [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } },
-        /* redo               */ [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } },
-        /* showMenu           */ [this] (int i)        { showSnapshotMenu (i); },
-        /* copyToClipboard    */ [this] (int i)        { copySnapshotToClipboard (i); },
-        /* pasteFromClipboard */ [this] (int i)        { return pasteSnapshotFromClipboard (i); }
+        /* recall   */ [this] (int i)        { switchSnapshot (i); },
+        /* copy     */ [this] (int f, int t) { applySnapshotCopy (f, t); },
+        /* undo     */ [this] { if (! historyNavBlocked()) { proc.undo(); afterHistoryNav(); } },
+        /* redo     */ [this] { if (! historyNavBlocked()) { proc.redo(); afterHistoryNav(); } },
+        /* showMenu */ [this] (int i)        { showSnapshotMenu (i); }
     });
     addAndMakeVisible (compareCell);
     pushCompareModel();               // active register + edited dots + undo/redo enable + peek labels
@@ -688,8 +689,8 @@ void TabbyEqEditor::resized()
     // floats to the centre of the free band (FabFilter); it may slide PAST x=0. RightPinned = gear ·
     // (i) · fullscreen, laid out right-to-left; its left edge is the free band's right. (Save/Import/
     // Export moved into the preset menu, which retired the old +3px legacy centre bias.)
-    using Cell = tabby::chrome::Cell;
-    tabby::chrome::ChromeBar bar;
+    using Cell = felitronics::appkit::chrome::Cell;
+    felitronics::appkit::chrome::ChromeBar bar;
     bar.add ({ &blister,     Cell::Region::RigidCenter, blister.preferredWidth (kBlisterH), 0,  false, kBlisterH });
     bar.add ({ &compareCell, Cell::Region::RigidCenter, compareCell.fixedWidth(),            0,  false });
     bar.add ({ &presetCell,  Cell::Region::RigidCenter, presetCell.fixedWidth(),            14,  false });   // gGap before preset
@@ -700,7 +701,7 @@ void TabbyEqEditor::resized()
     // Clamp the RigidCenter run so the CAT's left edge only just reaches a small margin; past that
     // the blister keeps sliding its left skirt OFF-SCREEN (the window clips it into a straight cut).
     constexpr int kCatMargin = 4;
-    const int minStartX = kCatMargin - (int) tabby::chrome::BrandBlister::contentLeftOffset();
+    const int minStartX = kCatMargin - (int) felitronics::appkit::chrome::BrandBlister::contentLeftOffset();
     bar.layout (topBar, kBarH, minStartX);
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
@@ -748,20 +749,17 @@ void TabbyEqEditor::pushCompareModel()
     // The product PUSHES its history/register state into the compare cell (the cell never reaches
     // back into CompareHistory — its onHistoryChanged/onAfterApply are single slots owned by the
     // processor). Folds together the old updateSnapshotButtons() + refreshHistoryUi() jobs.
-    tabby::chrome::CompareModel m;
-    m.registerCount = TabbyEqAudioProcessor::kNumSnapshots;
-    m.active        = proc.getActiveSnapshot();
-    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots && i < tabby::chrome::CompareModel::kMaxRegisters; ++i)
-    {
-        m.edited[(size_t) i]     = proc.snapshotEdited (i);       // "modified since you dialed it in" dot
-        m.hasContent[(size_t) i] = proc.snapshotHasContent (i);   // contract completeness (the copy menu reads it)
-    }
+    felitronics::appkit::chrome::CompareModel m;
+    m.active = proc.getActiveSnapshot();
+    for (int i = 0; i < TabbyEqAudioProcessor::kNumSnapshots
+                    && i < felitronics::appkit::chrome::CompareModel::kMaxRegisters; ++i)
+        m.registerEdited[(size_t) i] = proc.snapshotEdited (i);   // "modified since you dialed it in" dot
     m.canUndo   = proc.canUndo();
     m.canRedo   = proc.canRedo();
-    m.undoLabel = proc.peekUndoLabel();   // raw peek — the cell prettifies ("" → "Parameter Change") + the ⌘Z hint
-    m.redoLabel = proc.peekRedoLabel();
-    m.pasteAvailable    = proc.canPasteState (juce::ValueTree::fromXml (juce::SystemClipboard::getTextFromClipboard()));
-    m.navigationBlocked = historyNavBlocked();
+    // Raw peek + the product's default label: appkit's cell no longer prettifies an empty label (C5),
+    // so the adapter injects "Parameter Change" here to keep the pre-extraction tooltip verbatim.
+    m.undoLabel = proc.peekUndoLabel(); if (m.undoLabel.isEmpty()) m.undoLabel = "Parameter Change";
+    m.redoLabel = proc.peekRedoLabel(); if (m.redoLabel.isEmpty()) m.redoLabel = "Parameter Change";
     compareCell.setModel (m);
 }
 

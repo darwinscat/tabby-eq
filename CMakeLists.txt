@@ -83,7 +83,7 @@ FetchContent_MakeAvailable(felitronics_core)
 # consumption as felitronics-core above. Header-only INTERFACE target — it never links JUCE itself,
 # so the core-tests tier (plugin OFF, no JUCE) can still run the UpdateCompare unit against it.
 set(TABBYEQ_APPKIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-appkit" CACHE PATH "Local felitronics-appkit checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_APPKIT_TAG "v0.4.0" CACHE STRING "felitronics-appkit git tag to fetch when no local checkout is present")
+set(TABBYEQ_APPKIT_TAG "v0.5.0" CACHE STRING "felitronics-appkit git tag to fetch when no local checkout is present")
 if(TABBYEQ_APPKIT_DIR AND EXISTS "${TABBYEQ_APPKIT_DIR}/CMakeLists.txt")
     message(STATUS "felitronics-appkit: local checkout — ${TABBYEQ_APPKIT_DIR}")
     FetchContent_Declare(felitronics_appkit SOURCE_DIR "${TABBYEQ_APPKIT_DIR}")

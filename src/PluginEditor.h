@@ -11,20 +11,21 @@
 #include "ui/LevelMeter.h"
 #include "ui/CorrelationMeter.h"
 #include "ui/VersionInfo.h"
-#include "ui/ChromeButtons.h"        // FlatItem / GlyphButton — the flat bottom-bar + top-right glyphs
+#include "ui/ChromeButtons.h"        // GlyphButton — the product's top-right gear/fullscreen glyphs
 #include "ui/TabbyMark.h"            // the product brand mark, drawn inside the blister frame
-#include "chrome/ChromeMetrics.h"    // ChromeMetrics (barHeight) + ChromeTheme
-#include "chrome/BrandBlister.h"     // the brand-blister FRAME
-#include "chrome/ChromeUnderline.h"  // the shell's continuous toolbar-bottom hairline overlay
-#include "chrome/ChromeBar.h"        // the top-bar zone layout (RigidCenter / RightPinned)
-#include "chrome/CompareCell.h"      // undo/redo + A/B/C/D compare registers (pushed model)
-#include "chrome/PresetCell.h"       // preset name + save/import/export (product model + actions)
+#include <felitronics/appkit/chrome/ChromeMetrics.h>    // ChromeMetrics (barHeight) + ChromeTheme
+#include <felitronics/appkit/chrome/BrandBlister.h>     // the brand-blister FRAME
+#include <felitronics/appkit/chrome/ChromeUnderline.h>  // the shell's continuous toolbar-bottom hairline overlay
+#include <felitronics/appkit/chrome/ChromeBar.h>        // the top-bar zone layout (RigidCenter / RightPinned)
+#include <felitronics/appkit/chrome/FlatButtons.h>      // FlatItem — the flat bottom-bar items
+#include <felitronics/appkit/chrome/CompareCell.h>      // undo/redo + A/B/C/D compare registers (pushed model)
+#include <felitronics/appkit/chrome/PresetCell.h>       // preset name (product model + actions)
 
 //==============================================================================
 // TabbyEQ editor — for now: the classic analyzer + response-curve canvas, plus an Output trim.
 // The semantic layer (source/role pickers, trait knobs, search->treat) lands on top next.
 //
-// The top toolbar/blister "chrome" is now assembled from the extractable tabby::chrome layer: the
+// The top toolbar/blister "chrome" is now assembled from the felitronics::appkit::chrome layer: the
 // editor is the SHELL — it owns the ChromeMetrics/Theme, the brand blister FRAME (+ its product
 // mark), the compare + preset cells, and the top-most underline overlay; ChromeBar lays the three
 // zones out in resized(). The compare cell is its OWN DragAndDropContainer, so the editor no longer
@@ -73,7 +74,7 @@ private:
         }
     }
 
-    // ---- A/B/C/D compare registers (see chrome/CompareCell.h; engine seams on the processor) ----
+    // ---- A/B/C/D compare registers (see appkit chrome/CompareCell.h; engine seams on the processor) ----
     void pushCompareModel();                      // build + push the CompareModel into the compare cell
     void switchSnapshot (int i);                  // recall register i + re-sync the display
     void showSnapshotMenu (int i);                // right-click on button i: copy/paste menu
@@ -107,17 +108,27 @@ private:
     EqCurveDisplay display;
     BandEditStrip  strip;
 
-    // ---- top chrome (the extractable tabby::chrome layer) ------------------------------------
-    // chromeMetrics/chromeTheme MUST precede the frame + overlay (they hold const refs to them);
-    // the frame MUST precede the underline (it references the frame).
-    tabby::chrome::ChromeMetrics  chromeMetrics;                                   // ONE bar/blister geometry source
-    tabby::chrome::ChromeTheme    chromeTheme { tabby::palette::bg(), juce::Colours::white.withAlpha (0.07f) };
+    // ---- top chrome (the felitronics::appkit::chrome layer) ------------------------------------
+    // chromeMetrics/chromeTheme MUST precede the frame + overlay (which COPY them by value at
+    // construction); the frame MUST precede the underline (the underline subscribes to it).
+    felitronics::appkit::chrome::ChromeMetrics chromeMetrics;                      // ONE bar/blister geometry source
+    // The 7-field appkit ChromeTheme, seeded from THE PRODUCT PALETTE (guardrail: NOT appkit::brand —
+    // its violet/orange differ by a few LSBs and would drift the pixel-compare). These reproduce the
+    // pre-extraction hardcoded palette values exactly.
+    felitronics::appkit::chrome::ChromeTheme   chromeTheme {
+        .fill       = tabby::palette::bg(),
+        .underline  = juce::Colours::white.withAlpha (0.07f),
+        .accent     = tabby::palette::violet(),        // active-register frame (0xff9170ff)
+        .attention  = tabby::palette::orange(),        // edited dot + drop ring (0xffff8822)
+        .text       = tabby::palette::text(),
+        .textDim    = tabby::palette::textDim(),
+        .activeText = juce::Colours::white };
     std::unique_ptr<juce::Drawable> catLogo;                                       // Darwin's Cat mark (BinaryData SVG)
     tabby::ui::TabbyMark          mark;                                            // the product mark drawn inside the frame
-    tabby::chrome::BrandBlister   blister   { chromeMetrics, chromeTheme };        // [cat] TabbyEQ blister frame → website
-    tabby::chrome::ChromeUnderline underline { blister, chromeMetrics, chromeTheme };   // the one continuous toolbar-bottom line
-    tabby::chrome::CompareCell    compareCell { TabbyEqAudioProcessor::kNumSnapshots }; // undo/redo + A/B/C/D
-    tabby::chrome::PresetCell     presetCell;                                      // preset name + save/import/export
+    felitronics::appkit::chrome::BrandBlister   blister   { chromeMetrics, chromeTheme };        // [cat] TabbyEQ blister frame → website
+    felitronics::appkit::chrome::ChromeUnderline underline { blister, chromeMetrics, chromeTheme };   // the one continuous toolbar-bottom line
+    felitronics::appkit::chrome::CompareCell    compareCell { TabbyEqAudioProcessor::kNumSnapshots, chromeTheme }; // undo/redo + A/B/C/D
+    felitronics::appkit::chrome::PresetCell     presetCell { chromeTheme };                     // preset name
 
     juce::TooltipWindow tooltips { this, 700 };                                // hosts the undo-label (and phase-blend) tooltips
     unsigned lastHistoryRev = 0;                                               // last seen historyRevision()
@@ -128,9 +139,9 @@ private:
     juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
 
     // ---- bottom toolbar (FabFilter-style flat items; every popup opens upward) ----
-    tabby::ui::FlatItem modeItem;              // "Zero Latency" / "Natural Phase – 70" / "Linear Phase – High"
+    felitronics::appkit::chrome::FlatItem modeItem;  // "Zero Latency" / "Natural Phase – 70" / "Linear Phase – High"
     juce::Label latencyLabel;                  // reported latency — yellow (Natural) / red (Linear), beside the mode
-    tabby::ui::FlatItem anaItem;               // "Analyzer: Post" -> settings popover
+    felitronics::appkit::chrome::FlatItem anaItem;   // "Analyzer: Post" -> settings popover
     juce::String currentPresetName { "Default" };
     std::unique_ptr<juce::FileChooser> chooser;                         // async save/import/export
     int   lastPhaseMode = -1, lastPhaseQuality = -1;                    // timer poll caches (labels follow

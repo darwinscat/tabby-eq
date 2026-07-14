@@ -7,7 +7,7 @@
 
 #include "BrandMark.h"   // tabby::brand — the stripe-spectrum EQ mark + Michroma wordmark
 #include "Palette.h"
-#include "../chrome/BrandBlister.h"   // tabby::chrome::BlisterMark + the frame's public skirt constants
+#include <felitronics/appkit/chrome/BrandBlister.h>   // appkit chrome::BlisterMark + the frame's public skirt constants
 
 #include <cmath>
 #include <functional>
@@ -17,7 +17,7 @@ namespace tabby::ui
 
 //==============================================================================
 // TabbyMark — TabbyEQ's brand mark, the PRODUCT half of the header blister (the frame is
-// tabby::chrome::BrandBlister). It draws the THREE marks inside the badge and owns the hover +
+// felitronics::appkit::chrome::BrandBlister). It draws the THREE marks inside the badge and owns the hover +
 // click-to-website; the frame fills the bulge behind it.
 //
 //   (  🐱  ▮▮▮  TabbyEQ  )     🐱 = Darwin's Cat mark   ▮▮▮ = the stripe EQ mark   + Michroma wordmark
@@ -26,7 +26,7 @@ namespace tabby::ui
 // the clickable link with a hand cursor — behaviour verbatim from the old HeaderBrand. It reports
 // the blister's preferred width via BlisterMark::preferredWidth (the historical expression, order
 // preserved) and draws its content starting at the frame's contentLeftOffset.
-class TabbyMark final : public tabby::chrome::BlisterMark,
+class TabbyMark final : public felitronics::appkit::chrome::BlisterMark,
                         public juce::SettableTooltipClient
 {
 public:
@@ -37,15 +37,17 @@ public:
     juce::Colour          accent { tabby::palette::violet() };   // (unused today — do NOT wire; that would be a visible change)
     std::function<void()> onLaunch;
 
-    // Preferred FULL blister width: both skirts (frame) + both inner pads (frame) + the content (cat
-    // + gap + EQ mark + gap + "TabbyEQ" wordmark). Relocated VERBATIM from HeaderBrand — the order of
-    // additions is pixel-critical; the frame's skirt/pad constants are referenced by name.
-    int preferredWidth (int height) const override
+    // Preferred CONTENT width (skirts + pads EXCLUDED — the appkit frame adds them): cat + gap + EQ
+    // mark + gap + "TabbyEQ" wordmark. Per BlisterMark's rounding contract, return the CEILING of the
+    // fractional content — the frame adds an integral skirt/pad and does NOT round again, so truncating
+    // here would shave the blister by up to 1px (a pixel-parity trap). The content expression + its
+    // order are pixel-verbatim from the pre-extraction mark, and ceil(94 + content) == 94 + ceil(content)
+    // (the frame's skirt/pad sum is the exact integer 94), so the total blister width is unchanged.
+    int preferredContentWidth (int height) const override
     {
-        using B = tabby::chrome::BrandBlister;
         const float h = (float) height;
-        return (int) std::ceil (2.0f * (B::kEndFlat + B::kTransW) + B::kPadL + markSize (h) + kGap + markSize (h) * 0.94f
-                                + kGap + tabby::brand::textWidth (wordFont (h), kWord) + B::kPadR);
+        return (int) std::ceil (markSize (h) + kGap + markSize (h) * 0.94f
+                                + kGap + tabby::brand::textWidth (wordFont (h), kWord));
     }
 
     void mouseEnter (const juce::MouseEvent&) override { hover = true;  repaint(); }
@@ -64,7 +66,7 @@ public:
         const float H = (float) getHeight();
         const float ms = markSize (H);
         const float cy = kTopPad + ms * 0.5f;                          // marks hang a hair below the top edge
-        float x = tabby::chrome::BrandBlister::contentLeftOffset();     // ALWAYS fixed — the left skirt lives to its left (may be off-screen)
+        float x = felitronics::appkit::chrome::BrandBlister::contentLeftOffset();     // ALWAYS fixed — the left skirt lives to its left (may be off-screen)
 
         auto catArea = juce::Rectangle<float> (x, cy - ms * 0.5f, ms, ms);
         if (catLogo != nullptr)
