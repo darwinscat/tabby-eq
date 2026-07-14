@@ -34,7 +34,7 @@ static bool nearEq (double a, double b, double tol) { return std::abs (a - b) <=
 // The pipeline reads g = |X[k]| / (N/4) and dB = max(-120, 20·log10 g).
 namespace theory
 {
-    constexpr int    N  = eqview::SpectrumPane::fftSize;
+    constexpr int    N  = 1 << 11;   // the refute suite runs at the default order-11 (2048) window
     constexpr double pi = 3.14159265358979323846;
 
     static std::complex<double> D (double r)
@@ -94,7 +94,7 @@ static void feedSine (eqview::SpectrumPane& p, double binM, int ticks, double am
         float* in = p.frameInput();
         for (int i = 0; i < theory::N; ++i)
             in[i] = (float) (amp * std::sin (2.0 * theory::pi * binM * (double) i / (double) theory::N));
-        p.ingest();
+        p.ingest (11);
     }
 }
 
@@ -163,7 +163,7 @@ int main()
             for (int i = 0; i < theory::N; ++i)
                 in[i] = (float) (std::sin (2.0 * theory::pi * 100.0 * i / theory::N)
                                + std::sin (2.0 * theory::pi * 104.0 * i / theory::N));
-            p.ingest();
+            p.ingest (11);
         }
         auto twoToneDb = [] (int k)
         {
@@ -232,7 +232,7 @@ int main()
     // seeds prevBin from the first column's own bin. Kept as the permanent regression pin.
     {
         Pane p;
-        { float* in = p.frameInput(); for (int i = 0; i < theory::N; ++i) in[i] = 1.0f; p.ingest(); }
+        { float* in = p.frameInput(); for (int i = 0; i < theory::N; ++i) in[i] = 1.0f; p.ingest (11); }
         eqview::PlotMap pm; pm.width = 256.0f; pm.height = 160.0f; pm.plotBottom = 160.0f;
         pm.freqMin = 120.0; pm.freqMax = 20000.0; pm.specTop = 20.0; pm.specBottom = -140.0;   // 1 dB/px
         float yFirst = -1.0f;
@@ -312,7 +312,7 @@ int main()
     {
         Pane p;
         { for (int t = 0; t < 60; ++t) { float* in = p.frameInput();
-              for (int i = 0; i < theory::N; ++i) in[i] = 1.0f; p.ingest(); } }
+              for (int i = 0; i < theory::N; ++i) in[i] = 1.0f; p.ingest (11); } }
         auto firstColDb = [&] (double fsHz)
         {
             eqview::PlotMap pm; pm.width = 256.0f; pm.height = 96.0f; pm.plotBottom = 96.0f;

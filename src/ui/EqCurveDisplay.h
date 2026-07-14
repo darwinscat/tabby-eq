@@ -188,7 +188,7 @@ private:
     // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
     eqview::SpectrumPane analyzer;          // post-EQ pane (primary, coloured)
     eqview::SpectrumPane analyzerPrePane;   // pre-EQ pane (dimmed grey, drawn behind)
-    std::array<float, eqview::SpectrumPane::fftSize> tapDrain {};   // discard buffer for HIDDEN taps (see pushSpectrum)
+    std::array<float, eqview::SpectrumPane::kMaxSize> tapDrain {};   // discard buffer for HIDDEN taps (max window; see pushSpectrum)
 
     // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
     // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().

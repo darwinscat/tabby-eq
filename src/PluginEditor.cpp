@@ -175,6 +175,7 @@ void TabbyEqEditor::syncViewFromState()
                               proc.apvts.state.getProperty ("gainRange", 12.0)), false);
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
+    proc.setSpectrumResolution ((int) proc.apvts.state.getProperty ("specResolution", 11));   // analyzer FFT size (1024..8192)
 
     // The analyzer settings ride the snapshot too (view state, suppressed writes — AnalyzerPanel).
     display.setAnalyzerShow  ((bool) proc.apvts.state.getProperty ("anaPre", false),
@@ -323,15 +324,17 @@ namespace
             initRow (rangeLbl, "Range:", rangeVal);
             initRow (speedLbl, "Speed:", speedVal);
             initRow (tiltLbl,  "Tilt:",  tiltVal);
+            initRow (resLbl,   "Resolution:", resVal);
             rangeVal.onClick = [this] { rangeMenu(); };
             speedVal.onClick = [this] { speedMenu(); };
             tiltVal.onClick  = [this] { tiltMenu(); };
+            resVal.onClick   = [this] { resMenu(); };
 
             initToggle (freezeBtn, "Freeze", display.analyzerFrozen());
             freezeBtn.onClick = [this] { display.setAnalyzerFrozen (freezeBtn.getToggleState()); };
 
             refreshValues();
-            setSize (216, 150);
+            setSize (216, 172);
         }
 
         void paint (juce::Graphics& g) override
@@ -348,7 +351,7 @@ namespace
             postBtn.setBounds (rowTop.removeFromLeft (62));
             r.removeFromTop (6);
             for (auto row : { std::pair<juce::Label*, FlatItem*> { &rangeLbl, &rangeVal },
-                              { &speedLbl, &speedVal }, { &tiltLbl, &tiltVal } })
+                              { &speedLbl, &speedVal }, { &tiltLbl, &tiltVal }, { &resLbl, &resVal } })
             {
                 auto line = r.removeFromTop (22);
                 row.first->setBounds (line.removeFromLeft (86));
@@ -383,6 +386,7 @@ namespace
             static const char* speeds[] = { "Slow", "Medium", "Fast" };
             speedVal.setButtonText (speeds[juce::jlimit (0, 2, (int) proc.apvts.state.getProperty ("anaSpeed", 1))]);
             tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty ("anaTilt", 4.5), 1) + " dB/oct");
+            resVal.setButtonText (juce::String (1 << juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11))));
         }
 
         void rangeMenu()
@@ -420,12 +424,26 @@ namespace
                 { if (safe != nullptr && r > 0) safe->setProp ("anaTilt", tilts[r - 1]); });
         }
 
+        void resMenu()
+        {
+            // The stored value is the FFT ORDER (10..13); the menu shows the SIZE (1024..8192). setProp
+            // records the suppressed view-state prop, and onChanged -> syncViewFromState pushes the order
+            // to the processor's analyzer atomic (a live, click-free switch).
+            juce::PopupMenu m;
+            const int cur = juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11));
+            for (int ord = 10; ord <= 14; ++ord)
+                m.addItem (ord, juce::String (1 << ord), true, cur == ord);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&resVal),
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp ("specResolution", r); });
+        }
+
         TabbyEqAudioProcessor& proc;
         EqCurveDisplay&        display;
         std::function<void()>  onChanged;
         juce::TextButton preBtn, postBtn, freezeBtn;
-        juce::Label rangeLbl, speedLbl, tiltLbl;
-        FlatItem    rangeVal, speedVal, tiltVal;
+        juce::Label rangeLbl, speedLbl, tiltLbl, resLbl;
+        FlatItem    rangeVal, speedVal, tiltVal, resVal;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerPanel)
     };

@@ -6,6 +6,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <teq/EqEngine.h>
 #include <teq/Smoother.h>
+#include <felitronics/analysis/RollingSpectrumTap.h>   // analyzer taps (decoupled hop; selectable FFT size)
 #include <felitronics/appkit/CompareHistory.h>
 
 #include "Parameters.h"
@@ -16,6 +17,7 @@
 
 #include <array>
 #include <atomic>
+#include <memory>
 #include <vector>
 
 //==============================================================================
@@ -118,11 +120,22 @@ public:
     {
         analyzerRefs.fetch_add (shouldRun ? 1 : -1, std::memory_order_relaxed);   // taps are fed from processBlock (domain-aware)
     }
-    bool pullSpectrum (bool pre, float* dst) noexcept { return (pre ? engine.inputTap() : engine.outputTap()).tryPull (dst); }
+    // Pull the latest analyzer frame; reports the FFT order it was captured at (the UI discards a frame
+    // whose order != the resolution it currently wants, so a live switch never shows a wrong-size frame).
+    bool pullSpectrum (bool pre, float* dst, int& outOrder) noexcept { return (pre ? *preTap : *postTap).tryPull (dst, outOrder); }
 
     // Analyzer domain: which signal the spectrum shows — 0 Stereo (ch0) / 1 Mid (L+R)/2 / 2 Side (L-R)/2.
     void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
     int   getSpectrumDomain() const noexcept { return spectrumDomain.load (std::memory_order_relaxed); }
+
+    // Analyzer resolution: spectrum FFT order 10..14 (1024/2048/4096/8192/16384). Read once per block by
+    // the audio thread; changing it force-publishes a fresh frame at the new size (click-free live switch).
+    // The [10,14] clamp MUST stay within eqview::SpectrumPane's [kMinOrder,kMaxOrder]=[10,14] (kMaxOrder
+    // rides RollingSpectrumTap's MaxOrder): the pane trusts the frame order to size its FFT, so a lower
+    // order here would make it window a short frame's stale tail. Widen only together with the tap's
+    // MaxOrder, SpectrumPane::kMinOrder, and the AnalyzerPanel menu.
+    void  setSpectrumResolution (int order) noexcept { analyzerOrder.store (juce::jlimit (10, 14, order), std::memory_order_relaxed); }
+    int   getSpectrumResolution() const noexcept     { return analyzerOrder.load (std::memory_order_relaxed); }
     float getCorrelation()   const noexcept { return correlation.load (std::memory_order_relaxed); }   // L/R phase correlation -1..+1
     teq::BandParams readBand (int b) const noexcept;   // BandParams v2 from the APVTS atomics (5 lanes)
 
@@ -311,6 +324,16 @@ private:
 
     teq::EqEngine engine;
 
+    // Analyzer rolling taps (pre/post) — owned here, NOT borrowed from the engine: the resolution + the
+    // Mid/Side domain are plugin concerns, and the FIR paths bypass engine.process() entirely. The order-14
+    // ring (16384) serves any selected FFT size 1024..16384 from one buffer; fed + published in processBlock.
+    // Heap-allocated (each is ~128 KB): kept off the AudioProcessor's inline footprint so stack-allocating
+    // the processor (unit tests do, ×25) stays cheap. Allocated once at construction — never in processBlock.
+    // (const unique_ptr → `preTap->reset()` is the tap's reset; a stray `preTap.reset()` won't compile.)
+    const std::unique_ptr<felitronics::analysis::RollingSpectrumTap> preTap  { std::make_unique<felitronics::analysis::RollingSpectrumTap>() };
+    const std::unique_ptr<felitronics::analysis::RollingSpectrumTap> postTap { std::make_unique<felitronics::analysis::RollingSpectrumTap>() };
+    std::atomic<int> analyzerHopBase { 1600 };                    // ~30 fps hop target in samples (set from fs in prepareToPlay; atomic — read on the audio thread)
+
     LinearPhaseEq lp;                                             // Linear-phase convolution path (exact zero-phase)
     NaturalPhase  np;                                             // Natural-phase convolution path (mixed phase, blend k)
     static constexpr int kNaturalQuality = 1;                    // Natural's fixed FIR length (L = 4096); the quality combo is Linear-only
@@ -356,6 +379,7 @@ private:
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
 
     std::atomic<int>   spectrumDomain { 0 };   // analyzer domain: 0 Stereo (ch0) / 1 Mid / 2 Side
+    std::atomic<int>   analyzerOrder  { 11 };  // analyzer FFT order 10..14 → 1024/2048/4096/8192/16384 (2048 default)
     std::atomic<float> correlation { 1.0f };   // L/R phase correlation (-1..+1) for the meter
     float corrState = 1.0f;                    // audio-thread smoothing state for the correlation meter
 

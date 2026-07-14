@@ -23,23 +23,25 @@ static void check (bool ok, const char* what)
 
 static bool nearEq (double a, double b, double tol) { return std::abs (a - b) <= tol; }
 
-// Fill the pane's input with a unit sine at an exact bin centre and ingest it `ticks` times
-// (the 0.25 smoothing converges geometrically — ~40 ticks is < 0.01 dB from the target).
-static void feedSine (eqview::SpectrumPane& p, int bin, int ticks)
+// Fill the pane's input with a unit sine at an exact bin centre (of the given FFT order) and ingest
+// it `ticks` times (the 0.25 smoothing converges geometrically — ~40 ticks is < 0.01 dB from target).
+static void feedSine (eqview::SpectrumPane& p, int bin, int ticks, int order = 11)
 {
     constexpr double pi = 3.14159265358979323846;
+    const int N = 1 << order;
     for (int t = 0; t < ticks; ++t)
     {
         float* in = p.frameInput();
-        for (int i = 0; i < eqview::SpectrumPane::fftSize; ++i)
-            in[i] = (float) std::sin (2.0 * pi * (double) bin * (double) i / (double) eqview::SpectrumPane::fftSize);
-        p.ingest();
+        for (int i = 0; i < N; ++i)
+            in[i] = (float) std::sin (2.0 * pi * (double) bin * (double) i / (double) N);
+        p.ingest (order);
     }
 }
 
 int main()
 {
     using Pane = eqview::SpectrumPane;
+    constexpr int kN2048 = 1 << 11;   // the default order-11 window — the existing pins all run at 2048
 
     // --- Hann single-bin compensation: a full-scale sine at an exact bin centre reads ~0 dB -----
     {
@@ -49,7 +51,7 @@ int main()
         eqview::PlotMap pm; pm.width = 900.0f; pm.height = 96.0f; pm.plotBottom = 96.0f;
         pm.specTop = 6.0; pm.specBottom = -90.0;   // 1 px per dB: y = (6 - dB)
         const double fs = 48000.0;
-        const double fBin = 100.0 * fs / (double) Pane::fftSize;   // the sine's frequency
+        const double fBin = 100.0 * fs / (double) kN2048;   // the sine's frequency
         float yAtSine = -1.0f; double xTarget = pm.freqToX (fBin);
         double bestDx = 1.0e9;
         p.buildColumns (pm, fs, 0.0, 1000.0, [&] (int, float x, float yFill, float)
@@ -76,7 +78,7 @@ int main()
             { const double dx = std::abs ((double) x - xT); if (dx < bestDx) { bestDx = dx; best = yPeak; } });
             return 6.0 - (double) best;
         };
-        const double fBin = 64.0 * fs / (double) Pane::fftSize;
+        const double fBin = 64.0 * fs / (double) kN2048;
         const double before = peakDbAt (fBin);
         p.starve(); p.starve(); p.starve();
         const double after = peakDbAt (fBin);
@@ -90,7 +92,7 @@ int main()
         eqview::PlotMap pm; pm.width = 900.0f; pm.height = 96.0f; pm.plotBottom = 96.0f;
         pm.specTop = 6.0; pm.specBottom = -90.0;
         const double fs = 48000.0;
-        const double fBin = 64.0 * fs / (double) Pane::fftSize;
+        const double fBin = 64.0 * fs / (double) kN2048;
         auto fillDbAt = [&] (double fHz)
         {
             float best = 0.0f; double bestDx = 1.0e9; const double xT = pm.freqToX (fHz);
@@ -174,17 +176,17 @@ int main()
         // 0.25 smoothing: ONE ingest from the -120 floor toward a ~0 dB exact-bin sine lands at
         // ~-90 dB (-120 + 0.25*120). A changed smoothing constant moves this by tens of dB.
         { Pane p; feedSine (p, 100, 1);
-          check (nearEq (fillDbAt (p, 48000.0, 100.0 * 48000.0 / Pane::fftSize), -90.0, 2.5), "0.25 smoothing: first tick lands at ~-90 dB"); }
+          check (nearEq (fillDbAt (p, 48000.0, 100.0 * 48000.0 / kN2048), -90.0, 2.5), "0.25 smoothing: first tick lands at ~-90 dB"); }
 
         // zero input stays EXACTLY on the -120 floor (gain 0 -> minus-infinity clamp -> no drift)
         { Pane p; for (int t = 0; t < 3; ++t) { float* in = p.frameInput();
-              for (int i = 0; i < Pane::fftSize; ++i) in[i] = 0.0f; p.ingest(); }
+              for (int i = 0; i < kN2048; ++i) in[i] = 0.0f; p.ingest (11); }
           check (nearEq (fillDbAt (p, 48000.0, 1000.0), -120.0, 1e-3), "zero input holds the -120 dB floor"); }
 
         // DC packing (spec[0], im forced 0): windowed DC reads ~+6 dB at bin 0 (Hann sum = N/2,
         // norm = N/4). Probe with a huge fs so the 20 Hz column sits at 98% of bin 0.
         { Pane p; for (int t = 0; t < 60; ++t) { float* in = p.frameInput();
-              for (int i = 0; i < Pane::fftSize; ++i) in[i] = 1.0f; p.ingest(); }
+              for (int i = 0; i < kN2048; ++i) in[i] = 1.0f; p.ingest (11); }
           check (nearEq (fillDbAt (p, 2048000.0, 20.0), 6.0, 0.8), "DC bin packing reads ~+6 dB"); }
 
         // Nyquist packing (spec[1]): an alternating +-1 signal is a full-scale Nyquist tone
@@ -193,7 +195,7 @@ int main()
         // wide top columns — pin exactly that: with freqMax past fs/2 the loudest column must
         // carry the +6 dB through the spec[1] slot (a broken special case reads ~0 dB leakage).
         { Pane p; for (int t = 0; t < 60; ++t) { float* in = p.frameInput();
-              for (int i = 0; i < Pane::fftSize; ++i) in[i] = (i & 1) ? -1.0f : 1.0f; p.ingest(); }
+              for (int i = 0; i < kN2048; ++i) in[i] = (i & 1) ? -1.0f : 1.0f; p.ingest (11); }
           float minY = 1.0e9f;
           p.buildColumns (deep, 40000.0, 0.0, 1000.0, [&] (int, float, float yFill, float)
           { minY = std::min (minY, yFill); });
@@ -210,7 +212,7 @@ int main()
         // interpolation INSIDE one bin: at low frequencies consecutive columns share a bin pair yet
         // move smoothly (nearest-bin sampling would stair-step to equal values).
         { Pane p; feedSine (p, 3, 60);
-          const double fs = 48000.0, binPerHz = (double) Pane::fftSize / fs;
+          const double fs = 48000.0, binPerHz = (double) kN2048 / fs;
           bool smoothPair = false; double prevF = -1.0; float prevY = 0.0f;
           p.buildColumns (deep, fs, 0.0, 1000.0, [&] (int, float x, float yFill, float)
           {
@@ -221,6 +223,63 @@ int main()
               prevF = f; prevY = yFill;
           });
           check (smoothPair, "columns interpolate INSIDE a bin (liquid lows, no stair-steps)"); }
+    }
+
+    // === RESOLUTION (runtime FFT order 10..13) =================================================
+    // Probe map: 1 px per dB, 6..-90 over 96 px -> dB = 6 - y.
+    auto peakDb = [] (Pane& p, double fs, double fHz)
+    {
+        eqview::PlotMap pm; pm.width = 900.0f; pm.height = 96.0f; pm.plotBottom = 96.0f;
+        pm.specTop = 6.0; pm.specBottom = -90.0;
+        float yBest = 0.0f; double bestDx = 1.0e9; const double xT = pm.freqToX (fHz);
+        p.buildColumns (pm, fs, 0.0, 1000.0, [&] (int, float x, float yFill, float)
+        { const double dx = std::abs ((double) x - xT); if (dx < bestDx) { bestDx = dx; yBest = yFill; } });
+        return 6.0 - (double) yBest;
+    };
+
+    // --- Hann single-bin compensation holds at EVERY order: 3000 Hz is exactly bin N/16 at 48 kHz
+    //     for N = 1024/2048/4096/8192, and a full-scale exact-bin sine must read ~0 dB at each. Also
+    //     pins that the pane reports the active order/size it was last ingested at. ------------------
+    {
+        const double fs = 48000.0, f = 3000.0;   // 3000 Hz is exactly bin N/16 at 48k for N = 1024..16384
+        for (int ord = 10; ord <= 14; ++ord)
+        {
+            Pane p;
+            const int N = 1 << ord;
+            feedSine (p, N / 16, 60, ord);            // first ingest at ord seeds; the rest converge
+            check (nearEq (peakDb (p, fs, f), 0.0, 1.5),
+                   ord == 10 ? "order 10 (1024): exact-bin sine reads ~0 dB (Hann comp)" :
+                   ord == 11 ? "order 11 (2048): exact-bin sine reads ~0 dB (Hann comp)" :
+                   ord == 12 ? "order 12 (4096): exact-bin sine reads ~0 dB (Hann comp)" :
+                   ord == 13 ? "order 13 (8192): exact-bin sine reads ~0 dB (Hann comp)" :
+                               "order 14 (16384): exact-bin sine reads ~0 dB (Hann comp)");
+            check (p.activeOrder() == ord && p.activeFftSize() == N, "pane reports the ingested order/size");
+        }
+    }
+
+    // --- seed-UP on an order change: a live tone appears IMMEDIATELY at the new resolution, not
+    //     faded in from the floor. Converge SILENCE at order 11 (specDb == -120), then ingest ONE
+    //     loud order-12 frame. Seeding writes the bins directly -> ~0 dB after a single tick; a
+    //     smoothing impl would land at ~-90 dB (0.25 from -120). ~90 dB apart = decisive. -----------
+    {
+        constexpr double pi = 3.14159265358979323846;
+        Pane p;
+        for (int t = 0; t < 5; ++t) { float* in = p.frameInput(); for (int i = 0; i < kN2048; ++i) in[i] = 0.0f; p.ingest (11); }
+        const int N = 1 << 12;                        // 3000 Hz is bin N/16 at order 12
+        { float* in = p.frameInput(); for (int i = 0; i < N; ++i) in[i] = (float) std::sin (2.0 * pi * (double) (N / 16) * (double) i / (double) N); p.ingest (12); }
+        check (nearEq (peakDb (p, 48000.0, 3000.0), 0.0, 2.0), "order change seeds from bins: a live tone shows at once (no fade-in)");
+    }
+
+    // --- seed-DOWN on an order change: no stale old-resolution level bleeds through. Converge a LOUD
+    //     tone at order 11 (~0 dB), then ingest ONE SILENT order-12 frame. Seeding -> the floor at
+    //     once (reads at the -90 dB display floor); a smoothing impl would read ~-30 dB (0.25 from 0
+    //     toward -120) and FAIL this bound. ----------------------------------------------------------
+    {
+        Pane p;
+        feedSine (p, kN2048 / 16, 60, 11);            // loud 3000 Hz @ order 11, converged ~0 dB
+        const int N = 1 << 12;
+        { float* in = p.frameInput(); for (int i = 0; i < N; ++i) in[i] = 0.0f; p.ingest (12); }
+        check (peakDb (p, 48000.0, 3000.0) < -80.0, "order change seeds to the floor: no old-resolution level bleeds through");
     }
 
     std::printf (failures == 0 ? "SpectrumPane: all checks passed\n" : "SpectrumPane: %d FAILURES\n", failures);
