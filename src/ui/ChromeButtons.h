@@ -7,84 +7,12 @@
 
 #include "Palette.h"
 
-#include <cmath>
-
 //==============================================================================
-// The flat, self-painted toolbar widgets shared by the editor's chrome and the chrome cells
-// (compare / preset). Product-styled (they pull the family palette); at the appkit lib move they
-// are replaced by appkit::IconButton. Relocated VERBATIM out of PluginEditor.h — no visual change.
+// The product's flat, self-painted top-right GLYPH buttons (gear / fullscreen). The flat TEXT item
+// (FlatItem) and the undo/redo arrow moved to felitronics::appkit::chrome (FlatButtons.h); only the
+// glyph buttons — which have no appkit equivalent — stay product-side here.
 namespace tabby::ui
 {
-
-//==============================================================================
-// A flat text item (bottom toolbar / unframed chrome): no background, no outline — just the label,
-// dim at rest and brightening on hover, FabFilter-style. Popups launched off these open upward at
-// the window's bottom edge automatically.
-class FlatItem : public juce::TextButton
-{
-public:
-    using juce::TextButton::TextButton;
-
-    void paintButton (juce::Graphics& g, bool highlighted, bool) override
-    {
-        g.setColour ((highlighted ? tabby::palette::text() : tabby::palette::textDim())
-                         .withAlpha (isEnabled() ? 1.0f : 0.4f));
-        g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred);
-    }
-};
-
-//==============================================================================
-// Undo / redo buttons — self-painted curved arrows. Unicode arrow glyphs (↶/↷ etc.) render as
-// mismatched emoji or tofu depending on the host's font stack, so the icon is a Path instead.
-class HistoryArrowButton final : public juce::TextButton
-{
-public:
-    explicit HistoryArrowButton (bool pointsRight) : redoArrow (pointsRight) {}
-
-    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
-    {
-        // FLAT — no stock frame; a soft tint on hover, the arrow dimmed when disabled.
-        if ((highlighted || down) && isEnabled())
-        {
-            g.setColour (tabby::palette::text().withAlpha (down ? 0.16f : 0.08f));
-            g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f);
-        }
-
-        const auto  b   = getLocalBounds().toFloat();
-        const auto  c   = b.getCentre();
-        const float rad = juce::jmin (b.getWidth(), b.getHeight()) * 0.26f;
-
-        // A 3/4 arc, clockwise from lower-left past 12 o'clock, with a tangent-aligned arrowhead
-        // at the end — the classic "redo" shape; undo is its mirror.
-        const float a0 = -2.4f, a1 = 1.0f;                 // radians, clockwise from 12 o'clock
-        juce::Path arc;
-        arc.addCentredArc (c.x, c.y, rad, rad, 0.0f, a0, a1, true);
-
-        const juce::Point<float> end  (c.x + rad * std::sin (a1), c.y - rad * std::cos (a1));
-        const juce::Point<float> dir  (std::cos (a1), std::sin (a1));   // clockwise tangent at a1
-        const juce::Point<float> perp (-dir.y, dir.x);
-        const float hl = rad * 0.85f, hw = rad * 0.55f;
-        juce::Path head;
-        head.addTriangle (end + dir * hl, end + perp * hw, end - perp * hw);
-
-        if (! redoArrow)
-        {
-            const auto flip = juce::AffineTransform::scale (-1.0f, 1.0f, c.x, c.y);
-            arc.applyTransform (flip);
-            head.applyTransform (flip);
-        }
-
-        g.setColour ((highlighted ? tabby::palette::text() : tabby::palette::textDim())
-                         .withAlpha (isEnabled() ? 1.0f : 0.35f));
-        g.strokePath (arc, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.fillPath (head);
-    }
-
-private:
-    bool redoArrow;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HistoryArrowButton)
-};
 
 //==============================================================================
 // A flat glyph button (gear / fullscreen corner-brackets): no frame, just the glyph, dim at rest
