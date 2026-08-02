@@ -16,6 +16,14 @@
 > FabFilter model on both axes: **auto-first parameters** and **dynamics belongs to the point, not
 > the lane** (per-lane dynamics is reached by fission, exactly as Pro-Q's Split button reaches
 > per-channel bands). Result: **5 parameters × 24 bands = 120**.
+>
+> **Then reconciled with what `felitronics-core` already ships (§ 0).** The core `dynamics`,
+> `dynamiceq` and `deesser` modules exist, are tested, and implement Rev 1's model — its
+> `GainComputer` *is* Rev 1, mode enum and all. So this revision is **not** a from-scratch build: it
+> is a UX/schema layer plus an auto layer over primitives that already work, and Rev 2's proposed
+> bespoke transfer law was **dropped** in favour of the shipped `GainComputer` with ratio and knee
+> fixed internally (§ 2.3). The FabFilter *interface* survives intact; only the arithmetic behind it
+> is now reused instead of reinvented.
 
 The next big TabbyEQ feature: make **any point optionally dynamic** — its gain reacts to the level
 in its own frequency region — plus a **de-esser** preset on the same engine, with **gain-reduction
@@ -23,19 +31,36 @@ in its own frequency region — plus a **de-esser** preset on the same engine, w
 
 ---
 
-## 0. Where the code lives (per the architecture)
+## 0. What already exists (inventory before design)
 
-- **Core primitives → `dynamics/` module** (JUCE-free, RT-safe, software-flush): `EnvelopeFollower`
-  + `GainComputer`. Pure: signal-in → gain-out. No EQ knowledge, no params system, no GUI. It must
-  obey every portability law — most pointedly **Law 8: the envelope / release followers flush
-  denormal state in software** (the `|state| < 1e-15 → 0` per-block pattern), so it is WASM-safe
-  without hardware FTZ.
-- **Composition → TabbyEQ** (`felitronics::eq::EqBand` integration + `src/` adapter + UI). The
-  *dynamic EQ* (a detector fed by the lane's region, applying the computed gain through that lane)
-  is product glue, not a core primitive — the "cross-module glue stays in the product" rule. A
-  standalone compressor would reuse the same `dynamics/` primitives broadband.
-- Core is at **v0.13.1**; tabby pins **v0.12.0**. The `dynamics/` module lands as a core minor bump
-  and the pin moves with phase 1.
+`felitronics-core` (v0.13.1; tabby pins v0.12.0) **already ships the whole dynamics stack**, tested
+and RT-safe. Nothing below needs to be written:
+
+| module | what's in it |
+|---|---|
+| `modules/dynamics` | `EnvelopeFollower` (Peak/Rms, `flushDenormals`), `GainComputer`, `GainReductionFollower`, `ChannelLinker`, plus `Compressor`, `NoiseGate`, `TransientShaper`, `AutoLeveler` |
+| `modules/dynamiceq` | `DynamicEqBand` — sidechain BandPass SVF at the band's freq/Q → follower → gain computer → GR ballistics → audio SVF; control-rate coeff recompute (K = 16 ≈ 0.33 ms); zero latency |
+| `modules/deesser` | `DeEsser` — two topologies (delegating `DynamicEq`, and `SplitBand` on an LR4 `Crossover2`), bandpass sidechain, `listen` solo |
+
+**`felitronics::dynamics::GainComputer` is literally Rev 1 of this document** — `Mode
+{ DownCompress, UpCompress, DownExpand }`, ratio, symmetric knee, range clamp, down to the comment
+wording. Rev 1 was not a proposal that went unbuilt; it shipped upstream.
+
+**So what is actually left to build:**
+
+1. **The auto layer (new, genuinely ours).** Auto-relative threshold and auto time constants derived
+   from the band's own `fc`/`Q` do not exist in core. (`AutoLeveler` is loudness matching from
+   OrbitCab — a different problem — though its slew-limit discipline is a good model.) These are
+   core-shaped primitives, not product glue: a broadband compressor wants the same auto threshold.
+2. **Our composition (§ 2.4).** `DynamicEqBand` runs the *whole* gain (static + delta) through one
+   Cytomic SVF. TabbyEQ cannot: decision #3 requires the static curve to stay a **matched Vicanek**
+   biquad, or a dynamic band would sound different from a static one and the drawn curve would
+   diverge from reality near Nyquist. We reuse the **primitives**, not `DynamicEqBand` itself.
+3. **The TabbyEQ layer** — per-lane detectors inside `felitronics::eq::EqBand`, the point-level
+   schema, the adapter, the UI. Product glue, stays in the product, per the architecture rule.
+
+The de-esser preset (§ 4) is then nearly free — `deesser::DeEsser` already encodes the topology
+choice and the bandpass-sidechain reasoning; we mostly need its parameter defaults.
 
 ---
 
@@ -76,15 +101,17 @@ else has a defined automatic behaviour and is only *deviated from*, never dialle
 | Range | explicit | **explicit — the one primary knob**, dragged off the node |
 | Threshold | explicit dBFS | auto-relative by default; slider top = `A` |
 | Attack / Release | explicit ms | **deviation** from auto: centre 50 % = auto, lower/higher = faster/slower |
-| Ratio | explicit | gone — implied by the transfer law (§ 2.3) |
-| Knee | explicit | gone — automatic, derived from range |
-| Mode | 3-way choice | gone — direction is the **sign of range** (§ 2.3, down-expand deferred) |
+| Ratio | explicit | **fixed at 4:1 inside** — not exposed (§ 2.3) |
+| Knee | explicit | **fixed, scaled off range** — not exposed (§ 2.3) |
+| Mode | 3-way choice | not exposed — direction is the **sign of range** (§ 2.3, down-expand deferred) |
 | **Per band** | **7 × 5 lanes = 35** | **5** |
 | **Total (24 bands)** | **840** | **120** |
 
-> The auto laws in § 2 are **our own** formulation in the spirit of the FabFilter model —
-> FabFilter's actual algorithm is closed. They are written out concretely so they are implementable
-> and testable; they are not reverse-engineering claims.
+> The **auto layer** in § 2.2–2.3 (time constants from `fc`/`Q`, the running-program-level
+> threshold) is our own formulation in the spirit of that model — FabFilter's actual algorithm is
+> closed, so these are written out concretely to be implementable and testable, not
+> reverse-engineering claims. The **static curve** underneath is not ours and not FabFilter's: it is
+> core's shipped `GainComputer`, driven with ratio and knee fixed.
 
 ---
 
@@ -97,8 +124,16 @@ else has a defined automatic behaviour and is only *deviated from*, never dialle
   gets an internal **band-pass probe** (a Cytomic SVF in band-pass at that lane's `freq` / `Q`)
   tracking the energy in the lane's region, fed the lane's **input** — the signal entering this
   lane — so detection does not chase its own gain change.
-- `EnvelopeFollower` (`dynamics/`): one-pole attack / release on `probe²` (RMS; peak available for
-  the tests). **Software denormal flush** of the envelope state every block (Law 8).
+- **Channel linking is mandatory, not optional** (`dynamics::ChannelLinker`, `LinkMode::Max` or
+  `Rms`): the probe runs per channel, but the channels collapse to **one linked level → one gain
+  applied to all of them**. Without it a stereo ST lane would compress L and R independently and
+  the image would wander on every sibilant. Per-lane, so an L lane links nothing (it is one signal
+  by construction) and the ST lane links across the whole bus.
+- **Ballistics sit on the gain, not on the level** — the lesson already encoded in core: the
+  `EnvelopeFollower` runs a short symmetric window (≈ 2 ms) purely to get a level, and the musical
+  attack / release live in `dynamics::GainReductionFollower`, applied to the computed gain. Keeping
+  them decoupled is what stops the knee from warping the attack — detector-level smoothing does
+  warp it. Both followers **software-flush denormals** every block (Law 8).
 - Shelves: probe = band-pass at the corner.
 - **Dynamics exists exactly where gain does** — `eqview::handles::hasGain(t)`, already the single
   source of truth in `src/eqview/HandleMath.h`: **Bell, Low/High Shelf, Tilt**. The other five
@@ -113,10 +148,11 @@ else has a defined automatic behaviour and is only *deviated from*, never dialle
 
 ### 2.2 Auto time constants (program-dependent)
 
-Attack and release are derived from what the band actually is, then modulated by the deviation
-knobs. The frequency term is the important one: a band's region cannot be tracked faster than its
-own period, and this is exactly what makes a de-esser fast and a low-mid tamer slow **without the
-user setting anything**.
+**New — core has no equivalent.** Attack and release are derived from what the band actually is,
+then modulated by the deviation knobs, and the result is fed to
+`GainReductionFollower::setTimes()`. The frequency term is the important one: a band's region
+cannot be tracked faster than its own period, and this is exactly what makes a de-esser fast and a
+low-mid tamer slow **without the user setting anything**.
 
 ```
 rawAttackMs   = kA * 1000 / fc                          // kA ≈ 3 periods of the centre frequency
@@ -148,49 +184,73 @@ baseReleaseMs = clamp (kR * baseAttackMs, 20.0, 800.0)  // kR ≈ 12
   ×1, 0 → ×1/4 (four times faster), 1 → ×4 (four times slower). Continuous, monotonic, and "centre
   = auto" is a visible detent in the UI.
 
-### 2.3 Gain computer — one transfer law, no ratio, no knee
+### 2.3 Gain computer — the shipped one, with ratio and knee fixed internally
 
-`levelDb = 10·log10(env)` — `env` is the *mean square* (the follower runs on `probe²`, § 2.1), hence
-`10·`, not `20·`. The threshold:
+**Reused as-is: `felitronics::dynamics::GainComputer`.** An earlier draft of this revision proposed
+a bespoke asymptotic law (`delta = range·(1−exp(−over/tau))`) to make ratio and knee disappear. That
+was solving the wrong problem: those knobs disappear from the *interface* simply by not exposing
+them, and the shipped computer is already tested. **Dropped — we drive the existing one.**
+
+```
+gc.setMode      (Mode::DownCompress);          // always; direction handled by the sign of range
+gc.setRatio     (4.0);                         // FIXED, not a parameter
+gc.setKneeDb    (min (6.0, 1.5 * |range|));    // FIXED law, scaled so a small range keeps a
+                                               // proportionate corner instead of a 6 dB smear
+gc.setRangeDb   (|range|);                     // the user's one knob
+gc.setThresholdDb (resolved);                  // auto or manual — below
+```
+
+The sign of `range` is applied outside the computer (the `sign_` multiplier, exactly as
+`DynamicEqBand` does for its `BoostWhenLoud` mode), so one `Mode` covers both directions.
+
+`levelDb = 20·log10(env)` — the shipped `EnvelopeFollower` returns an **amplitude** envelope (its
+`Rms` detector square-roots internally), and core's own `DynamicEqBand` feeds `gainToDb` the same
+way. *(An earlier draft of this section said `10·log10` on the assumption the follower exposed mean
+square. It does not.)*
+
+**The threshold — this part is new:**
 
 - **Auto (default):** a slow running estimate of the lane's own band-limited program level (a
-  long-time-constant follower on the same probe, ≈ 1–2 s), plus a fixed offset. The threshold then
-  sits just above "normal" for this band and adapts to gain staging by construction.
+  long-time-constant follower on the same probe, ≈ 1–2 s) plus a fixed offset, pushed into
+  `setThresholdDb()` at control rate. The threshold sits just above "normal" for this band and
+  adapts to gain staging by construction. Core has nothing like it — this is ours to write, and it
+  belongs in `dynamics/` rather than the product, since a broadband compressor wants it too.
 - **Manual:** an absolute dBFS value. The slider's top position *is* auto (displayed `A`), the
   Pro-Q affordance — and the live trigger level is drawn inside the slider so a manual threshold is
   set by eye, not by guesswork.
 
-The delta is then a single smooth law, asymptotic in `range`:
+**What the fixed constants buy, and what they cost:**
 
-```
-over  = max (0, levelDb − thresholdDb)
-delta = range * (1 − exp (−over / tau)),     tau = |range| / s0,   s0 ≈ 0.75
-```
-
-- **Bounded by construction:** `|delta| < |range|` for all inputs — no clamp, no discontinuity.
-- **Ratio is implied:** the slope at `over = 0` is `range / tau = s0 · sign(range)`, and a classic
-  ratio `R` is exactly a slope of `1/R − 1`, so `s0 = 0.75` ⇔ **4:1** at onset. It then softens
-  continuously toward the range limit as it compresses harder — an infinite ratio is never reached
-  because `delta` is asymptotic, which is also why no limiter-style discontinuity exists.
-- **Knee is implied:** the exponential *is* the knee, and it scales with range automatically — a
-  small range gets a gentle corner, a large one a defined onset.
+- `ratio = 4` gives a slope of `1 − 1/4 = 0.75`, so the full range is reached at `|range| / 0.75`
+  dB of overshoot — 16 dB above threshold for a 12 dB range. Firm but not limiting.
+- Unlike the dropped exponential law, this one **does** hit its limit exactly (the computer clamps
+  at `±range`) rather than approaching it asymptotically. That is a real behavioural difference:
+  above the clamp point the band stops responding to further level. Acceptable — it is what every
+  ranged dynamic EQ does, `range` is the user's declared ceiling, and the knee already softens the
+  corner. Noted so nobody rediscovers it as a bug.
 - **Direction is the sign of `range`:** negative = the band pulls down as its region gets loud
-  (**downward compression**, the common move); positive = the band pushes up as its region gets
-  loud (**upward expansion**). The classic "lift when quiet" is approximated by a **static boost
-  with a negative range** — the band rests boosted and gives the boost back once the region gets
-  loud. Not literally upward compression (that reacts to level *falling below* the threshold; this
-  reacts to level *crossing above* it), but the audible move is the same and it costs no parameter.
-- **Down-expand / gating is deferred** (§ 12): it reacts to the *absence* of level and is the one
-  behaviour this law does not cover. Nova GE has it, Pro-Q does not; it costs a mode parameter, so
-  it waits for demand.
+  (**downward compression**, the common move); positive = the band pushes up as it gets loud
+  (**upward expansion**). The classic "lift when quiet" is approximated by a **static boost with a
+  negative range** — the band rests boosted and gives the boost back once the region gets loud. Not
+  literally upward compression (that reacts to level *falling below* the threshold), but the
+  audible move is the same and it costs no parameter.
+- **Down-expand / gating is deferred** (§ 12) — the computer *has* `Mode::DownExpand`, so this is
+  purely a UI/parameter decision now, not a DSP one. It costs a mode parameter; it waits for demand.
 
-`delta` is smoothed (the existing `Smoother`) before it reaches the filter, so nothing zippers.
+The computed delta then goes through `GainReductionFollower` (§ 2.1), which is where all the
+smoothing happens — nothing further is needed to keep it zipper-free.
 
 ### 2.4 Application — "matched static + SVF gain-delta"
 
-Unchanged from Rev 1, and still the right split. The resting lane stays a **matched biquad**
-(Nyquist-accurate static curve); the **dynamic delta** is a **Cytomic SVF bell** at the same
-`freq` / `Q` in series, whose gain is the smoothed `delta` dB:
+Unchanged from Rev 1, still the right split — and **the one place we deliberately diverge from
+`dynamiceq::DynamicEqBand`**, which runs the whole gain (`static + delta`) through a single Cytomic
+SVF. TabbyEQ cannot do that: decision #3 requires the static curve to stay a **matched Vicanek**
+biquad, otherwise a dynamic band would not sound like the static band it replaces, and the drawn
+curve would part company with reality near Nyquist. So we take core's primitives and compose them
+ourselves.
+
+The resting lane stays a **matched biquad** (Nyquist-accurate static curve); the **dynamic delta**
+is a **Cytomic SVF bell** at the same `freq` / `Q` in series, whose gain is the smoothed `delta` dB:
 
 ```
 y = matchedStatic (x);            // base curve (the user's set gain), matched / Nyquist-accurate
@@ -201,9 +261,11 @@ y = svfDelta (y, gain = delta);   // dynamic delta; delta = 0 → transparent
   detector that is itself skipped when `dyn_on` is false.
 - SVF rather than a re-matched biquad because its gain is **cheap to modulate** sample-to-sample
   without a full redesign — that is the entire point of the split.
-- Cadence: envelope + gain computer per sample; the SVF delta-gain update is a couple of cheap
-  coefficients. Profile the 24-band × 5-lane worst case and drop to per-sub-block gain updates only
-  if it demands (§ 12).
+- Cadence: **borrow `DynamicEqBand`'s answer** — detector and gain computer per sample, but the SVF
+  gain recompute at **control rate** (its `coeffUpdatePeriod`, K = 16 ≈ 0.33 ms at 48 k). The
+  Cytomic gain enters the damping term (`k = 1/(Q·A)`), so a gain change costs a full coefficient
+  recompute; K = 16 is core's measured compromise and there is no reason to re-derive it. This also
+  retires most of Rev 2's "detector cadence" open question before it is asked.
 - **Placement in the lane chain is normative** and follows `LANES.md`'s processing order: the delta
   SVF sits immediately after that lane's static sections, **inside** the lane. For the M/S lanes
   that means the delta is part of `filt()` — the fold stays `dM = filt(m) − m` with
@@ -241,11 +303,11 @@ it trivial: past placing the bell itself, **the dynamics half is two values**, `
 
 | | |
 |---|---|
-| type / freq / Q | high bell, ≈ 7 kHz, Q ≈ 3.5 |
+| type / freq / Q | high bell, **7 kHz** — core's `DeEsserParams::fc`; sidechain Q ≈ 2 there, so a bell Q of 2–3.5 is the range to try by ear |
 | `dyn_on` | true |
-| `dyn_range` | **−12 dB** |
-| `dyn_thr` | **auto** (the default) |
-| `dyn_atk` / `dyn_rel` | **auto** (0.5) — and auto at 7 kHz already means 1 ms / 20 ms (§ 2.2) |
+| `dyn_range` | **−8 dB** — core's tested `rangeDb`, chosen to cap the cut before it lisps (Rev 2 guessed −12 with no such reasoning) |
+| `dyn_thr` | **auto** (the default) — core hard-codes −30 dBFS, which is exactly the guesswork auto exists to remove |
+| `dyn_atk` / `dyn_rel` | **auto** (0.5) — resolves to 1 ms / 20 ms at 7 kHz (§ 2.2), against core's hand-set 2 ms / 90 ms |
 
 Pure parameters; the engine does not know it is a "de-esser". Under Rev 1's model the same preset
 also had to assert ratio, knee, mode and explicit attack / release / threshold in ms and dBFS —
@@ -256,7 +318,8 @@ magic numbers a user cannot sanity-check, and wrong the moment the input gain ch
 ## 5. GR metering
 
 Each **lane** of a dynamic point exposes its current gain reduction (dB, the live `delta`) via a
-lock-free atomic, read and smoothed on the UI side. Shown on the node (the node riding its range
+lock-free atomic, read and smoothed on the UI side — the accessor shape `DynamicEqBand` already has
+as `dynamicDeltaDb()`, widened to per-lane and made cross-thread safe. Shown on the node (the node riding its range
 band + a small GR arc) and reserved for the **Helper** ("this point is pumping 4 dB" → suggestions).
 One atom per band per lane (24 × 5), sized as today's per-band atoms.
 
@@ -319,56 +382,74 @@ pair; the core never sees a sentinel.
 
 ## 9. Tests
 
-**Core (`felitronics_dynamics_tests` + `felitronics_eq_tests`):**
+`GainComputer`, `EnvelopeFollower`, `GainReductionFollower` and `ChannelLinker` are **already
+covered upstream** — we do not re-test them. New coverage only:
 
-1. `GainComputer` transfer law: input dB → delta dB matches `range·(1−exp(−over/tau))` analytically;
-   `|delta| < |range|` for extreme inputs; `|slope|` at `over = 0` == `s0` for both signs of range;
-   `delta == 0` exactly at and below threshold (no leak into the static case).
-2. `EnvelopeFollower`: attack / release reach 1 − 1/e in the specified ms; the dual release
-   recovers fast after a transient and slow after sustained level; **no subnormals after a long
-   silence** (denormal-flush proof, as the existing suites do).
-3. Auto time constants: `baseAttackMs`/`baseReleaseMs` monotone in `fc`, clamped at the rails;
-   the deviation multiplier is exactly ×1 at 0.5 and ×1/4 / ×4 at the ends.
-4. Auto threshold: after a level step, the threshold converges to programLevel + offset within the
-   specified window; a 20 dB input-gain change leaves the *delta* trajectory unchanged (the whole
-   point of auto-relative) — the test that proves shared settings work across lanes.
-5. Integration: a tone above threshold in a dynamic point converges to `static + delta` (measured
-   gain == analytic); below threshold == static exactly; **per-lane independence** (a dynamic
-   `{m,s}` point driven by a Mid-only signal moves the Mid lane and leaves the Side axis bit-exact);
-   dynamic `{st}` point on a 6-channel bus behaves per the ST-only rule; no-alloc-in-`process`.
-6. Gating: `dyn_on` is inert on the five gainless types (output bit-identical to the static band,
-   including after a Bell → Notch type switch with dynamics left on); dynamics bypassed in Natural
+**Core (`felitronics_dynamics_tests` for the auto layer, `felitronics_eq_tests` for the band):**
+
+1. **Auto threshold** (the load-bearing one): after a level step the threshold converges to
+   programLevel + offset within the specified window; **a 20 dB input-gain change leaves the
+   `delta` trajectory unchanged** — this is what proves one setting can be shared across lanes at
+   wildly different levels, and it gates the whole point-level design (§ 11).
+2. **Auto time constants:** `baseAttackMs`/`baseReleaseMs` monotone in `fc` and clamped at the
+   rails; the width term applied before the clamp; the deviation multiplier exactly ×1 at 0.5 and
+   ×1/4 / ×4 at the ends; the resolved values reach `GainReductionFollower::setTimes`.
+3. **Our composition vs core's:** a static band and a dynamic band resting at `delta = 0` are
+   **bit-identical** (the delta SVF is transparent at unity), and a dynamic high shelf's *static*
+   response still matches the matched-biquad analytic curve near Nyquist — the property
+   `DynamicEqBand`'s single-SVF topology would have lost.
+4. **Channel linking:** a stereo ST lane fed a sibilant in one channel only applies the **same**
+   gain to both (image preserved); an L-only lane is unaffected by R content.
+5. **Per-lane independence:** a dynamic `{m,s}` point driven by a Mid-only signal moves the Mid lane
+   and leaves the Side axis bit-exact; a dynamic `{st}` point on a 6-channel bus follows the ST-only
+   rule; control-rate updates leave no zipper (measured spectrum of a swept-level tone);
+   no-alloc-in-`process`.
+6. **Gating:** `dyn_on` is inert on the five gainless types (output bit-identical to the static
+   band, including after a Bell → Notch switch with dynamics left on); dynamics bypassed in Natural
    and Linear (output == the static FIR response).
-7. **Adapter:** v3→v4 migration (dynamics off, output bit-identical to the v3 reference); display-name
-   uniqueness across all ~940; group layout sanity; auval in CI as today.
+
+**Adapter (`tests/`):** v3→v4 migration (dynamics off ⇒ output bit-identical to the v3 reference);
+display-name uniqueness across all ~940; group layout sanity; auval in CI as today.
 
 ---
 
 ## 10. Phasing (each PR: build all formats + ctest + auval + crew adversarial review)
 
-1. **fcore `dynamics/`** — `EnvelopeFollower` + `GainComputer` + the auto-time-constant and
-   auto-threshold helpers, JUCE-free, software-flush, tests 1–4 → core minor tag.
-2. **fcore `eq` integration** — `BandParams` v3 `Dyn` sub-struct, per-lane probe + delta SVF in
-   `EqBand`, GR atomics, tests 5–6. Pin bump (v0.12.0 → the new tag; picks up v0.13.x on the way).
+**0. Pin bump first, on its own** — tabby v0.12.0 → v0.13.1, a separate small PR (ctest + auval, no
+behaviour change) so "newer core" never shares a diff with "dynamics". Everything below assumes it.
+
+1. **fcore auto layer** — `AutoThreshold` (slow program-level follower + offset) and the
+   auto-time-constant helper, in `dynamics/`, JUCE-free, software-flush, tests 1–2 → core minor tag.
+   **This phase is the gate:** test 1 either validates point-level shared settings or sends us to
+   the § 11 fallback, and it must answer before the schema is frozen in phase 3.
+2. **fcore `eq` integration** — `BandParams` v3 `Dyn` sub-struct; per-lane sidechain probe +
+   linked detector + `GainComputer` + `GainReductionFollower` + delta SVF composed inside `EqBand`
+   (reusing the primitives, *not* `DynamicEqBand`); GR atomics; tests 3–6.
 3. **tabby adapter** — 120 params + state v4 + migration + `readBand`, mechanical UI so everything
-   compiles and auval passes. `main` stays green.
+   compiles and auval passes. `main` stays green. **Schema freezes here.**
 4. **tabby UI** — dynamic handle + range band + live GR + the expandable dynamics row + resolved-ms
    readouts + the type/phase-mode gating.
-5. **De-esser preset.**
+5. **De-esser preset** — parameter defaults cribbed from `deesser::DeEsserParams`, which already
+   encodes the bandpass-sidechain and range-cap reasoning.
 
-Ship desktop first; `dynamics/` is JUCE-free so it rides to WASM / embedded later for free.
+Ship desktop first; everything new is JUCE-free so it rides to WASM / embedded later for free.
 
 ---
 
 ## 11. Risks
 
-- **CPU:** worst case 24 points × 5 active lanes = 120 probes + followers + delta SVFs. Mitigated by
-  construction (non-dynamic points and idle lanes are free) but **unproven** — profile a
-  deliberately hostile session in phase 2 before the UI lands. This is the one number that could
-  force per-sub-block gain updates.
+- **CPU:** worst case 24 points × 5 running lanes = 120 probes + followers + delta SVFs. Mitigated
+  by construction (non-dynamic points and idle lanes are free) and by the control-rate coeff
+  recompute we inherit, but still **unproven at this width** — core's band was profiled as *one*
+  band, not 120. Profile a deliberately hostile session in phase 2, before the UI lands.
 - **Auto behaviour is a taste problem, not a correctness problem.** The constants in § 2.2–2.3
-  (`kA`, `kR`, `s0`, the threshold offset and its time constant) are first estimates; they will be
-  tuned by ear on real material, and the tests are written to pin the *laws*, not the constants.
+  (`kA`, `kR`, the fixed ratio and knee law, the threshold offset and its time constant) are first
+  estimates; they will be tuned by ear on real material, and the tests are written to pin the
+  *laws*, not the constants.
+- **Divergence from core's own dynamic EQ is deliberate and must stay visible.** We reuse the
+  primitives but compose them differently from `DynamicEqBand` (§ 2.4). If core later hardens or
+  changes that band, the temptation will be to "just use it" and quietly lose the matched static
+  curve. Test 3 exists to make that regression loud.
 - **Shared settings across lanes** rest entirely on auto-relative threshold working well. If test 4
   disappoints on real material, the fallback is to make **threshold alone** per-lane: 5 × 24 = 120
   lane thresholds replacing the 24 point-level ones, so **+96 parameters**, and range / attack /
@@ -381,10 +462,11 @@ Ship desktop first; `dynamics/` is JUCE-free so it rides to WASM / embedded late
 
 ## 12. Open questions
 
-- **Down-expand / gating** — deferred (§ 2.3). Revisit if real use demands it; it costs a mode
-  parameter and it is the one thing the single transfer law cannot express.
-- **Detector cadence** — per-sample vs per-sub-block SVF gain updates; decided by the phase-2
-  profile, not in advance.
+- **Down-expand / gating** — deferred (§ 2.3). Now purely a UI/parameter question: the DSP for it
+  already exists (`Mode::DownExpand`), so enabling it later costs one mode parameter and no engine
+  work.
+- ~~Detector cadence~~ — **settled**: control-rate gain recompute at K = 16, core's existing
+  answer (§ 2.4). Only revisit if the phase-2 profile says otherwise.
 - **External sidechain input** — out of scope v1 (internal detector only). It would be a point-level
   source choice, so it fits the schema without restructuring.
 - **Spectral-dynamics territory** (Pro-Q 4's many-band automatic mode) — explicitly not v1; the
