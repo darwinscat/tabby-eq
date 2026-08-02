@@ -24,6 +24,17 @@
 > bespoke transfer law was **dropped** in favour of the shipped `GainComputer` with ratio and knee
 > fixed internally (§ 2.3). The FabFilter *interface* survives intact; only the arithmetic behind it
 > is now reused instead of reinvented.
+>
+> **Rev 2.1 (2026-08-02) — after the architecture consilium** (codex `gpt-5.6-sol` xhigh + DeepSeek
+> v4-pro + Fable 5 xhigh, per felitronics-core's mandated per-item workflow). Two substantive
+> corrections, both to claims this document previously made with confidence. The **auto-attack law
+> was physically wrong**: a band's envelope rises with its inverse bandwidth `Q/fc`, not with its
+> period, and a direct measurement of the real probe put the old law **5.6× too fast at Q = 40**
+> (§ 2.2). And **"GR fades to zero on sustained material" was wrong**: the true asymptote is
+> `over → −offset`, so steady state is set by the offset's *sign* — which also forces the offset to
+> be mode-aware (§ 2.3). The auto layer additionally gained the constraints that let it survive real
+> sessions: interval-correct control-rate coefficients, a silence freeze, seeding, and
+> reseed-on-retune.
 
 The next big TabbyEQ feature: make **any point optionally dynamic** — its gain reacts to the level
 in its own frequency region — plus a **de-esser** preset on the same engine, with **gain-reduction
@@ -33,7 +44,8 @@ in its own frequency region — plus a **de-esser** preset on the same engine, w
 
 ## 0. What already exists (inventory before design)
 
-`felitronics-core` (v0.13.1; tabby pins v0.12.0) **already ships the whole dynamics stack**, tested
+`felitronics-core` (v0.13.1, and tabby now pins it — PR #38) **already ships the whole dynamics
+stack**, tested
 and RT-safe. Nothing below needs to be written:
 
 | module | what's in it |
@@ -154,35 +166,68 @@ then modulated by the deviation knobs, and the result is fed to
 cannot be tracked faster than its own period, and this is exactly what makes a de-esser fast and a
 low-mid tamer slow **without the user setting anything**.
 
+**The law is the band's own ringing time, not its period.** An earlier draft used
+`3000/fc · (1 + log2(Q)/8)` — "three periods, slightly widened for narrow bands". Both review seats
+rejected it as physics, and a direct measurement settled it: the 10–90 % envelope rise time of an
+`eq::Svf` BandPass probe scales with the **inverse bandwidth**, `Q/fc`, not with the period.
+
+| fc / Q | measured rise | old law | `2.2·Q/(π·fc)` |
+|---|---|---|---|
+| 1000 / 10 | 7.17 ms | 4.25 | **7.00** |
+| 1000 / 40 | 28.08 ms | 5.00 | **28.01** |
+| 100 / 40 | 280.8 ms | 49.96 | **280.1** |
+| 7000 / 40 | 4.94 ms | 0.71 | **4.00** |
+
+The old law under-shot by **5.6×** at Q = 40 — the follower would have modulated the gain faster
+than the filter can ring, which is intermodulation distortion on every narrow band. So:
+
+The closed form is derivable, not just fitted: a 2nd-order BP has poles at real part `−α`,
+`α = ω₀/(2Q)`, the driven envelope is `1 − e^(−αt)`, so the 10–90 % rise is `ln9/α = ln9·Q/(π·fc)`
+**≈ 2.197·Q/(π·fc)** — which is the measured column.
+
+**But the naive form breaks near Nyquist.** The SVF is bilinear-prewarped in `fc` only
+(`Svf.h:46`, `g = tan(π·f/fs)`), so the −3 dB edges compress toward Nyquist and effective Q *rises*.
+That — not measurement noise — is why the 7 kHz row sits above prediction; I wrongly wrote it off as
+follower contamination. The digital-bandwidth form is
+
 ```
-rawAttackMs   = kA * 1000 / fc                          // kA ≈ 3 periods of the centre frequency
-widened       = rawAttackMs * (1 + log2 (Q) / 8)        // width term, below
-baseAttackMs  = clamp (widened,  1.0, 50.0)
-baseReleaseMs = clamp (kR * baseAttackMs, 20.0, 800.0)  // kR ≈ 12
+ringMs        = 2 * 1000 * ln(9) * Q / (fs * sin (2*pi*fc/fs))   // -> 2.197*Q/(pi*fc) as fc/fs -> 0
+periodFloor   = kP * 1000 / fc                                    // kP ~ 2-3; see below
+baseAttackMs  = clamp (max (periodFloor, attackFraction * ringMs), 1.0, 300.0)
+baseReleaseMs = clamp (3.0 * baseAttackMs, 40.0, 500.0)
 ```
 
-- At 120 Hz (Q 1): attack = 25 ms, release = 300 ms — musical low-end control, for free.
-- At 8 kHz (Q 1): the raw term is 0.375 ms, so the **1 ms rail** takes over → attack = 1 ms,
-  release = 20 ms (its own rail) — de-esser behaviour, for free.
-- **The rails are load-bearing, not cosmetic:** with `kA = 3` the frequency term only moves the
-  attack between ≈ 60 Hz and ≈ 3 kHz; above 3 kHz every band gets the 1 ms floor, below 60 Hz the
-  50 ms ceiling. That is intended — 1 ms is already ~8 periods at 8 kHz, and chasing individual
-  cycles is neither useful nor stable — but it means the audible tuning above 3 kHz lives in the
-  floor constant, and that is where ear-tuning effort will go.
-- **Width term:** a narrow (high-Q) band gets a longer attack — its probe rings longer, so a faster
-  follower would just track the ringing. Applied **before** the clamp, so it cannot push a band
-  through the rails.
-- **Note on the release ceiling:** with `kA = 3` / `kR = 12` the attack clamp caps `baseReleaseMs`
-  at 12 × 50 = 600 ms, so the 800 ms rail never actually engages — it is a guard for future
-  constant tuning, not live behaviour. Called out so nobody later "fixes" a rail that was never
-  reached.
-- **Program dependence (release):** two parallel release states, fast (`baseReleaseMs`) and slow
-  (`4 × baseReleaseMs`); the applied release is the **slower-recovering of the two** (classic dual
-  time-constant). Short transients recover quickly; sustained energy releases smoothly, without a
-  ratio knob to blame.
+- **Costs one `sin` and matters.** At fc = 16 kHz / Q = 40 the naive form is off by **more than 2×**
+  (effective Q ≈ 93). At 7 kHz / Q = 40 it explains most of the 4.94 vs 4.00 ms gap.
+- **The period floor is physics, not fudge.** Rise drops below one period whenever
+  `Q < π/ln9 ≈ 1.43`, and a sub-period "attack" on an envelope is undefined — it modulates gain
+  inside the cycle, which is the classic low-frequency compressor distortion.
+- **`attackFraction < 1` is deliberate.** The sidechain BP *already* imposes this same rise on the
+  probe; setting the GR attack equal to it puts two matched lags in series (≈ 1.4× slower than
+  either). To react as fast as the band physically allows, the follower should take a **fraction**
+  (≈ 0.25–0.5) of the probe's own ring time. Nobody had noticed the double count.
+- **Release is 3×, not 12×.** The band's ring-*down* is the same `2.2·Q/(π·fc)` (symmetric poles),
+  so tracking a resonance decay needs ~1–3×, and chatter is prevented by an absolute floor rather
+  than a large multiplier. 12× would have put release at 3.6 s — **the same timescale as the auto
+  threshold's own 2–5 s**, so the threshold servo and the release would chase each other and the GR
+  would breathe. Timescale hierarchy is now explicit: `τ_estimator ≥ 8–10 × release_max`.
+
+- **The ceiling had to move from 50 ms to 300 ms.** At fc = 100 / Q = 40 the band physically cannot
+  be tracked faster than ~280 ms; clamping to 50 would reintroduce exactly the distortion the law
+  exists to avoid.
+- **"Three periods" was a myth twice over** — after clamping, the old law was really a 50 ms bass
+  plateau, a narrow transition, and a 1 ms treble plateau, with genuine frequency dependence over
+  only about five octaves. If a treble floor is kept it must be documented as a **time-domain
+  floor** chosen for de-essing, not as a period-derived value.
+- **The floor constant, the release multiplier and whether a period term is needed at all** are
+  with the third review seat; the numbers land when that verdict does. What is already settled is
+  the shape: linear in `Q/fc`.
+- **Dual-rate release is dropped.** It would have to live inside `GainReductionFollower`, and that
+  is a shipped primitive we are not changing. Program dependence comes from the auto threshold
+  instead.
 - **Deviation knobs:** `atk` / `rel` ∈ [0, 1], 0.5 = auto. Multiplier = `2^((x − 0.5) * 4)` — 0.5 →
-  ×1, 0 → ×1/4 (four times faster), 1 → ×4 (four times slower). Continuous, monotonic, and "centre
-  = auto" is a visible detent in the UI.
+  ×1, 0 → ×1/4, 1 → ×4. **Applied before the final clamp**, which means "faster" cannot push a
+  treble band below the floor — a documented dead zone, not a bug.
 
 ### 2.3 Gain computer — the shipped one, with ratio and knee fixed internally
 
@@ -210,14 +255,101 @@ square. It does not.)*
 
 **The threshold — this part is new:**
 
-- **Auto (default):** a slow running estimate of the lane's own band-limited program level (a
-  long-time-constant follower on the same probe, ≈ 1–2 s) plus a fixed offset, pushed into
-  `setThresholdDb()` at control rate. The threshold sits just above "normal" for this band and
-  adapts to gain staging by construction. Core has nothing like it — this is ours to write, and it
-  belongs in `dynamics/` rather than the product, since a broadband compressor wants it too.
+- **Auto (default):** a slow running estimate of the lane's own band-limited program level `P`, plus
+  a fixed offset `O`, pushed into `setThresholdDb()` at control rate. Core has nothing like it —
+  ours to write, and it belongs in `dynamics/` rather than the product, since a broadband compressor
+  wants the same thing.
 - **Manual:** an absolute dBFS value. The slider's top position *is* auto (displayed `A`), the
   Pro-Q affordance — and the live trigger level is drawn inside the slider so a manual threshold is
   set by eye, not by guesswork.
+
+**What auto actually means — the asymptote.** On stationary material the detector converges to the
+program estimate, `D → P`, so `over = D − (P + O) → −O`. The steady-state behaviour is therefore
+set entirely by the **sign of the offset**, and "gain reduction fades to zero on sustained material"
+(an earlier claim in this doc, and one of the two review seats agreed with it) is **wrong**:
+
+Exactly: `GR_steady = −slope · kneeOver(−O)`, and `kneeOver` (`GainComputer.h:59-67`) makes the
+three regimes precise —
+
+| offset | stationary behaviour |
+|---|---|
+| `O ≥ knee/2` | `kneeOver = 0` → band idles exactly. **Sustained content untouched.** |
+| `O = 0` | `kneeOver = knee/8` → with knee 6 and ratio 4:1 a **permanent −0.5625 dB**, at any level |
+| `O < −knee/2` | `GR → slope·O` — constant reduction; a static gain shift wearing a dynamics costume |
+
+So the idle condition is not "positive offset" but **`O ≥ knee/2`** — up to 3 dB with knee 6, and
+only 1.5 dB once a small range shrinks the knee to 3. The primitive therefore stores
+`O_effective = O_user + knee/2`, making "idle on stationary, engage on peaks" exact by construction
+rather than approximately true. Without that the drawn static curve and the audible one disagree by
+half a dB forever.
+
+So `O > 0` is the only honest auto default, and it defines the feature: **auto mode reacts to
+departures from the lane's own recent norm** — sibilance, a resonance ringing on one note, a boom on
+one chord. It cannot, in principle, keep taming a *permanently* excessive band: given enough time
+that level simply becomes the norm. That is not a bug to engineer around; it is what a same-signal
+estimator can observe.
+
+**The product answer is already in the schema:** auto = event semantics, **manual threshold =
+classic behaviour** (a fixed threshold never drifts, so a steady resonance keeps getting cut). Users
+who need the second reach for the slider they already have. The primitive is therefore named and
+documented as a **lane-relative program-level estimator**, not a resonance detector.
+
+**Wiring: invert it.** Rather than writing a moving threshold into the gain computer, keep its
+threshold **fixed at 0 and never rewritten**, and feed it `levelDb − estimateDb − O_effective`. The
+transfer is identical and per-lane semantics are unchanged, but it structurally deletes a whole
+class of bug: no control-rate threshold writes, so the interval-coefficient trap cannot exist on the
+computer side, no unit confusion on reseed, and the stationary constant becomes a one-line query
+(`gc.deltaDb(−O)`, the pattern `Compressor.h:43` already uses). The primitive is then a
+**`RelativeLevel`** — same two headers, less to get wrong.
+
+**Where the probe taps matters, and nobody had asked.** In a 24-point series chain, if each point's
+sidechain tapped its own input, then every earlier point's *dynamic delta* would modulate later
+detectors at overlapping frequencies — chained pumping the slow estimator cannot absorb, because the
+feed-through is fast. **All probes tap the common EQ-section input** (parallel detection); for the
+M/S lanes that means the derived mid/side signal taken *pre-EQ*, which constrains the processing
+order in `EqBand`.
+
+**The offset must be mode-aware.** A positive offset idles down-compression but *activates*
+up-compression, since the two read opposite sides of the threshold (`GainComputer.h:46-48`). One
+signed offset cannot give both directions the same idle behaviour, so the sign is applied per
+direction, not stored raw.
+
+**Implementation traps, all of them real:**
+
+- **Control-rate update needs the interval coefficient.** Running a one-pole every 16 samples with a
+  per-sample coefficient silently makes it **16× slower** and aliases the probe. Either use
+  `exp(−K/(τ·fs))` or accumulate mean square per sample and update the estimate per block. The power
+  recursion stays per sample; only `log10` and the threshold write are control-rate.
+- **Asymmetric tracking:** rise faster than fall (≈ 1 s up, ≈ 3 s down). Equal rates would let the
+  estimate sag between notes and over-compress every tail. Both seats agreed independently.
+- **🔴 Gate the gain computer's input, not just the estimator.** The worst defect the panel found:
+  in an up-compress band, silence makes `over = thr − L` enormous (estimator held at −40 dB, input
+  decayed to −90 → 47 dB of "under"), so the delta **rails at +range and stays there** — the band
+  boosts the noise floor by the full Dynamic Range on every pause and every fade. `BoostWhenQuiet`
+  is a first-class mode (`DynamicEqBand.h:36,132`), so this is not hypothetical. Below the activity
+  floor the delta is forced toward 0, not merely frozen.
+- **Cap the slew in dB/s — in BOTH directions.** One seat said "upward"; that is wrong. The
+  dangerous direction is mode-dependent: for down-compression the *falling* estimate is the hazard
+  (quiet verse → threshold sinks → the chorus hit slams into the range clamp), for up-compression
+  the estimate hanging high is. `AutoLeveler.h:159` already clamps both ways.
+- **Freeze — hold, don't decay — below an absolute activity floor**, so a pause cannot drag the
+  estimate into the noise and range-cap the downbeat. The floor is ≈ −90…−100 dBFS, **not**
+  `AutoLeveler`'s −60 (`AutoLeveler.h:223`) — a Side lane or a Q = 40 slice legitimately sits at
+  −50…−70. Pair it with an estimate clamp (≈ −80…0 dB) so the estimator cannot learn the noise floor
+  itself.
+- **Seed on the first valid observation** rather than starting from zero (`AutoLeveler.h:70`) — a
+  bad seed out-masses the signal for ~5 τ.
+- **Reseed on retune — but through a window, not instantly.** A drag spams `setParams` at control
+  rate, so literal reseed-per-change makes the estimator *instantaneous* while dragging, which pins
+  the dynamics at the stationary constant. Use `AutoLeveler.h:192-195`'s pattern: a bounded
+  fast-adaptation window (~0.3–1 s, re-armed per retune), triggered only by material `fc`/`Q`
+  changes and **never** by a static-gain change.
+- **Feed the estimator the envelope, not the raw probe.** Sampling `|bp|` every 16 samples beats
+  against the carrier; accumulate mean square per sample or reuse the followed envelope. And pin the
+  estimator's averaging law to the detector's (RMS against RMS) — a Peak detector against a
+  mean-square estimate silently shifts the offset by the crest factor.
+- **Do not freeze while GR is active.** All three seats rejected it: a sustained +10 dB step would
+  latch the estimate and leave GR stuck indefinitely.
 
 **What the fixed constants buy, and what they cost:**
 
@@ -271,6 +403,19 @@ y = svfDelta (y, gain = delta);   // dynamic delta; delta = 0 → transparent
   that means the delta is part of `filt()` — the fold stays `dM = filt(m) − m` with
   `filt = static ∘ svfDelta`, so a lane whose delta is 0 still leaves its axis bit-exact and the
   shipped delta-fold identity tests keep passing verbatim.
+- **The pre-static detector tap is correct here, and only because the threshold is auto-relative.**
+  A static gain change shifts detector and estimator by the same amount at the same point, so
+  `over = fast − slow` is invariant — dragging static gain does not perturb the dynamics at all. A
+  post-static tap would step the probe and produce ~τ of false GR after every gain drag. (Caveat for
+  later: if a manual-threshold expert path is ever taken further, pre-static detection stops being
+  right for it.)
+- **Two known consequences of the series split**, neither fatal, both to be documented rather than
+  discovered: (1) the static section is matched/decramped while the delta bell is BLT and exactly
+  unity at Nyquist (`Svf.h:21-25`), so a static boost with a full-depth dynamic cut leaves a
+  shelf-like residual in the top octave; (2) two same-Q bells in series is **not** the same curve as
+  one bell at the summed gain — which is what `DynamicEqBand.h:100` computes — so the skirts differ
+  by a few dB, the UI must draw `matched(static) × SVF(delta)`, and any A/B against `DynamicEqBand`
+  will "fail" by design.
 
 ### 2.5 Combined curve (for the GUI)
 
@@ -383,17 +528,40 @@ pair; the core never sees a sentinel.
 ## 9. Tests
 
 `GainComputer`, `EnvelopeFollower`, `GainReductionFollower` and `ChannelLinker` are **already
-covered upstream** — we do not re-test them. New coverage only:
+covered upstream** — we do not re-test them. New coverage only.
+
+**The single most valuable test — level-translation invariance.** One harness that trips nearly
+every failure mode identified above: run the same band-limited program at −50 / −30 / −10 dBFS
+through the finished band and assert (i) settled GR identical across levels within 0.1 dB **and
+equal to the analytic constant `−slope·kneeOver(−O)`**, (ii) settle time after a +10 dB step within
+[0.5, 2]× the design τ, (iii) all three modes, (iv) repeated at fc = 16 kHz / Q = 40. That one test
+catches the 16× control-rate coefficient bug via (ii), a too-high silence floor via (i), a wrong
+mode-offset sign (up-compress rails at +range instead of the constant) via (i)/(iii), bad seeding,
+the stationary-GR formula, and the Nyquist attack-law error via (iv) — and it *is* the product
+promise: one knob, any lane level.
 
 **Core (`felitronics_dynamics_tests` for the auto layer, `felitronics_eq_tests` for the band):**
 
 1. **Auto threshold** (the load-bearing one): after a level step the threshold converges to
-   programLevel + offset within the specified window; **a 20 dB input-gain change leaves the
-   `delta` trajectory unchanged** — this is what proves one setting can be shared across lanes at
-   wildly different levels, and it gates the whole point-level design (§ 11).
-2. **Auto time constants:** `baseAttackMs`/`baseReleaseMs` monotone in `fc` and clamped at the
-   rails; the width term applied before the clamp; the deviation multiplier exactly ×1 at 0.5 and
-   ×1/4 / ×4 at the ends; the resolved values reach `GainReductionFollower::setTimes`.
+   programLevel + offset within the specified window; **the same band-limited stream at gains
+   spanning −60…+24 dB, through independent lane instances, must yield thresholds differing by
+   exactly that gain and scale-normalised `delta` trajectories that null against each other.** This
+   is what proves one setting can be shared across lanes at wildly different levels, and it gates
+   the whole point-level design (§ 11).
+   - **Asymptote:** hold a level step for ≥ 10 time constants and assert the gain computer's input
+     converges to exactly `−offset` — the property the panel disagreed about, pinned as a test.
+   - **`20·log10` correctness:** a settled sine of peak `A` must report `20·log10(A/√2)`, and
+     doubling the amplitude must move the threshold by **6.0206 dB**. This single check catches the
+     `10·log10`-on-amplitude error that was in an earlier draft.
+   - **Pause safety:** settle, insert digital-zero gaps of 1 ms … 60 s, resume the identical
+     waveform; the frozen estimate must survive the gap and the first 100 ms of GR must stay within
+     tolerance of a no-gap reference. First-ever startup tested separately (seeding).
+   - **Retune:** a large `fc`/`Q` jump must reseed, not drag seconds of stale level behind it.
+2. **Auto time constants:** attack linear in `Q/fc` and matching the measured probe rise within
+   tolerance; monotone non-increasing in `fc`, non-decreasing in `Q`; clamped at the rails with
+   continuity at the corners; the deviation multiplier exactly ×1 at 0.5 and ×1/4 / ×4 at the ends;
+   finite output for NaN / Inf / negative `fc`, `Q`, `x`; the resolved values reach
+   `GainReductionFollower::setTimes`.
 3. **Our composition vs core's:** a static band and a dynamic band resting at `delta = 0` are
    **bit-identical** (the delta SVF is transparent at unity), and a dynamic high shelf's *static*
    response still matches the matched-biquad analytic curve near Nyquist — the property
@@ -415,8 +583,8 @@ display-name uniqueness across all ~940; group layout sanity; auval in CI as tod
 
 ## 10. Phasing (each PR: build all formats + ctest + auval + crew adversarial review)
 
-**0. Pin bump first, on its own** — tabby v0.12.0 → v0.13.1, a separate small PR (ctest + auval, no
-behaviour change) so "newer core" never shares a diff with "dynamics". Everything below assumes it.
+**0. Pin bump first, on its own** — tabby v0.12.0 → v0.13.1. **Done** (PR #38: ctest 72/72, all four
+formats, auval PASS), kept out of the dynamics diff on purpose.
 
 1. **fcore auto layer** — `AutoThreshold` (slow program-level follower + offset) and the
    auto-time-constant helper, in `dynamics/`, JUCE-free, software-flush, tests 1–2 → core minor tag.
@@ -443,13 +611,24 @@ Ship desktop first; everything new is JUCE-free so it rides to WASM / embedded l
   recompute we inherit, but still **unproven at this width** — core's band was profiled as *one*
   band, not 120. Profile a deliberately hostile session in phase 2, before the UI lands.
 - **Auto behaviour is a taste problem, not a correctness problem.** The constants in § 2.2–2.3
-  (`kA`, `kR`, the fixed ratio and knee law, the threshold offset and its time constant) are first
-  estimates; they will be tuned by ear on real material, and the tests are written to pin the
-  *laws*, not the constants.
+  (the attack floor and release multiplier, the fixed ratio and knee law, the threshold offset and
+  its time constants) are first estimates; they will be tuned by ear on real material, and the tests
+  are written to pin the *laws*, not the constants.
+- **Auto mode does not tame a permanently excessive band** (§ 2.3) — given time, that level becomes
+  the norm. This is a property of same-signal estimation, not a defect, and the manual threshold is
+  the answer. The risk is one of *expectation*: a user who assumes "dynamic EQ" means the classic
+  fixed-threshold behaviour will find auto mysterious. Mitigation is UI copy and the resolved-value
+  readouts, not DSP.
 - **Divergence from core's own dynamic EQ is deliberate and must stay visible.** We reuse the
   primitives but compose them differently from `DynamicEqBand` (§ 2.4). If core later hardens or
   changes that band, the temptation will be to "just use it" and quietly lose the matched static
   curve. Test 3 exists to make that regression loud.
+- **The one knob is crest-factor-dependent across lanes.** Auto-relative fixes the 20 dB disparity
+  in lane *means*, not in lane *peakiness*: Side is systematically spikier than Mid (transients and
+  reverb dominate it), so at the same setting the S lane engages deeper than M. Since `kneeOver` is
+  convex, actual engagement follows the probe's crest factor, which the single knob cannot see.
+  Either document it as intended flavour or bias the offset per lane by a fast/slow estimate ratio —
+  decide with ears, in phase 2, not on paper.
 - **Shared settings across lanes** rest entirely on auto-relative threshold working well. If test 4
   disappoints on real material, the fallback is to make **threshold alone** per-lane: 5 × 24 = 120
   lane thresholds replacing the 24 point-level ones, so **+96 parameters**, and range / attack /
@@ -471,3 +650,12 @@ Ship desktop first; everything new is JUCE-free so it rides to WASM / embedded l
   source choice, so it fits the schema without restructuring.
 - **Spectral-dynamics territory** (Pro-Q 4's many-band automatic mode) — explicitly not v1; the
   semantic Helper is TabbyEQ's answer to that problem, and it rides these same honest parameters.
+- **A local spectral reference** (compare the band against its neighbours or a smoothed spectral
+  envelope rather than against its own history) is the one structure that *could* detect a
+  persistent resonance. It is materially more machinery than two header-only primitives, so it is
+  named here as the known upgrade path and deliberately not attempted in this phase.
+- **Poison tolerance is chain-wide, not ours to fix alone.** The shipped followers accept NaN/Inf
+  straight into their state and their block flush only clears tiny finite values
+  (`EnvelopeFollower.h:57`, `GainReductionFollower.h:37`); `GainComputer::deltaDb(NaN)` returns NaN.
+  Two new primitives cannot make the chain poison-tolerant — either the finite-audio precondition is
+  documented, or those existing states get hardened in a separate pass.
