@@ -198,6 +198,20 @@ clap_juce_extensions_plugin(TARGET TabbyEQ
     CLAP_ID       "com.darwinscat.tabbyeq"
     CLAP_FEATURES audio-effect equalizer)
 
+# The CLAP wrapper ships its own default clap.icns (the generic CLAP logo) and JUCE's ICON_BIG
+# does not reach it. Overwrite it in place with the stripe-cat AppIcon.icns that juceaide already
+# generated for the JUCE formats (configure-time execute_process, so JUCE_ICON_FILE exists on disk
+# before any build step), keeping the wrapper's existing Info.plist CFBundleIconFile=clap.icns
+# reference valid. macOS only — the CLAP on Windows/Linux is a plain shared library, no icon
+# resource. Mirrors orbitcab's step, so all four formats are branded the same way.
+if(APPLE)
+    add_custom_command(TARGET TabbyEQ_CLAP POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy
+                "$<TARGET_PROPERTY:TabbyEQ,JUCE_ICON_FILE>"
+                "$<TARGET_BUNDLE_DIR:TabbyEQ_CLAP>/Contents/Resources/clap.icns"
+        VERBATIM)
+endif()
+
 target_sources(TabbyEQ PRIVATE
     src/PluginProcessor.cpp
     src/Parameters.cpp

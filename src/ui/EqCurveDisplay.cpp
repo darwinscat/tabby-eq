@@ -92,7 +92,10 @@ EqCurveDisplay::~EqCurveDisplay()
 // wrappers only feed it the component's live geometry, so every caller keeps its old signature.
 eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
 {
-    const eqview::PlotMap pm { .width = (float) getWidth(), .height = (float) getHeight(),
+    // width = the PLOT's width, i.e. the component minus the right dB-scale gutter (kScaleGutterW):
+    // every frequency mapping, and with it every curve/node/hit-test, stops at the gutter's edge.
+    const eqview::PlotMap pm { .width = (float) juce::jmax (40, getWidth() - kScaleGutterW),
+                               .height = (float) getHeight(),
                                .plotBottom = (float) plotBottomY(),
                                .freqMin = kFreqMin, .freqMax = kFreqMax, .dbRange = gainRange,
                                .specTop = kSpecTop, .specBottom = -anaRange };   // Range preset = the -range dBFS floor
@@ -485,7 +488,8 @@ void EqCurveDisplay::positionToolbar()
 
 void EqCurveDisplay::resized()
 {
-    gainScaleBtn.setBounds (getWidth() - 96, 6, 70, 20);   // flat top-right overlay, clear of the right axis labels
+    // The range picker heads the orange gain column: right-aligned to THAT column's right edge.
+    gainScaleBtn.setBounds (getWidth() - kScaleGutterW - kGainColPad - 54, 6, 54, 20);
     positionToolbar();
 }
 
@@ -646,7 +650,11 @@ void EqCurveDisplay::buildSpectrumPaths (const eqview::SpectrumPane& pane, juce:
             fillOut.lineTo (x, yS);
             lastY = yS;
         });
-    fillOut.lineTo (pm.width, lastY); fillOut.lineTo (pm.width, pm.height); fillOut.closeSubPath();
+    // Run the last column's level out to the component edge, not to the axis: the spectrum crosses
+    // the axis with the curve and dissolves with it (see the gutter fade in paint).
+    const float tailX = (float) getWidth();
+    peakOut.lineTo (tailX, lastY);
+    fillOut.lineTo (tailX, lastY); fillOut.lineTo (tailX, pm.height); fillOut.closeSubPath();
 }
 
 void EqCurveDisplay::timerCallback()
@@ -667,8 +675,8 @@ void EqCurveDisplay::timerCallback()
 // centre beam + label at f0. Used by both drag-audition and solo so the two gestures look identical.
 void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc, const juce::String& label) const
 {
-    const float  w = (float) getWidth(), h = (float) getHeight();
     const auto   pm = plotMap();   // hoisted: one geometry snapshot for the whole overlay
+    const float  w = pm.width, h = (float) getHeight();   // w = the PLOT's right edge (the dB gutter is past it)
     const double f0 = juce::jlimit (kFreqMin, kFreqMax, f0c);
     const float  xc = pm.freqToX (f0);
     const auto   orng = tabby::palette::orange();
@@ -720,9 +728,14 @@ void EqCurveDisplay::drawListenVisual (juce::Graphics& g, double f0c, double qc,
 //==============================================================================
 void EqCurveDisplay::paint (juce::Graphics& g)
 {
-    const auto w = (float) getWidth(), h = (float) getHeight();
     refreshDesigns();
     const auto pm = plotMap();             // hoisted: one geometry snapshot for the whole paint pass
+    // w  = the AXIS: where the frequency scale ends and every measurement is anchored.
+    // wx = how far the ink actually REACHES. Curve, spectrum and background cross the axis at full
+    //      strength and only then dissolve, across the gutter, fading out under the level numbers —
+    //      so the axis is a rule you read past, not a wall the graph stops at.
+    const auto w = pm.width, h = (float) getHeight();
+    const auto wx = (float) getWidth();
     const int solo = proc.getSoloBand();   // >=0: spotlight that band's curve, dim the composite
 
     // premium radial vignette: centre lifted a touch, corners deepened
@@ -734,16 +747,12 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         g.fillRect (bb);
     }
 
-    // --- grid -------------------------------------------------------------
+    // --- grid (LINES only — every axis CAPTION is painted at the very end, over the fog) ---------
     g.setFont (11.0f);
     for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
     {
-        const float x = pm.freqToX (f);
         g.setColour (tabby::palette::grid());
-        g.drawVerticalLine ((int) x, 0.0f, h);
-        g.setColour (tabby::palette::axisText());
-        g.drawText (f >= 1000.0 ? juce::String (f / 1000.0, (f == 1000.0 ? 0 : 0)) + "k" : juce::String ((int) f),
-                    (int) x + 2, (int) h - 14, 34, 12, juce::Justification::left);
+        g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
     }
     // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
     const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
@@ -756,17 +765,12 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (zero)
         {
             g.setColour (tabby::palette::violetLo().withAlpha (0.05f));   // soft glow on the 0 dB line
-            g.fillRect (0.0f, y - 2.5f, w, 5.0f);
+            g.fillRect (0.0f, y - 2.5f, wx, 5.0f);
             g.setColour (tabby::palette::gridZero());
         }
         else
             g.setColour (tabby::palette::grid());
-        g.drawHorizontalLine ((int) y, 0.0f, w);
-        if (! zero && y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // dB value on the right (below the scale combo)
-        {
-            g.setColour (tabby::palette::axisText());
-            g.drawText ((db > 0.0 ? "+" : "") + juce::String ((int) db), (int) w - 32, (int) y - 6, 28, 12, juce::Justification::right);
-        }
+        g.drawHorizontalLine ((int) y, 0.0f, wx);
     }
 
     // (The beyond-Nyquist fog is drawn LAST — over the curve so it dissolves into it, see the end of paint.)
@@ -805,7 +809,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // so a notch's -inf null (and bell peaks) are hit dead-on — the drawn tip no longer jitters between grid
     // points as you drag. cy() clamps dB to the plot floor so nulls bottom out cleanly and consistently.
     float curveXs[280 + tabby::kNumBands * teq::kNumLanes]; int nCurveX = 0;
-    for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * w;
+    for (int i = 0; i <= 256; ++i) curveXs[nCurveX++] = (float) i / 256.0f * wx;
     for (int b = 0; b < tabby::kNumBands; ++b) if (traces.param (b).on)
         for (int L = 0; L < teq::kNumLanes; ++L)
             if (laneOn (b, L)) curveXs[nCurveX++] = pm.freqToX (traces.param (b).lanes[(size_t) L].freq);
@@ -820,7 +824,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     if (perBandCurves || solo >= 0)
     {
         juce::Graphics::ScopedSaveState bandClip (g);
-        g.reduceClipRegion (0, 0, (int) w, getHeight());   // curves dive to the WINDOW bottom, below the invisible -gainRange line
+        g.reduceClipRegion (0, 0, (int) wx, getHeight());   // curves dive to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = pm.dbToY (0.0);
         auto drawLane = [&] (int b, int lane)
         {
@@ -835,7 +839,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
                 if (i == 0) bc.startNewSubPath (x, y); else bc.lineTo (x, y);
                 bf.lineTo (x, y);
             }
-            bf.lineTo (w, y0); bf.closeSubPath();
+            bf.lineTo (wx, y0); bf.closeSubPath();
 
             const bool hot = (solo == b) || (solo < 0 && b == selBand && lane == selLane);
             const auto col = nodeColour (b, lane);   // lane colour for split points (dimmed), else per-band
@@ -851,7 +855,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // --- response curve: warm/cool fill to 0 dB, faux-glow, crisp line ----
     {
         juce::Graphics::ScopedSaveState compositeClip (g);
-        g.reduceClipRegion (0, 0, (int) w, getHeight());   // composite dives to the WINDOW bottom, below the invisible -gainRange line
+        g.reduceClipRegion (0, 0, (int) wx, getHeight());   // composite dives to the WINDOW bottom, below the invisible -gainRange line
         const float y0 = pm.dbToY (0.0);
         juce::Path line, fill;
         fill.startNewSubPath (0.0f, y0);
@@ -862,7 +866,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
             if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
             fill.lineTo (x, y);
         }
-        fill.lineTo (w, y0);
+        fill.lineTo (wx, y0);
         fill.closeSubPath();
 
         // boost (above 0 dB) reads warm = orange; cut (below) reads cool = violet. One fill path,
@@ -872,14 +876,14 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         const float aZero = dim ? 0.06f : 0.40f;            // densest at the 0 dB line; fades to 0 toward +-24 dB
         {
             juce::Graphics::ScopedSaveState ss (g);
-            g.reduceClipRegion (0, 0, (int) w, juce::jmax (0, (int) y0));
+            g.reduceClipRegion (0, 0, (int) wx, juce::jmax (0, (int) y0));
             g.setGradientFill (juce::ColourGradient (vio.withAlpha (0.0f),  0.0f, 0.0f,
                                                      vio.withAlpha (aZero), 0.0f, y0, false));
             g.fillPath (fill);
         }
         {
             juce::Graphics::ScopedSaveState ss (g);
-            g.reduceClipRegion (0, (int) y0, (int) w, juce::jmax (0, (int) (h - y0)));
+            g.reduceClipRegion (0, (int) y0, (int) wx, juce::jmax (0, (int) (h - y0)));
             g.setGradientFill (juce::ColourGradient (vio.withAlpha (0.0f),  0.0f, h,
                                                      vio.withAlpha (aZero), 0.0f, y0, false));
             g.fillPath (fill);
@@ -1055,24 +1059,64 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
     }
 
-    // --- beyond-Nyquist fog (drawn LAST, OVER the curve so the phantom tail dissolves) ------------
-    // Below fs/2 the (oversampled, see designFs) curve ~= the real response; above it there is no real
-    // signal — the curve is pure analog intent, so let it fade into fog toward the right edge. A gradient
-    // (clear at Nyquist -> near-opaque at 28k) thickens across the phantom zone; a hairline marks fs/2.
-    // At 88.2/96k Nyquist sits past the 28k axis, so xNyq is off-screen and nothing draws; at 44.1/48k it
-    // fogs the top sliver (the curve dissolves right at the edge); at low rates it fogs most of the top.
-    if (traces.sampleRate() > 0.0)
+    // --- the gutter fade (drawn LAST, OVER everything the plot painted) --------------------------
+    // The dissolve starts AT the axis, never before it: the curve, the spectrum and the background
+    // cross the rule at full strength and only then fade out, dying under the level numbers. So the
+    // fog is a property of the EDGE, not of the sample rate — it no longer marks fs/2 (nothing does
+    // now; see the axis note). The frequency scale still ends at the axis, so everything past it is
+    // the last value held flat: a tail that reads as a fade-out, not as data.
     {
-        const float xNyq = pm.freqToX (0.499 * traces.sampleRate());
-        if (xNyq < w - 1.0f)
-        {
-            const auto fog = tabby::palette::bg().darker (0.35f);
-            g.setGradientFill (juce::ColourGradient (fog.withAlpha (0.0f),  xNyq, 0.0f,
-                                                     fog.withAlpha (0.94f), w,    0.0f, false));
-            g.fillRect (xNyq, 0.0f, w - xNyq, h);
-            g.setColour (tabby::palette::violetLo().withAlpha (0.5f));   // hairline at Nyquist — where real signal ends
-            g.drawVerticalLine ((int) xNyq, 0.0f, h);
-        }
+        const auto fog = tabby::palette::bg().darker (0.35f);
+        g.setGradientFill (juce::ColourGradient (fog.withAlpha (0.0f),  w,  0.0f,
+                                                 fog.withAlpha (0.97f), wx, 0.0f, false));
+        g.fillRect (w, 0.0f, wx - w, h);
+    }
+
+    // --- axis, then every caption — painted LAST, over the fade ---------------------------------
+    // A number you can't read is not a scale, so nothing the plot draws may wash a caption out:
+    // the level column sits at the very end of the fade, and the gain column overlays the plot.
+    // No backing plates: the gutter IS the clear space, so a plate would only stamp a visible chip
+    // into the vignette (the bottom freq strip showed it worst — the vignette lifts the background
+    // there, so a bg-coloured plate read as a dark box around every number).
+    g.setFont (11.0f);
+    auto caption = [&g] (const juce::String& s, juce::Rectangle<int> box, juce::Justification just,
+                         juce::Colour colour)
+    {
+        g.setColour (colour);
+        g.drawText (s, box, just);
+    };
+    // (No fs/2 mark of any kind: neither hairline nor notch. The only thing that would show it —
+    // the old in-plot fog — is gone by design, the dissolve now belongs to the axis instead.)
+    for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
+        caption (f >= 1000.0 ? juce::String (f / 1000.0, 0) + "k" : juce::String ((int) f),
+                 { (int) pm.freqToX (f) + 2, (int) h - 14, 34, 12 }, juce::Justification::left,
+                 tabby::palette::axisText());
+
+    // THE axis — the plot's right edge, and the only vertical rule on that side (it took over the
+    // hue the Nyquist hairline used to carry; that hairline is gone, the fog alone now shows where
+    // real signal ends). Gain numbers overlay the plot to its left, analyzer levels sit to its right.
+    g.setColour (tabby::palette::violetLo().withAlpha (0.5f));
+    g.drawVerticalLine ((int) w, 0.0f, h - 14.0f);
+
+    // The EQ GAIN scale — OVERLAY, right-aligned just inside the axis, in the hue of the curve it measures.
+    for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
+    {
+        if (std::abs (std::abs (db) - gainRange) < 0.01 || std::abs (db) < 0.01) continue;
+        const float y = pm.dbToY (db);
+        if (y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // below the range picker, above the toolbar
+            caption ((db > 0.0 ? "+" : "") + juce::String ((int) db),
+                     { (int) w - kGainColPad - kGainColW, (int) y - 6, kGainColW, 12 },
+                     juce::Justification::right, tabby::palette::orange().withAlpha (0.90f));
+    }
+    // Gutter column 2 — the ANALYZER LEVEL scale: every 10 dBFS down the spectrum's own scale
+    // (specDbToY, NOT the gain scale), dim violet so it never competes with the gain numbers.
+    for (double db = 0.0; db >= -anaRange - 0.01; db -= 10.0)
+    {
+        const float y = pm.specDbToY (db);
+        if (y >= 8.0f && y <= h - 16.0f)
+            caption (juce::String ((int) db),
+                     { (int) w + kSpecColX, (int) y - 6, kSpecColW, 12 }, juce::Justification::right,
+                     tabby::palette::violet().withAlpha (0.55f));
     }
 }
 
@@ -1128,7 +1172,7 @@ void EqCurveDisplay::drawAddPreview (juce::Graphics& g, const AddSpec& s, juce::
     // ghost response curve — floor-clamped + sampled dead-on at f0 (so a preview notch bottoms out cleanly
     // at the plot floor exactly like the committed curves, not diving past it or jittering).
     juce::Path path;
-    const float wpx = (float) getWidth();
+    const float wpx = plotMap().width;   // the plot's right edge, not the component's
     const float xf0 = freqToX (f0);
     bool started = false, placedF0 = false;
     const double dfs = designFs();   // oversampled (see compositeDb) so a preview LP/BP dives smoothly past Nyquist
@@ -1261,10 +1305,49 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
                 [safe]            { if (safe != nullptr) safe->refreshAfterLaneEdit(); });
             m.addSubMenu ("Placement lanes", lanes);
             m.addSeparator();
+            // Bypass = the ghost the node double-click toggles. It lives here too so the gesture is
+            // named somewhere: a ghost you found by accident is otherwise unexplained.
+            //
+            // The two levels are REAL — a point owns the shared filter type, so it may own its own
+            // switch — and the menu is where the hierarchy becomes visible. A split point opens the
+            // item into "Whole point" + one row per enabled lane (the only home per-lane bypass has;
+            // the lane checkbox next door is MEMBERSHIP, and re-enabling a lane re-seeds it). A plain
+            // {ST} point has nothing to choose between, so it keeps the single item.
+            {
+                int lanesOn = 0;
+                for (int L = 0; L < teq::kNumLanes; ++L) if (laneOn (b, L)) ++lanesOn;
+
+                if (lanesOn > 1)
+                {
+                    // FLAT, not a submenu: the point of showing both levels here is that you can
+                    // SEE what is bypassed the moment the menu opens. A submenu hides exactly the
+                    // ticks it exists to show, and costs a hover. Two extra rows is the usual price
+                    // (a split point carries L+R or M+S).
+                    m.addItem (101, "Bypass point", true, traces.param (b).bypass);
+                    for (int L = 0; L < teq::kNumLanes; ++L)
+                        if (laneOn (b, L))
+                            m.addItem (110 + L, "Bypass " + juce::String (laneKeyStr (L)).toUpperCase(),
+                                       true, traces.param (b).lanes[(size_t) L].bypass);
+                }
+                else
+                    m.addItem (101, "Bypass", true, traces.param (b).bypass);   // the POINT's flag — same switch as the double-click
+                m.addSeparator();
+            }
             m.addItem (100, "Remove band");
             m.showMenuAsync (juce::PopupMenu::Options(), [safe, b, lane] (int r) {
                 if (safe == nullptr || r <= 0 || r >= 1000) return;                     // ignore the lane rows' own ids
-                if (r == 100)                                                            // remove the whole band (point off)
+                if (r == 101)                                                            // ghost the point (or un-ghost it)
+                {
+                    const bool byp = safe->proc.apvts.getRawParameterValue (tabby::bandId (b, "bypass"))->load() > 0.5f;
+                    safe->setParamGestured (tabby::bandId (b, "bypass"), byp ? 0.0 : 1.0);
+                }
+                else if (r >= 110 && r < 110 + teq::kNumLanes)                            // ghost ONE lane of a split point
+                {
+                    // Live atomics, not the paint cache: the menu is async, the state may have moved.
+                    const auto id = safe->laneParamId (b, r - 110, "bypass");
+                    safe->setParamGestured (id, safe->proc.apvts.getRawParameterValue (id)->load() > 0.5f ? 0.0 : 1.0);
+                }
+                else if (r == 100)                                                       // remove the whole band (point off)
                 {
                     safe->proc.beginHistoryGesture ("Remove Band " + juce::String (b + 1));   // one labelled step
                     safe->setParamGestured (tabby::bandId (b, "on"), 0.0);
@@ -1458,6 +1541,8 @@ void EqCurveDisplay::mouseUp (const juce::MouseEvent& e)
                 addBandOfType (placeSpec.typeIndex, placePos, placeSpec.slopeIndex);                              // gain from the cursor (plain click or free drag)
             else
                 addBandOfType (placeSpec.typeIndex, { placePos.x, dbToY (placeSpec.gainDb) }, placeSpec.slopeIndex);  // filter, or Alt-locked default gain
+            justPlacedBand = selBand;                            // addBandOfType selects the newborn — see mouseDoubleClick
+            justPlacedMs   = juce::Time::getMillisecondCounter();
         }
         placing = false; placeMoved = false; repaint();
         return;   // the new band's selectBand() already placed the toolbar
@@ -1586,10 +1671,36 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
     refreshDesigns();
     const Hit hit = nodeAt (e.position);
-    if (hit.band >= 0)                                            // on a node -> toggle that lane's bypass (ghost)
+
+    // The band this very click sequence just created is NOT a bypass target. On empty canvas the
+    // FIRST click already adds a band (the "+" press-drag placement commits on release), so by the
+    // time the double-click arrives there is a node under the cursor — toggling it would hand you a
+    // band you never asked for, born as a ghost. Ignore it; the add WAS the gesture's outcome.
+    if (hit.band >= 0 && hit.band == justPlacedBand
+        && juce::Time::getMillisecondCounter() - justPlacedMs < 600)
     {
-        const bool byp = traces.param (hit.band).lanes[(size_t) hit.lane].bypass;
-        setParamGestured (laneParamId (hit.band, hit.lane, "bypass"), byp ? 0.0 : 1.0);
+        justPlacedBand = -1;
+        return;
+    }
+
+    if (hit.band >= 0)   // on a node -> toggle the ghost, at the level the node stands for
+    {
+        // You clicked a NODE, and on a split point a node IS one lane — so that is what goes dark.
+        // On a single-lane point the node and the point are the same thing, so the POINT's flag
+        // moves: that keeps the common case aligned with the strip's power button, which is
+        // point-level. (Toggling the lane flag UNCONDITIONALLY was the old bug — it ghosted a node
+        // the power button still reported as ON, with nothing in the UI able to clear it. It is
+        // safe now only because per-lane bypass finally has a home: the right-click Bypass submenu
+        // shows every lane's state and can switch it back.)
+        int lanesOn = 0;
+        for (int L = 0; L < teq::kNumLanes; ++L) if (laneOn (hit.band, L)) ++lanesOn;
+
+        if (lanesOn > 1)
+            setParamGestured (laneParamId (hit.band, hit.lane, "bypass"),
+                              traces.param (hit.band).lanes[(size_t) hit.lane].bypass ? 0.0 : 1.0);
+        else
+            setParamGestured (tabby::bandId (hit.band, "bypass"), traces.param (hit.band).bypass ? 0.0 : 1.0);
+
         selectBand (hit.band, hit.lane);
     }
     else

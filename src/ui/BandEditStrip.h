@@ -168,7 +168,13 @@ private:
 
     std::unique_ptr<ComboAtt>  slopeAtt;
     std::unique_ptr<SliderAtt> freqAtt, qAtt, gainAtt;
-    std::unique_ptr<juce::ParameterAttachment> bypassAtt;   // power button <-> bypass param (single source)
+    // The power button reads BOTH bypass levels (a node is dark if either is set) but WRITES the one
+    // the strip's readout names — the active lane on a split point, the point otherwise. See onClick.
+    std::unique_ptr<juce::ParameterAttachment> bypassAtt;     // POINT bypass
+    std::unique_ptr<juce::ParameterAttachment> laneBypAtt;    // ACTIVE LANE bypass (split points only)
+    bool pointByp = false, laneByp = false;                   // last seen values, for the lit state
+    bool splitPoint() const;                                  // > 1 enabled lane -> the readout carries a lane letter
+    void refreshPower();                                      // lit == the node is NOT dark
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BandEditStrip)
 };

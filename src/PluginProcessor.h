@@ -337,16 +337,15 @@ private:
     LinearPhaseEq lp;                                             // Linear-phase convolution path (exact zero-phase)
     NaturalPhase  np;                                             // Natural-phase convolution path (mixed phase, blend k)
     static constexpr int kNaturalQuality = 1;                    // Natural's fixed FIR length (L = 4096); the quality combo is Linear-only
+    static constexpr float kNaturalBlend = 0.5f;                 // Natural's FIXED blend k (0 linear … 1 minimum phase) — not a parameter
     std::atomic<float>* phaseMode   = nullptr;                    // 0 = Zero Latency (IIR) · 1 = Natural Phase (FIR) · 2 = Linear Phase (FIR)
     std::atomic<float>* lpQuality   = nullptr;                    // 0..3 -> Linear FIR length
-    std::atomic<float>* phaseAmount = nullptr;                    // Natural blend k (0 linear … 1 minimum phase)
     // Master "fully prepared" flag: true only after prepareToPlay() finishes building the engine + BOTH FIR
     // paths; gates BOTH the audio thread and lpTick(). Atomic + release/acquire so a thread that sees `true`
     // also sees the fully-built engine/FIR state (publish pattern).
     std::atomic<bool> prepared { false };
     int  lastQuality = -1;
     int  lastMode    = 0;                                         // 0/1/2 — track mode changes (re-report latency)
-    float lastK      = -1.0f;                                     // track k changes (re-prepare Natural)
 
     struct LpUpdater : juce::Timer { TabbyEqAudioProcessor& p; explicit LpUpdater (TabbyEqAudioProcessor& pp) : p (pp) {}
                                      void timerCallback() override { p.onTimer(); } } lpUpdater { *this };

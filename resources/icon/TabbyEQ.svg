@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" id="tabbyeq-icon" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    TabbyEQ app / bundle icon — the "stripe-cat" mark: five spectrum bars whose outer two
+    peak into ears, centre bar boosted. Geometry + palette are resources/logo/TabbyEQ-mark.svg
+    verbatim (violet #9170FF, lilac #B39BFF, orange #FF8A3D), scaled to fill the canvas.
+    Transparent and borderless with a soft contact shadow — the same treatment as OrbitCab's
+    orbit mark: macOS does NOT tile/mask app icons (unlike iOS), so a floating mark is
+    intentional, and no dark plate is drawn behind it. The mark fills ~89% of the width; the
+    remaining margin is what the shadow needs so it isn't clipped.
+    Reserved TabbyEQ / Darwin's Cat trademark — see docs/ASSET-LICENSES.md.
+    Source of truth for TabbyEQ-1024.png — regenerate from resources/icon/ with:
+    rsvg-convert -w 1024 -h 1024 TabbyEQ.svg -o TabbyEQ-1024.png
+  -->
+  <defs>
+    <!-- Contact shadow ONLY. OrbitCab's mark is thin rings, so a wide halo reads as a glow there;
+         these bars are solid blocks a third of the canvas wide, and the same halo turned the gaps
+         between them into a grey wash. Tight blur, small drop, moderate opacity: the mark lifts off
+         the desktop without painting a plate behind itself. -->
+    <filter id="tabby-shadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="b"/>
+      <feOffset in="b" dx="0" dy="7" result="o"/>
+      <feFlood flood-color="#000000" flood-opacity="0.45" result="f"/>
+      <feComposite in="f" in2="o" operator="in" result="s"/>
+      <feMerge>
+        <feMergeNode in="s"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- mark bbox in mark units is x 12..88, y 26..88 -> scale 12 puts it at 912 x 744, centred -->
+  <g transform="translate(-88,-172) scale(12)" filter="url(#tabby-shadow)">
+    <path d="M12,88 V26 L24,46 V88 Z" fill="#9170FF"/>
+    <rect x="28" y="46" width="12" height="42" rx="2" fill="#B39BFF"/>
+    <rect x="44" y="40" width="12" height="48" rx="2" fill="#FF8A3D"/>
+    <rect x="60" y="46" width="12" height="42" rx="2" fill="#B39BFF"/>
+    <path d="M88,88 V26 L76,46 V88 Z" fill="#9170FF"/>
+  </g>
+</svg>
