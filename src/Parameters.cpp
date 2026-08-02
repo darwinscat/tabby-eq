@@ -164,10 +164,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                               juce::StringArray { "Zero Latency", "Natural Phase", "Linear Phase" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "lpQuality", 1 }, "Linear Quality",
                                                               juce::StringArray { "Low", "Medium", "High", "Very High", "Maximum" }, 1));   // default Medium — FabFilter-style ladder
-    // Natural-phase blend: 0 = linear (flat phase, more latency/pre-ring) … 1 = minimum phase (no pre-ring,
-    // ~0 latency, full phase shift). 0.5 = the mastering middle ground. Only bites in Natural Phase mode.
-    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "phaseAmount", 1 }, "Phase Amount",
-                                                             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f));
+    // NB the Natural-phase blend k is NOT a parameter — it is fixed at kNaturalBlend = 0.5 (see
+    // PluginProcessor.h). The extremes are already covered by the neighbouring modes (k=1 ≈ Zero
+    // Latency, which is matched-IIR and doesn't cramp anyway; k=0 ≈ Linear Phase, but on Natural's
+    // fixed 4096 taps), while the latency stays L/4 whatever k is — so exposing it only offered
+    // strictly-worse settings at full cost. The mixed middle is the whole point of the mode.
     return layout;
 }
 

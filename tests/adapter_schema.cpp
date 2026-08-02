@@ -96,7 +96,9 @@ int main()
         auto p = std::make_unique<TabbyEqAudioProcessor>();
 
         const auto& params = p->getParameters();
-        check (params.size() == kNumBands * 34 + 4, "parameter count == 24*34 + 4 globals (820)");
+        // 3 globals: output, phaseMode, lpQuality. The Natural-phase blend k is NOT a parameter —
+        // it is fixed at TabbyEqAudioProcessor::kNaturalBlend (see Parameters.cpp for why).
+        check (params.size() == kNumBands * 34 + 3, "parameter count == 24*34 + 3 globals (819)");
 
         std::set<juce::String> names;
         bool unique = true;
@@ -105,12 +107,12 @@ int main()
             const auto nm = prm->getName (256);
             if (! names.insert (nm).second) { unique = false; std::cerr << "  dup name: " << nm << '\n'; }
         }
-        check (unique, "all ~820 display names are unique");
+        check (unique, "all ~819 display names are unique");
 
-        // Group-per-band tree: 24 subgroups (34 params each) + 4 top-level global params.
+        // Group-per-band tree: 24 subgroups (34 params each) + 3 top-level global params.
         const auto& tree = p->getParameterTree();
         check (tree.getSubgroups (false).size() == kNumBands, "24 per-band parameter groups");
-        check (tree.getParameters (false).size() == 4, "4 top-level global params");
+        check (tree.getParameters (false).size() == 3, "3 top-level global params");
         bool groupsOk = true;
         for (auto* g : tree.getSubgroups (false))
             if (g->getParameters (false).size() != 34) groupsOk = false;

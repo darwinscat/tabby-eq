@@ -162,7 +162,7 @@ namespace
         add ("output",      oldReal ("output", 0.0));
         add ("phaseMode",   juce::jlimit (0.0, 2.0, oldReal ("phaseMode", 0.0)));
         add ("lpQuality",   juce::jlimit (0.0, 4.0, oldReal ("lpQuality", 1.0)));
-        add ("phaseAmount", juce::jlimit (0.0, 1.0, oldReal ("phaseAmount", 0.5)));
+        // (an old "phaseAmount" is deliberately dropped — the Natural blend k is fixed now)
         for (int b = 0; b < kNumBands; ++b)
         {
             add (bandId (b, "on"),     mig[(size_t) b].on ? 1.0 : 0.0);
@@ -220,7 +220,7 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     {
         juce::ignoreUnused (savedCount, buildCount);
         DBG ("TabbyEQ: session carries " << savedCount << " compare registers, build has "
-             << buildCount << " — extras dropped");
+             << buildCount << " - extras dropped");
     };
 
     // Wire the per-band / per-lane atomic parameter pointers, and build the link-mirror index maps.
@@ -273,7 +273,6 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
     outputGain  = apvts.getRawParameterValue ("output");
     phaseMode   = apvts.getRawParameterValue ("phaseMode");
     lpQuality   = apvts.getRawParameterValue ("lpQuality");
-    phaseAmount = apvts.getRawParameterValue ("phaseAmount");
     lpUpdater.startTimerHz (30);   // coalesces param edits into background FIR rebuilds + drains the link FIFO
 }
 
@@ -301,9 +300,8 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     for (int b = 0; b < tabby::kNumBands; ++b) snap[(size_t) b] = readBand (b);
     const int chans = getTotalNumOutputChannels();
     lp.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, (int) lpQuality->load(), snap.data(), tabby::kNumBands);
-    np.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, kNaturalQuality, phaseAmount->load(), snap.data(), tabby::kNumBands);
+    np.prepare (sampleRate, maximumExpectedSamplesPerBlock, chans, kNaturalQuality, kNaturalBlend, snap.data(), tabby::kNumBands);
     lastQuality = (int) lpQuality->load();
-    lastK       = phaseAmount->load();
     lastMode    = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
     setLatencySamples (lastMode == 2 ? lp.latencySamples() : lastMode == 1 ? np.latencySamples() : 0);
     prepared.store (true, std::memory_order_release);   // publish LAST: the engine + both FIRs are now fully built
@@ -468,13 +466,11 @@ void TabbyEqAudioProcessor::lpTick()
 
     const int   q    = (int) lpQuality->load();
     const int   mode = (int) (phaseMode->load() + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
-    const float k    = phaseAmount->load();
 
     auto reportLatency = [this] (int m) { setLatencySamples (m == 2 ? lp.latencySamples() : m == 1 ? np.latencySamples() : 0); };
 
     if (q != lastQuality)               { lastQuality = q; lp.setQuality (q); if (mode == 2) reportLatency (mode); }
-    if (std::abs (k - lastK) > 1.0e-4f) { lastK = k;       np.setBlend (k); }   // Natural latency is fixed → no re-report
-    if (mode != lastMode)               { lastMode = mode; reportLatency (mode); }
+    if (mode != lastMode)               { lastMode = mode; reportLatency (mode); }   // Natural's blend is fixed → nothing to track
 
     if (mode >= 1)   // feed the active FIR builder (Natural or Linear)
     {

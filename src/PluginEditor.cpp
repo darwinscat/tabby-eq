@@ -38,21 +38,16 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step across all visible nodes
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
 
-    // OUT rail trim — a minimalist vertical fader; double-click returns to 0 dB.
-    output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 52, 16);   // the 0 dB editor, full rail width
+    // OUT rail — the meter IS the trim fader's track (see ui/OutputRail.h); double-click = 0 dB.
     output.setNumDecimalPlacesToDisplay (1);
-    output.setDoubleClickReturnValue (true, 0.0);
-    output.setColour (juce::Slider::trackColourId,         tabby::palette::violet());
-    output.setColour (juce::Slider::thumbColourId,         tabby::palette::orange());
-    output.setColour (juce::Slider::textBoxTextColourId,   tabby::palette::text());
-    output.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (output);
     outputAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "output", output);
     // AFTER the attachment (it installs the param's text conversion): the param formats the default
-    // as "-0.00" — a floating-point negative zero. Snap the dust to a plain 0.
+    // as "-0.00" — a floating-point negative zero. Snap the dust to a plain 0, and keep it to ONE
+    // decimal: the readout strip is only as wide as the rail.
     output.textFromValueFunction = [] (double v)
     {
-        return juce::String (std::abs (v) < 0.005 ? 0.0 : v, 2);
+        return std::abs (v) < 0.05 ? juce::String ("0") : juce::String (v, 1);
     };
     output.updateText();
     // A MOUSE fader drag = ONE labelled undo step (and keyPressed's navigation gate covers it
@@ -64,8 +59,7 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
         output.onDragEnd   = [this, open] { if (*open) { *open = false; proc.endHistoryGesture(); } };
     }
 
-    addAndMakeVisible (inMeter);    // no IN/OUT captions — the meters carry tooltips
-    addAndMakeVisible (outMeter);
+    addAndMakeVisible (inMeter);    // no IN/OUT captions — the rails carry tooltips
     addAndMakeVisible (corrMeter);
 
     // A/B/C/D compare registers + undo/redo — one chrome cell (its OWN DragAndDropContainer) driven
@@ -86,8 +80,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (infoButton);   // (i) build/version popover — top-bar right
 
     // ---- bottom toolbar (FabFilter-style): flat items, every popup opens UPWARD ----
-    // Phase mode + Natural blend + Linear quality all live in ONE item now ("Zero Latency" /
-    // "Natural Phase – 70" / "Linear Phase – High"); the old combos and the blend slider are gone.
+    // Phase mode + Linear quality live in ONE item now ("Zero Latency" / "Natural Phase" /
+    // "Linear Phase – High"); the old combos and the blend slider are gone.
     // The menu writes the params (a real edit — one labelled undo step); the label follows the
     // params through the timer poll, so host automation moves it too.
     modeItem.onClick = [this] { showModeMenu(); };
@@ -128,7 +122,8 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     // the property makes it one-time (the removal is saved with the session).
     if (proc.apvts.state.hasProperty ("migrationNote"))
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "TabbyEQ — session migrated",
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            juce::String::fromUTF8 ("TabbyEQ — session migrated"),   // fromUTF8: a bare const char* decodes as Latin-1
             "An older session's M/S band used a different filter type on its Side lane.\n"
             "All 24 bands were in use, so that Side lane now uses the band's shared type.");
         // Suppressed: a programmatic state write at editor-open must not seed a junk undo step
@@ -181,7 +176,7 @@ void TabbyEqEditor::syncViewFromState()
 TabbyEqEditor::~TabbyEqEditor()
 {
     // A host may destroy the editor MID-DRAG. The display's own dtor closes a node drag, but the
-    // slider brackets (strip bars, output fader, phase blend) would leak their open gesture on the
+    // slider brackets (strip bars, output fader) would leak their open gesture on the
     // out-living PROCESSOR — navigation gate stuck, settle commits blocked, forever. Close the
     // node drag first (so nothing double-ends), then force-close whatever brackets remain.
     display.endDragGesture();
@@ -192,16 +187,15 @@ TabbyEqEditor::~TabbyEqEditor()
 void TabbyEqEditor::updatePhaseUi()
 {
     // Param-driven (the old combos are gone): the bottom-bar mode item shows mode + its detail
-    // ("Natural Phase – 70" / "Linear Phase – High"), the latency label sits beside it, coloured
+    // ("Natural Phase" / "Linear Phase – High"), the latency label sits beside it, coloured
     // dim (Zero) / yellow (Natural) / red (Linear). The timer poll re-runs this when the params
     // move, so host automation is reflected too.
     const int   mode = juce::jlimit (0, 2, (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f));
     const int   q    = juce::jlimit (0, 4, (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f));
-    const float k    = proc.apvts.getRawParameterValue ("phaseAmount")->load();
 
     const auto dash = " " + juce::String::charToString (0x2013) + " ";   // en-dash (a char* literal would mojibake)
     juce::String label = "Zero Latency";
-    if (mode == 1) label = "Natural Phase" + dash + juce::String (juce::roundToInt (k * 100.0f));
+    if (mode == 1) label = "Natural Phase";   // no blend number — k is fixed (see kNaturalBlend)
     if (mode == 2)
     {
         auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality"));
@@ -239,15 +233,8 @@ void TabbyEqEditor::showModeMenu()
 {
     const int   mode = juce::jlimit (0, 2, (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f));
     const int   q    = juce::jlimit (0, 4, (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f));
-    const int   kPct = juce::roundToInt (proc.apvts.getRawParameterValue ("phaseAmount")->load() * 100.0f);
 
-    // Natural blend as fixed steps (10..100; 0 is omitted — k=0 IS linear phase, the mode below).
-    // The checkmark demands an EXACT match: an off-grid k (host automation, e.g. 37) shows no tick
-    // rather than lying with the nearest decade — picking a "ticked" item must never change sound.
-    juce::PopupMenu natural;
-    for (int p = 10; p <= 100; p += 10)
-        natural.addItem (100 + p / 10, juce::String (p), true, mode == 1 && kPct == p);
-
+    // Natural Phase is ONE item — the blend k no longer has a ladder (fixed at kNaturalBlend).
     juce::PopupMenu linear;
     if (auto* lq = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter ("lpQuality")))
         for (int i = 0; i < lq->choices.size(); ++i)
@@ -255,7 +242,7 @@ void TabbyEqEditor::showModeMenu()
 
     juce::PopupMenu m;
     m.addItem (1, "Zero Latency", true, mode == 0);
-    m.addSubMenu ("Natural Phase", natural, true, nullptr, mode == 1);
+    m.addItem (2, "Natural Phase", true, mode == 1);
     m.addSubMenu ("Linear Phase",  linear,  true, nullptr, mode == 2);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&modeItem),
@@ -271,7 +258,7 @@ void TabbyEqEditor::showModeMenu()
                     prm->setValueNotifyingHost (prm->convertTo0to1 (real));
             };
             if      (r == 1)   { set ("phaseMode", 0.0f); }
-            else if (r < 200)  { set ("phaseMode", 1.0f); set ("phaseAmount", (float) (r - 100) / 10.0f); }
+            else if (r == 2)   { set ("phaseMode", 1.0f); }
             else               { set ("phaseMode", 2.0f); set ("lpQuality", (float) (r - 200)); }
             safe->updatePhaseUi();
         });
@@ -704,21 +691,16 @@ void TabbyEqEditor::resized()
     const int minStartX = kCatMargin - (int) felitronics::appkit::chrome::BrandBlister::contentLeftOffset();
     bar.layout (topBar, kBarH, minStartX);
 
-    // ---- three vertical blocks: |IN meter| spectrum |OUT meter + fader| ------------------------
-    // The rails run the FULL height below the top bar; the bottom toolbar belongs to the MIDDLE
-    // block only. No IN/OUT captions — the meters carry tooltips instead.
+    // ---- three vertical blocks: |IN meter| spectrum |OUT rail| ---------------------------------
+    // The rails run the FULL height below the top bar and are the SAME width; the bottom toolbar
+    // belongs to the MIDDLE block only. No IN/OUT captions — the rails carry tooltips instead.
     auto leftRail  = r.removeFromLeft (30);
-    auto rightRail = r.removeFromRight (64);
+    auto rightRail = r.removeFromRight (30);
 
     inMeter.setBounds (leftRail.reduced (7, 6));
-    {
-        auto rr = rightRail.reduced (5, 6);
-        // The output VALUE editor (the slider's own text box) sits at the rail's bottom, under BOTH
-        // the meter and the fader — the slider spans the full rail width so its TextBoxBelow lands
-        // there; the meter overlaps the slider's (empty) left margin, clear of the centred track.
-        outMeter.setBounds (rr.getX(), rr.getY(), 14, rr.getHeight() - 20);
-        output.setBounds (rr);
-    }
+    // The OUT rail is ONE control (meter + trim): it takes the whole 30 px column so its value
+    // readout has room, and paints its meter in a centred 16 px column — matching the IN meter.
+    output.setBounds (rightRail.reduced (0, 6));
 
     // ---- bottom toolbar (middle block only): mode+latency left · Analyzer centred · corr right --
     auto bottom = r.removeFromBottom (22);

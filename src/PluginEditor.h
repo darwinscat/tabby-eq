@@ -9,6 +9,7 @@
 #include "ui/EqCurveDisplay.h"
 #include "ui/BandEditStrip.h"
 #include "ui/LevelMeter.h"
+#include "ui/OutputRail.h"          // the OUT rail — meter + trim fader in ONE 30 px column
 #include "ui/CorrelationMeter.h"
 #include "ui/VersionInfo.h"
 #include "ui/ChromeButtons.h"        // GlyphButton — the product's top-right gear/fullscreen glyphs
@@ -64,12 +65,11 @@ private:
         }
 
         // The bottom-bar mode/latency labels follow the PARAMS (host automation moves them too).
-        const int   pm = (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f);
-        const int   pq = (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f);
-        const float pk = proc.apvts.getRawParameterValue ("phaseAmount")->load();
-        if (pm != lastPhaseMode || pq != lastPhaseQuality || std::abs (pk - lastPhaseAmount) > 1.0e-4f)
+        const int pm = (int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f);
+        const int pq = (int) (proc.apvts.getRawParameterValue ("lpQuality")->load() + 0.5f);
+        if (pm != lastPhaseMode || pq != lastPhaseQuality)
         {
-            lastPhaseMode = pm; lastPhaseQuality = pq; lastPhaseAmount = pk;
+            lastPhaseMode = pm; lastPhaseQuality = pq;
             updatePhaseUi();
         }
     }
@@ -95,7 +95,7 @@ private:
     void updatePhaseUi();     // refresh the mode item label + the latency readout from the params
 
     // ---- bottom toolbar actions ----
-    void showModeMenu();          // Zero / Natural (k submenu) / Linear (quality submenu)
+    void showModeMenu();          // Zero / Natural / Linear (quality submenu)
     void showPresetMenu();        // Default + *.tabbyeq files from the preset directory
     void showAnalyzerPanel();     // the Pre/Post + Range/Speed/Tilt/Freeze popover
     void refreshAnalyzerItem();   // "Analyzer: Pre+Post|Pre|Post|Off"
@@ -130,22 +130,21 @@ private:
     felitronics::appkit::chrome::CompareCell    compareCell { TabbyEqAudioProcessor::kNumSnapshots, chromeTheme }; // undo/redo + A/B/C/D
     felitronics::appkit::chrome::PresetCell     presetCell { chromeTheme };                     // preset name
 
-    juce::TooltipWindow tooltips { this, 700 };                                // hosts the undo-label (and phase-blend) tooltips
+    juce::TooltipWindow tooltips { this, 700 };                                // hosts the undo-label + meter/rail tooltips
     unsigned lastHistoryRev = 0;                                               // last seen historyRevision()
     unsigned lastApplyRev   = 0;                                               // last seen applyRevision()
     LevelMeter     inMeter  { proc, LevelMeter::Which::In };    // IN rail (left): meter only
-    LevelMeter     outMeter { proc, LevelMeter::Which::Out };   // OUT rail (right): meter + trim
+    tabby::ui::OutputRail output { proc };                      // OUT rail (right): meter + trim, ONE control
     CorrelationMeter corrMeter { proc };                        // top-bar L/R phase correlation
-    juce::Slider   output { juce::Slider::LinearVertical, juce::Slider::TextBoxBelow };
 
     // ---- bottom toolbar (FabFilter-style flat items; every popup opens upward) ----
-    felitronics::appkit::chrome::FlatItem modeItem;  // "Zero Latency" / "Natural Phase – 70" / "Linear Phase – High"
+    felitronics::appkit::chrome::FlatItem modeItem;  // "Zero Latency" / "Natural Phase" / "Linear Phase – High"
     juce::Label latencyLabel;                  // reported latency — yellow (Natural) / red (Linear), beside the mode
     felitronics::appkit::chrome::FlatItem anaItem;   // "Analyzer: Post" -> settings popover
     juce::String currentPresetName { "Default" };
     std::unique_ptr<juce::FileChooser> chooser;                         // async save/import/export
     int   lastPhaseMode = -1, lastPhaseQuality = -1;                    // timer poll caches (labels follow
-    float lastPhaseAmount = -1.0f;                                      // host automation, not just the menu)
+                                                                        // host automation, not just the menu)
 
     // ---- top-right pinned glyphs ----
     tabby::ui::GlyphButton gearBtn { tabby::ui::GlyphButton::Glyph::Gear };         // View options menu (flat, top-right)

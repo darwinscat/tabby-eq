@@ -22,11 +22,15 @@ class FlatScaleButton final : public juce::Button
 public:
     FlatScaleButton() : juce::Button ({}) {}
     juce::String text;
+    // The picker heads the orange EQ-gain column, so it wears the same hue — on a lifted plate, so
+    // it reads as the one CLICKABLE thing among the painted numbers.
     void paintButton (juce::Graphics& g, bool highlighted, bool) override
     {
-        g.setColour (highlighted ? tabby::palette::text() : tabby::palette::textDim());
-        g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        g.drawText (text, getLocalBounds(), juce::Justification::centredRight);
+        g.setColour (tabby::palette::panel().withAlpha (highlighted ? 1.0f : 0.85f));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        g.setColour (highlighted ? tabby::palette::orange().brighter (0.25f) : tabby::palette::orange());
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        g.drawText (text, getLocalBounds(), juce::Justification::centred);
     }
 };
 
@@ -212,6 +216,8 @@ private:
     int  selBand      = -1;      // currently selected band (highlighted; shown in the edit strip)
     int  selLane      = 0;       // selected placement lane (0..4) of the selected band
     juce::Point<float> lastClickPos { -1.0e9f, -1.0e9f };   // coincident-node cycling: a repeat click in place cycles
+    int  justPlacedBand  = -1;   // band the LAST click's "+" placement created, and when — a double-click
+    juce::uint32 justPlacedMs = 0;   // must not bypass the node its own first click just gave birth to
     juce::Point<float> hoverPos { -1.0f, -1.0f };   // last mouse-move position (hover halo + "+")
     bool   showAnaPre  = false;                     // draw the pre-EQ spectrum (dimmed, behind)
     bool   showAnaPost = true;                      // draw the post-EQ spectrum (coloured)
@@ -241,6 +247,20 @@ private:
                                                                // margins (see BandEditStrip::resized) — the strip
                                                                // never resizes between selections
     static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
+    // Right gutter reserved for the two scales — a CONSTANT number of pixels, never a fraction of
+    // the width. The plot (grid, curves, spectrum, fog, the Nyquist hairline) stops at its left
+    // edge, so the scales always stand in clean background: anything width-proportional — Nyquist
+    // above all, which sits at ~0.98·plotWidth — would otherwise land dead on the numbers on a
+    // narrow window and clear them on a wide one.
+    //
+    // Two scales, two hues — you never have to work out which number belongs to which curve — and
+    // ONE vertical rule between them: the plot's right edge, drawn violet. The EQ GAIN scale
+    // (orange, under the range picker) OVERLAYS the plot's right end, inside that rule; only the
+    // ANALYZER LEVEL scale (dim violet, every 10 dBFS) lives outside it, so the gutter only has to
+    // be as wide as one column.
+    static constexpr int kScaleGutterW = 30;
+    static constexpr int kGainColW = 24, kGainColPad = 5;   // orange column: right-aligned INSIDE the plot's edge
+    static constexpr int kSpecColX = 3,  kSpecColW = 24;    // dim-violet column: offsets from the plot's edge
     static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
 
     // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.

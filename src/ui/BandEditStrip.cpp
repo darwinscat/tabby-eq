@@ -12,20 +12,43 @@
 namespace
 {
     const char* kTypeNames[9] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Band Pass", "Notch", "All Pass", "Tilt" };
+
+    // "no band" placeholder. NOT a bare "—" literal: juce::String decodes a const char* as LATIN-1,
+    // so a UTF-8 dash would reach the screen as mojibake (the same trap the en-dash in the phase
+    // label and the arrow in VersionInfo already dodge).
+    const juce::String kEmDash = juce::String::charToString (0x2014);
 }
 
 BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
 {
-    title.setText ("—", juce::dontSendNotification);
+    title.setText (kEmDash, juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (13.0f).withStyle ("Bold")));
     title.setColour (juce::Label::textColourId, tabby::palette::text());
     title.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (title);
 
+    // The button acts on WHAT THE READOUT NAMES. Every other control in this strip (freq/Q/gain/
+    // slope) edits the ACTIVE LANE, and the title says so ("2m"); a power button that silently hit
+    // the whole point read as a bug — you asked it to switch off 2m and two nodes went dark.
+    //
+    // So: switching OFF writes the level the title names — the active lane on a split point, the
+    // point on a single-lane one. Switching ON clears BOTH levels, so whatever made the node dark
+    // (including a "Whole point" bypass set from the right-click submenu) is what comes back. That
+    // asymmetry is deliberate: the OFF direction should be precise, the ON direction should never
+    // leave you pressing a lit button at a node that stays dark.
     onButton.onClick = [this]
     {
-        if (bypassAtt != nullptr)
-            bypassAtt->setValueAsCompleteGesture (onButton.getToggleState() ? 1.0f : 0.0f);   // lit -> bypass the point
+        const bool turningOff = onButton.getToggleState();   // lit == not bypassed
+        if (turningOff)
+        {
+            if (splitPoint() && laneBypAtt != nullptr) laneBypAtt->setValueAsCompleteGesture (1.0f);
+            else if (bypassAtt != nullptr)             bypassAtt->setValueAsCompleteGesture (1.0f);
+        }
+        else
+        {
+            if (bypassAtt   != nullptr) bypassAtt->setValueAsCompleteGesture (0.0f);
+            if (laneBypAtt  != nullptr) laneBypAtt->setValueAsCompleteGesture (0.0f);
+        }
     };
     addAndMakeVisible (onButton);
 
@@ -129,7 +152,7 @@ void BandEditStrip::setBand (int band)
 
     // "3m"-style readout: band number + active lane letter. Same rule as the canvas badges — the letter
     // shows whenever the enabled set differs from the plain {ST} (so a single {l}-only point reads "3l").
-    juce::String t ("—");
+    juce::String t (kEmDash);
     if (has)
     {
         t = juce::String (curBand + 1);
@@ -222,7 +245,7 @@ void BandEditStrip::showLaneMenu()
 void BandEditStrip::rebind()
 {
     // Drop the old bindings first (an attachment must outlive nothing it points at).
-    slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset();
+    slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset(); laneBypAtt.reset();
     if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); return; }
 
     slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, laneId ("slope"), slopeBox);   // active lane
@@ -230,13 +253,40 @@ void BandEditStrip::rebind()
     qAtt     = std::make_unique<SliderAtt> (proc.apvts, laneId ("q"),     q);
     gainAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("gain"),  gain);
 
-    // Power button mirrors the POINT bypass param — single source of truth (the whole point, not one lane).
+    // The power button watches BOTH levels: a node is dark if the point OR its lane is bypassed, and
+    // the button must never claim otherwise (that mismatch was the ghost-that-would-not-come-back).
+    pointByp = laneByp = false;
     if (auto* bp = proc.apvts.getParameter (tabby::bandId (curBand, "bypass")))
     {
         bypassAtt = std::make_unique<juce::ParameterAttachment> (*bp,
-            [this] (float v) { onButton.setToggleState (v < 0.5f, juce::dontSendNotification); onButton.repaint(); });
+            [this] (float v) { pointByp = v >= 0.5f; refreshPower(); });
         bypassAtt->sendInitialUpdate();
     }
+    if (auto* lb = proc.apvts.getParameter (laneId ("bypass")))
+    {
+        laneBypAtt = std::make_unique<juce::ParameterAttachment> (*lb,
+            [this] (float v) { laneByp = v >= 0.5f; refreshPower(); });
+        laneBypAtt->sendInitialUpdate();
+    }
+    refreshPower();
+}
+
+bool BandEditStrip::splitPoint() const
+{
+    if (curBand < 0) return false;
+    int n = 0;
+    for (int L = 0; L < tabby::kNumLanes; ++L)
+        if (auto* a = proc.apvts.getRawParameterValue (tabby::laneParamId (curBand, L, "on")))
+            if (a->load() > 0.5f) ++n;
+    return n > 1;
+}
+
+void BandEditStrip::refreshPower()
+{
+    // On a single-lane point the lane flag is not what the button writes, but it can still be set
+    // (host automation, an old state) — and it still darkens the node, so it still unlights the button.
+    onButton.setToggleState (! (pointByp || laneByp), juce::dontSendNotification);
+    onButton.repaint();
 }
 
 void BandEditStrip::showTypeMenu()
