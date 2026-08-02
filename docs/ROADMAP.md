@@ -44,12 +44,19 @@ optional accelerator on top, riding the same real, automatable parameters a huma
 **WOW UI (cheap, software — see the visual language below).**
 
 ### Phase 2 — Dynamics
-- **Per-band dynamic EQ**: matched static biquad **+ cheap Cytomic SVF gain delta** driven by an
-  envelope detector (threshold / ratio / attack / release).
-- **Auto-relative threshold** — threshold = detector running RMS + N dB, so it works at any input
-  gain (no absolute-dBFS guesswork).
-- **De-esser = a dynamic-band preset.**
-- **GR metering** per band (tension-vector / EKG trace, below). *(Needed by the Helper.)*
+See **`docs/DYNAMICS.md`** (Rev 2, the agreed design).
+- **Per-point dynamic EQ**: matched static biquad **+ cheap Cytomic SVF gain delta** driven by an
+  envelope detector — one detector per *enabled lane* (each probes its own region), one **shared
+  setting per point**. Different dynamics on Mid vs Side = fission, as Pro-Q's Split does for L/R.
+- **Auto-first parameters (the FabFilter model)** — the user sets **Dynamic Range** and nothing
+  else: threshold is auto-relative by default (running band-limited program level + offset, so it
+  works at any input gain), attack/release are **deviations** from program-dependent auto values
+  derived from the band's own frequency and Q, and ratio/knee/mode are gone — implied by a single
+  asymptotic transfer law. **5 params per point = 120**, not 840.
+- **De-esser = a dynamic-point preset** — three values, everything else auto.
+- **GR metering** per band+lane (tension-vector / EKG trace, below). *(Needed by the Helper.)*
+- Dynamics is **bypassed in Natural and Linear phase modes** — a moving target cannot be baked
+  into a static FIR.
 
 ### Phase 3 — Helper (semantic)
 - Source + named trait → pre-place & **label real bands** (static AND dynamic).
@@ -87,9 +94,9 @@ click-free IR-swap engine so live band edits stay artifact-free.
 ## Freeze now (schema)
 
 - **24 bands**; `bandN_*` param-ID convention (indices never shift).
-- `teq::BandParams` reserves the design for future fields: `dynamic{ on, threshold(rel), ratio,
-  attack, release, range, detector }`, `route{ stereo / L / R / M / S }`. Implement per phase;
-  migrate state additively.
+- Placement is **shipped** as per-point lanes (`LANES.md`, schema v3) — it superseded the reserved
+  `route{ stereo / L / R / M / S }` field. Dynamics is reserved **point-level**:
+  `dyn{ on, range, thrDb, thrAuto, atk, rel }` (`DYNAMICS.md` § 6), state v4, additive.
 - Band model reserves **provenance** (`origin`, `traitKey`, `actionId`, `manualDirty`) and a
   **macro-group** id for Macro-Nodes (helper phase).
 - `swept` is an **internal** search detail, not a pro-facing control.
