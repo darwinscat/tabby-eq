@@ -49,10 +49,10 @@ See **`docs/DYNAMICS.md`** (Rev 2, the agreed design).
   envelope detector — one detector per *enabled lane* (each probes its own region), one **shared
   setting per point**. Different dynamics on Mid vs Side = fission, as Pro-Q's Split does for L/R.
 - **Auto-first parameters (the FabFilter model)** — the user sets **Dynamic Range** and nothing
-  else: threshold is auto-relative by default (running band-limited program level + offset, so it
-  works at any input gain), attack/release are **deviations** from program-dependent auto values
-  derived from the band's own frequency and Q, and ratio/knee/mode are gone — implied by a single
-  asymptotic transfer law. **5 params per point = 120**, not 840.
+  else: the threshold is ALWAYS relative to the lane's own programme level (there is no manual
+  threshold — an absolute dBFS shared across lanes 20+ dB apart is meaningless), attack/release are
+  **deviations** from values derived from the band's own frequency and Q, and ratio/knee/mode are
+  fixed internally. **4 params per point = 96**, not 840.
 - **De-esser = a dynamic-point preset** — three values, everything else auto.
 - **GR metering** per band+lane (tension-vector / EKG trace, below). *(Needed by the Helper.)*
 - Dynamics is **bypassed in Natural and Linear phase modes** — a moving target cannot be baked
@@ -95,8 +95,10 @@ click-free IR-swap engine so live band edits stay artifact-free.
 
 - **24 bands**; `bandN_*` param-ID convention (indices never shift).
 - Placement is **shipped** as per-point lanes (`LANES.md`, schema v3) — it superseded the reserved
-  `route{ stereo / L / R / M / S }` field. Dynamics is reserved **point-level**:
-  `dyn{ on, range, thrDb, thrAuto, atk, rel }` (`DYNAMICS.md` § 6), state v4, additive.
+  `route{ stereo / L / R / M / S }` field. Dynamics is **point-level**:
+  `dyn{ on, rangeDb, atk, rel }` (`DYNAMICS.md` § 6), state v4, additive. External sidechain,
+  down-expand, detector solo and per-lane override are all deliberately absent and all **additive**
+  later — confirmed independently by three review seats.
 - Band model reserves **provenance** (`origin`, `traitKey`, `actionId`, `manualDirty`) and a
   **macro-group** id for Macro-Nodes (helper phase).
 - `swept` is an **internal** search detail, not a pro-facing control.
@@ -148,9 +150,11 @@ icon-only type, solo, route, freq/Q/gain inline, right-click delete; semi-transp
 node; the bottom is now **reserved for the Helper**). (core `ctest` suites green; all four Mac formats build
 + AU passes auval.)
 
+**Shipped since this list was written:** the per-band Stereo↔M/S dual-mode that used to sit here as
+"next" was superseded and delivered as **placement lanes** — a point carries any subset of
+ST / L / R / M / S, each an independently editable node with its own freq/Q/gain/slope/bypass. See
+`LANES.md` (design) and schema v3. Dynamics rides on top of that model, point-level, per
+`DYNAMICS.md`.
+
 **Deferred — need a decision / live feedback:**
-- **Per-band Stereo↔M/S dual-mode** (next) — one node with two modes: `ST` (as today) and `M/S`,
-  where Mid and Side each get their OWN type/freq/Q/gain (and later dynamics), edited via two tabs
-  on the floating toolbar. Supersedes the current per-band Left/Right/Mid/Side *routing* selector
-  (keep routing too). Needs a schema decision (a band carries a Mid sub-band + a Side sub-band).
 - **Multi-select / modifier-drag** of nodes — iterate.
