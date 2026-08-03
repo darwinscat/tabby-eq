@@ -234,6 +234,7 @@ target_compile_definitions(TabbyEQ PUBLIC
 target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
     felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
+    felitronics::dynamiceq              # JUCE-free per-point dynamics (LaneDynamics; pulls dynamics)
     felitronics::appkit                 # shared UpdateChecker/UpdateCompare (header-only; JUCE comes from us)
     TabbyEQData                         # embedded assets (Michroma wordmark font)
     juce::juce_audio_utils              # AudioProcessor, components, parameter attachments
@@ -284,6 +285,7 @@ target_compile_definitions(TabbyEQ_LifecycleTest PRIVATE
 target_link_libraries(TabbyEQ_LifecycleTest PRIVATE
     teq::core
     felitronics::lineareq
+    felitronics::dynamiceq
     felitronics::appkit
     TabbyEQData
     juce::juce_audio_utils
@@ -335,6 +337,7 @@ target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
 target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     teq::core
     felitronics::lineareq
+    felitronics::dynamiceq
     felitronics::appkit
     TabbyEQData
     juce::juce_audio_utils
@@ -388,6 +391,7 @@ target_compile_definitions(TabbyEQ_HistoryTest PRIVATE
 target_link_libraries(TabbyEQ_HistoryTest PRIVATE
     teq::core
     felitronics::lineareq
+    felitronics::dynamiceq
     felitronics::appkit
     TabbyEQData
     juce::juce_audio_utils

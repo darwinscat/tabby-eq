@@ -106,7 +106,7 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
     auto one   = [] (float v, int) { return juce::String (v, 1); };
     auto oneDb = [] (float v, int) { return juce::String (v, 1) + " dB"; };
 
-    // One group per band ("Band 4") holding all 34 of its params — the Pro-Q-style DAW tree. Ids are flat
+    // One group per band ("Band 4") holding all 40 of its params — the Pro-Q-style DAW tree. Ids are flat
     // (band{b}_… / band{b}_{k}_…), so getParameter()/getRawParameterValue() lookups are unchanged by grouping.
     auto grp = std::make_unique<AudioProcessorParameterGroup> ("band" + String (b), "Band " + String (b + 1), "|");
 
@@ -144,6 +144,30 @@ static void addBand (juce::AudioProcessorValueTreeState::ParameterLayout& layout
         grp->addChild (std::make_unique<AudioParameterChoice> (ParameterID { laneParamId (b, L, "slope"), 1 }, nm ("Slope", true), slopeItems, 1));
         grp->addChild (std::make_unique<AudioParameterBool>   (ParameterID { laneParamId (b, L, "byp"), 1 }, nm ("Bypass", false), false));
     }
+
+    // --- point-level dynamics (docs/DYNAMICS.md § 6) ---
+    // ONE shared setting per point, not per lane: per-lane dynamics is reached by fission, exactly as a
+    // split reaches per-channel bands (§ 1.1). Auto-first — Range is the primary and usually the only
+    // control: the threshold tracks the lane's OWN programme level unless Auto Thr is switched off, and
+    // Attack/Release are DEVIATIONS (0.5 = the value derived from the band's own freq and Q), so the pair
+    // reads the same on a 60 Hz band and a 7 kHz one. `dyn_auto` is its own bool and NEVER a sentinel
+    // folded into the top of dyn_thr: an automation ramp past a sentinel would switch modes silently, and
+    // a host's generic editor would show no trace of it.
+    auto devi = [] (float v, int) { return juce::String (v, 2); };
+    grp->addChild (std::make_unique<AudioParameterBool>  (ParameterID { bandId (b, "dyn_on"),    1 }, n + "Dyn", false));
+    grp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { bandId (b, "dyn_range"), 1 }, n + "Dyn Range",
+                                                          NormalisableRange<float> (-24.0f, 24.0f, 0.01f), 0.0f,
+                                                          AudioParameterFloatAttributes().withStringFromValueFunction (oneDb)));
+    grp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { bandId (b, "dyn_thr"),   1 }, n + "Dyn Thr",
+                                                          NormalisableRange<float> (-120.0f, 24.0f, 0.01f), -24.0f,
+                                                          AudioParameterFloatAttributes().withStringFromValueFunction (oneDb)));
+    grp->addChild (std::make_unique<AudioParameterBool>  (ParameterID { bandId (b, "dyn_auto"),  1 }, n + "Dyn Auto Thr", true));
+    grp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { bandId (b, "dyn_atk"),   1 }, n + "Dyn Attack",
+                                                          NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f,
+                                                          AudioParameterFloatAttributes().withStringFromValueFunction (devi)));
+    grp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { bandId (b, "dyn_rel"),   1 }, n + "Dyn Release",
+                                                          NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f,
+                                                          AudioParameterFloatAttributes().withStringFromValueFunction (devi)));
 
     layout.add (std::move (grp));
 }

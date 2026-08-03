@@ -267,6 +267,13 @@ TabbyEqAudioProcessor::TabbyEqAudioProcessor()
             mapLink (tabby::laneParamId (b, L, "q"),     b, L, (int8_t) kFieldQ);
             mapLink (tabby::laneParamId (b, L, "slope"), b, L, (int8_t) kFieldSlope);
         }
+        // Point-level dynamics — shared across the lanes, so nothing here is link-mirrored.
+        p.dyn.on      = apvts.getRawParameterValue (tabby::bandId (b, "dyn_on"));
+        p.dyn.range   = apvts.getRawParameterValue (tabby::bandId (b, "dyn_range"));
+        p.dyn.thr     = apvts.getRawParameterValue (tabby::bandId (b, "dyn_thr"));
+        p.dyn.thrAuto = apvts.getRawParameterValue (tabby::bandId (b, "dyn_auto"));
+        p.dyn.atk     = apvts.getRawParameterValue (tabby::bandId (b, "dyn_atk"));
+        p.dyn.rel     = apvts.getRawParameterValue (tabby::bandId (b, "dyn_rel"));
         activeLaneAtom[(size_t) b].store (-1, std::memory_order_relaxed);
     }
 
@@ -293,6 +300,12 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     outputGainSmoothed.reset (sampleRate, 0.02);
     outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
+
+    // Per-point dynamics: same rate + channel count as the engine (LaneDynamics clamps to teq::kMaxChannels
+    // itself). prepare() resets every probe/follower, so a stream restart never replays the old block's
+    // gain reduction — and the release edge starts disarmed to match.
+    for (auto& d : *dyn) d.prepare (sampleRate, getTotalNumOutputChannels());
+    dynRunning = false;
 
     // FIR paths: build BOTH initial FIRs from the current params so either mode is ready immediately.
     prepared.store (false, std::memory_order_relaxed);
@@ -390,9 +403,28 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         postTap->publishIfDue (aOrder, aHop);
     };
 
+    // Dynamics release edge. Whenever the dynamic path does NOT run this block — audition, solo, a FIR
+    // phase mode, or simply no dynamic point — the last earned delta must not stay frozen in the band
+    // seams: LaneDynamics computes the delta AFTER processing a chunk (causality, no hidden look-ahead),
+    // so the first block on resume would open on the pre-pause duck, seconds stale after a long solo.
+    // Zero the seams and drop the detector state once, on the edge — the same semantics as toggling
+    // dynamics off (LaneDynamics::processBand's own disengage path).
+    auto releaseDynamics = [this]() noexcept
+    {
+        if (! dynRunning) return;
+        for (int b = 0; b < tabby::kNumBands; ++b)
+        {
+            (*dyn)[(size_t) b].reset();
+            for (int L = 0; L < teq::kNumLanes; ++L)
+                engine.bandAt (b).setLaneDeltaDb ((teq::Lane) L, 0.0);
+        }
+        dynRunning = false;
+    };
+
     // Drag-audition: a narrow band-pass at an arbitrary frequency. Takes precedence over the normal path.
     if (auditionOn.load (std::memory_order_relaxed))
     {
+        releaseDynamics();
         soloFilter.setParams (teq::FilterType::BandPass,
                               juce::jlimit (20.0, 20000.0, (double) auditionFreq.load (std::memory_order_relaxed)),
                               juce::jlimit (0.5, 18.0,     (double) auditionQ.load   (std::memory_order_relaxed)), 0.0);
@@ -412,6 +444,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int solo = soloBand.load (std::memory_order_relaxed);
     if (solo >= 0 && solo < tabby::kNumBands)
     {
+        releaseDynamics();
         const auto bp = readBand (solo);
         int lane = activeLaneAtom[(size_t) solo].load (std::memory_order_relaxed);
         if (lane < 0 || lane >= teq::kNumLanes || ! bp.lanes[(size_t) lane].on)
@@ -437,14 +470,48 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const int mode = (int) (phaseMode->load (std::memory_order_relaxed) + 0.5f);   // 0 Zero-Latency / 1 Natural / 2 Linear
     if (mode >= 1)
     {
+        // A moving target cannot be baked into a static FIR, so dynamics is bypassed in both FIR modes
+        // (DYNAMICS.md § 3) — and released, so returning to Zero Latency doesn't resume a stale duck.
+        releaseDynamics();
         if (mode == 2) lp.process (buffer, nc);
         else           np.process (buffer, nc);
     }
     else
     {
+        // Zero Latency (matched IIR) — the only mode dynamics rides on.
+        bool anyDyn = false;
         for (int b = 0; b < tabby::kNumBands; ++b)
-            engine.setBand (b, readBand (b));
-        engine.process (buffer.getArrayOfWritePointers(), nc, n);
+        {
+            const auto bp = readBand (b);
+            engine.setBand (b, bp);
+            (*dyn)[(size_t) b].setParams (bp);   // unconditional: it is how a point that just turned dynamics OFF disengages
+            anyDyn = anyDyn || (bp.on && ! bp.bypass && bp.dyn.on && bp.dyn.rangeDb != 0.0);
+        }
+
+        float* const* chans = buffer.getArrayOfWritePointers();
+
+        // The detectors probe the SECTION INPUT, captured before any band touches the signal: in a series
+        // chain a band's own input is the previous bands' OUTPUT, so their moving deltas would modulate
+        // later detectors at overlapping frequencies and the chain would pump. A null capture (a block
+        // bigger than the one promised at prepare) means we cannot detect honestly — take the static path
+        // rather than detect on the wrong signal.
+        const float* const* sc = anyDyn ? engine.captureSectionInput (chans, nc, n) : nullptr;
+
+        if (sc == nullptr)
+        {
+            releaseDynamics();
+            engine.process (chans, nc, n);        // zero dynamics cost when no point is dynamic
+        }
+        else
+        {
+            // Interleaved by necessity — each point's delta must be computed on ITS OWN band, in chain
+            // order. That is exactly why the engine hands out bandAt() instead of running the loop here.
+            // (The analyzer taps are ours, fed above and in meterOutput, so bypassing engine.process()
+            // costs the spectrum nothing.)
+            dynRunning = true;
+            for (int b = 0; b < tabby::kNumBands; ++b)
+                (*dyn)[(size_t) b].processBand (chans, sc, nc, n, engine.bandAt (b));
+        }
     }
 
     outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
@@ -653,10 +720,13 @@ juce::File TabbyEqAudioProcessor::presetDirectory()
 
 bool TabbyEqAudioProcessor::saveStateFile (const juce::File& f)
 {
-    // A preset carries the LIVE sound only (flat v3 tree) — portable across sessions and machines;
-    // the compare workspace (A/B/C/D) is session state and stays out.
+    // A preset carries the LIVE sound only (flat tree: v3 lanes + the v5 dynamics params) — portable
+    // across sessions and machines; the compare workspace (A/B/C/D) is session state and stays out.
+    // The stamp is diagnostic, not a fork in the load path: dynamics is ADDITIVE, so an older preset
+    // simply has no dyn_* nodes and its point defaults to dynamics off (bit-identical sound), while an
+    // older build reading this one ignores the nodes it doesn't know.
     auto state = apvts.copyState();
-    state.setProperty ("stateVersion", 3, nullptr);
+    state.setProperty ("stateVersion", kStateVersion, nullptr);
     if (auto xml = state.createXml())
         return f.replaceWithText (xml->toString());
     return false;
@@ -778,6 +848,15 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
         lane.slope  = kSlopeDb[juce::jlimit (0, 6, (int) src.slope->load())];
         lane.bypass = src.byp->load() > 0.5f;
     }
+    // Point-level dynamics — one setting shared by every lane of the point (DYNAMICS.md § 1.1). atk/rel
+    // are 0..1 DEVIATIONS, not milliseconds: BandBallistics derives the actual times from the lane's own
+    // freq/Q, so the pair means the same thing on a 60 Hz band and a 7 kHz one.
+    bp.dyn.on      = p.dyn.on->load()      > 0.5f;
+    bp.dyn.rangeDb = (double) p.dyn.range->load();
+    bp.dyn.thrDb   = (double) p.dyn.thr->load();
+    bp.dyn.thrAuto = p.dyn.thrAuto->load() > 0.5f;
+    bp.dyn.atk     = (double) p.dyn.atk->load();
+    bp.dyn.rel     = (double) p.dyn.rel->load();
     return bp;
 }
 

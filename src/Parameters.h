@@ -7,9 +7,10 @@
 #include <teq/EqEngine.h>
 
 //==============================================================================
-// APVTS parameter layout for TabbyEQ — schema v3 (placement lanes). Each band ("point") carries a
-// SHARED on/type/swept/bypass plus five independent placement lanes (ST / L / R / M / S), each with a
-// full on/freq/Q/gain/slope/bypass set — matching teq::BandParams v2. The lanes are grouped per band
+// APVTS parameter layout for TabbyEQ — schema v3 (placement lanes) + point-level dynamics. Each band
+// ("point") carries a SHARED on/type/swept/bypass plus five independent placement lanes (ST / L / R / M / S),
+// each with a full on/freq/Q/gain/slope/bypass set — matching teq::BandParams — plus six SHARED dynamics
+// params (dyn_on/range/thr/auto/atk/rel, docs/DYNAMICS.md § 6). Both are grouped per band
 // (AudioProcessorParameterGroup, Pro-Q-style tree). The semantic layer (source/trait/search→treat) is a
 // UI macro on top that writes into these bands, so the DAW always sees a normal multiband EQ.
 namespace tabby

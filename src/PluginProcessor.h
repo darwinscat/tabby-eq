@@ -7,6 +7,7 @@
 #include <teq/EqEngine.h>
 #include <teq/Smoother.h>
 #include <felitronics/analysis/RollingSpectrumTap.h>   // analyzer taps (decoupled hop; selectable FFT size)
+#include <felitronics/dynamiceq/LaneDynamics.h>        // per-point dynamics: probes + detectors -> the band's delta seam
 #include <felitronics/appkit/CompareHistory.h>
 
 #include "Parameters.h"
@@ -350,10 +351,22 @@ private:
     struct LpUpdater : juce::Timer { TabbyEqAudioProcessor& p; explicit LpUpdater (TabbyEqAudioProcessor& pp) : p (pp) {}
                                      void timerCallback() override { p.onTimer(); } } lpUpdater { *this };
 
-    // Per-band atomic parameter pointers — the shared point fields plus five placement lanes.
+    // Per-band atomic parameter pointers — the shared point fields, five placement lanes, and the
+    // point-level dynamics set (shared across lanes by design — DYNAMICS.md § 1.1).
     struct LanePtrs { std::atomic<float>* on{}, *freq{}, *q{}, *gain{}, *slope{}, *byp{}; };
-    struct BandPtrs { std::atomic<float>* on{}, *type{}, *swept{}, *bypass{}; LanePtrs lane[teq::kNumLanes]; };
+    struct DynPtrs  { std::atomic<float>* on{}, *range{}, *thr{}, *thrAuto{}, *atk{}, *rel{}; };
+    struct BandPtrs { std::atomic<float>* on{}, *type{}, *swept{}, *bypass{}; LanePtrs lane[teq::kNumLanes]; DynPtrs dyn; };
     std::array<BandPtrs, tabby::kNumBands> bands;
+
+    // Per-point dynamics: one LaneDynamics per band, owning that point's per-lane sidechain probes,
+    // detectors, ballistics and relative-level estimators. It writes only a NUMBER into the band's seam
+    // (teq::EqBand::setLaneDeltaDb), so the static curve stays a matched Vicanek biquad (DYNAMICS.md § 2.4).
+    // Heap-allocated for the same reason as the analyzer taps: unit tests stack-allocate this processor
+    // (×25), and the array is bulky. Built once at construction — never in processBlock.
+    using LaneDynamics = felitronics::dynamiceq::LaneDynamics;
+    const std::unique_ptr<std::array<LaneDynamics, tabby::kNumBands>> dyn
+        { std::make_unique<std::array<LaneDynamics, tabby::kNumBands>>() };
+    bool dynRunning = false;   // audio thread only: did the dynamic path run last block? (release edge — see processBlock)
 
     std::atomic<float>* outputGain = nullptr;
     teq::LinearSmoother outputGainSmoothed { 1.0f };                // de-zippered output trim (core, JUCE-free)
@@ -390,8 +403,11 @@ private:
     std::atomic<unsigned> applyRev   { 0 };    // bumped by onAfterApply; the editor polls applyRevision()
     int openHistoryGestures = 0;               // refcount of open begin/endHistoryGesture brackets (message thread)
 
-    static constexpr int kStateVersion = 4;   // v4: session root = CompareHistory <Workspace> envelope (live +
-                                              // A/B/C/D + active); the inner state trees keep the v3 lane format
+    static constexpr int kStateVersion = 5;   // v5: point-level dynamics (6 params/band, ADDITIVE — a v3/v4
+                                              // session simply lacks them and loads with dynamics off, i.e.
+                                              // bit-identical sound). v4 introduced the session root:
+                                              // a CompareHistory <Workspace> envelope (live + A/B/C/D + active);
+                                              // the inner state trees still carry the v3 lane format.
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqAudioProcessor)
 };
