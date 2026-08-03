@@ -259,9 +259,20 @@ square. It does not.)*
   a fixed offset `O`, pushed into `setThresholdDb()` at control rate. Core has nothing like it —
   ours to write, and it belongs in `dynamics/` rather than the product, since a broadband compressor
   wants the same thing.
-- **Manual:** an absolute dBFS value. The slider's top position *is* auto (displayed `A`), the
-  Pro-Q affordance — and the live trigger level is drawn inside the slider so a manual threshold is
-  set by eye, not by guesswork.
+- **Manual (absolute dBFS), and it earned its place back.** This document argued twice for dropping
+  it — the shared-across-lanes objection is real, and a point-level absolute threshold IS asymmetric
+  (a louder domain crosses it more often). What settled it was a measurement, not an argument: a dark
+  source whose 7 kHz sits under the activity floor BETWEEN sibilants gives the relative estimator
+  nothing but the sibilants to learn from, so the excess collapses and the de-esser does essentially
+  nothing — **0.117 dB where the same programme 40 dB louder got the full 12**. Relative thresholding
+  does NOT cover events completely, which is what this section previously claimed. It also cannot
+  express "keep this band under X dBFS", and it absorbs a chorus that stays harsh for thirty seconds
+  within a few. Auto stays the default; absolute is the mode for a user who is watching levels, and
+  fission is the answer for genuinely different thresholds per domain — the same answer as for every
+  other shared field.
+- **`auto` is its own bool, never a sentinel.** Folding it into the top of the threshold parameter
+  would mean an automation ramp silently switches modes on the way past, with nothing in a host's
+  generic editor to hint at it.
 
 **What auto actually means — the asymptote.** On stationary material the detector converges to the
 program estimate, `D → P`, so `over = D − (P + O) → −O`. The steady-state behaviour is therefore
@@ -451,7 +462,7 @@ it trivial: past placing the bell itself, **the dynamics half is two values**, `
 | type / freq / Q | high bell, **7 kHz** — core's `DeEsserParams::fc`; sidechain Q ≈ 2 there, so a bell Q of 2–3.5 is the range to try by ear |
 | `dyn_on` | true |
 | `dyn_range` | **−8 dB** — core's tested `rangeDb`, chosen to cap the cut before it lisps (Rev 2 guessed −12 with no such reasoning) |
-| `dyn_thr` | **auto** (the default) — core hard-codes −30 dBFS, which is exactly the guesswork auto exists to remove |
+| threshold | **not a parameter** — always relative to the lane's own programme level (§ 2.3). Core's de-esser hard-codes −30 dBFS, which is exactly the guesswork this removes |
 | `dyn_atk` / `dyn_rel` | **auto** (0.5) — resolves to 1 ms / 20 ms at 7 kHz (§ 2.2), against core's hand-set 2 ms / 90 ms |
 
 Pure parameters; the engine does not know it is a "de-esser". Under Rev 1's model the same preset
@@ -478,20 +489,28 @@ Per **point** `b` (not per lane), additive to schema v3, inside the band's exist
 ```
 band{b}_dyn_on     Bool    "B{n} Dyn"            default false
 band{b}_dyn_range  Float   "B{n} Dyn Range"      −24..+24 dB, default 0     ← the primary control
-band{b}_dyn_thr    Float   "B{n} Dyn Thr"        −60..0 dBFS, top value = Auto, default Auto
+band{b}_dyn_thr    Float   "B{n} Dyn Thr"        −120..+24 dBFS, default −24 (absolute mode only)
+band{b}_dyn_auto   Bool    "B{n} Dyn Auto Thr"   default TRUE — its own bool, never a sentinel
 band{b}_dyn_atk    Float   "B{n} Dyn Attack"     0..1, default 0.5 (= auto)
 band{b}_dyn_rel    Float   "B{n} Dyn Release"    0..1, default 0.5 (= auto)
 ```
 
-**120 new parameters** (~940 total). Auto threshold is the parameter's **top value**, not a
-companion bool — so it is automatable, and it costs only the 0 dBFS setting, which is not a useful
-manual threshold anyway. The adapter decodes that one float into the struct's `thrDb` + `thrAuto`
-pair; the core never sees a sentinel.
+**144 new parameters** (~964 total). The count moved three times before settling, and the history is
+worth keeping because each move was a decision rather than an arithmetic slip: 120 while auto was a
+sentinel folded into the threshold, 96 when the manual threshold was cut entirely, and 144 now that
+it is back with `auto` as its own bool. The sentinel is what stays dead — folding "auto" into the
+top of a continuous parameter means an automation ramp switches modes on the way past, invisibly, in
+a host's generic editor.
 
 - **`stateVersion` → 4** (additive; v3 sessions load with dynamics off = bit-identical sound).
-- `felitronics::eq::BandParams` v3 gains a **point-level** `Dyn` sub-struct (`on`, `range`, `thrDb`,
-  `thrAuto`, `atk`, `rel`) — *not* per-lane, matching decision 1.1 — with `operator==` extended
-  (bitwise doubles, as today) so the engine's recompute-skip stays exact.
+- `felitronics::eq::BandParams` gains a **point-level** `DynParams` (`on`, `rangeDb`, `atk`, `rel`)
+  — *not* per-lane, matching decision 1.1 — with `operator==` extended (bitwise doubles, as today)
+  so the engine's recompute-skip stays exact.
+- **What is deliberately absent, and why that is safe:** external sidechain, downward
+  expansion/gating, detector solo, per-lane override and host-visible GR. All three review seats
+  independently confirmed each of these is *additive* — a later field plus a version bump, with
+  sessions defaulting it. The asymmetry is the whole point: forgetting is cheap, freezing a wrong
+  semantic is not.
 - Non-parameter state: none. Dynamics adds no `ValueTree` properties.
 
 ---
@@ -606,10 +625,21 @@ Ship desktop first; everything new is JUCE-free so it rides to WASM / embedded l
 
 ## 11. Risks
 
-- **CPU:** worst case 24 points × 5 running lanes = 120 probes + followers + delta SVFs. Mitigated
-  by construction (non-dynamic points and idle lanes are free) and by the control-rate coeff
-  recompute we inherit, but still **unproven at this width** — core's band was profiled as *one*
-  band, not 120. Profile a deliberately hostile session in phase 2, before the UI lands.
+- ~~CPU unproven at this width~~ — **measured, and it is a non-issue.** 24 points × 5 running lanes,
+  every point dynamic (120 probes), stereo at 48 kHz: **6.1 %RT** of one core against a ~1.4 %
+  static 24-point baseline, and flat across blocks 64 / 128 / 512. A deliberately hostile session —
+  real ones are far cheaper, since idle points and lanes cost zero by construction.
+
+  The figure moved twice: 5.3 % originally, 7.0 % once the whole control path went per-sample (which
+  dragged `std::log10` into a 5.8 M-calls/s loop), and back to 6.1 % with `core::fastGainToDb` — a
+  float-decomposition plus an atanh series on the mantissa, max error 0.0001 dB, no minimax constants
+  to mistype. Detector paths use it; anything a user reads as a number still uses the exact one.
+- **"Block-independent" needs stating precisely**, because the loose version is an overreach. The
+  control TRAJECTORY is exact: in absolute mode the delta is bit-identical between blocks 64 and 5 at
+  every common boundary. But the applied seam still steps once per control chunk on a call-relative
+  grid, so the rendered output differs between host block sizes by roughly −25 dB relative to peak at
+  transient onsets. That is the documented control-rate design, not a defect — but it is not zero,
+  and claiming zero would be false.
 - **Auto behaviour is a taste problem, not a correctness problem.** The constants in § 2.2–2.3
   (the attack floor and release multiplier, the fixed ratio and knee law, the threshold offset and
   its time constants) are first estimates; they will be tuned by ear on real material, and the tests
