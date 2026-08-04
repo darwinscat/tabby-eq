@@ -495,7 +495,7 @@ band{b}_dyn_atk    Float   "B{n} Dyn Attack"     0..1, default 0.5 (= auto)
 band{b}_dyn_rel    Float   "B{n} Dyn Release"    0..1, default 0.5 (= auto)
 ```
 
-**144 new parameters** (~964 total). The count moved three times before settling, and the history is
+**144 new parameters** (963 total, measured). The count moved three times before settling, and the history is
 worth keeping because each move was a decision rather than an arithmetic slip: 120 while auto was a
 sentinel folded into the threshold, 96 when the manual threshold was cut entirely, and 144 now that
 it is back with `auto` as its own bool. The sentinel is what stays dead — folding "auto" into the
@@ -612,8 +612,22 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
 2. **fcore `eq` integration** — `BandParams` v3 `Dyn` sub-struct; per-lane sidechain probe +
    linked detector + `GainComputer` + `GainReductionFollower` + delta SVF composed inside `EqBand`
    (reusing the primitives, *not* `DynamicEqBand`); GR atomics; tests 3–6.
-3. **tabby adapter** — 120 params + state v4 + migration + `readBand`, mechanical UI so everything
-   compiles and auval passes. `main` stays green. **Schema freezes here.**
+3. **tabby adapter** — **Done.** 144 params (963 total) + state v5 + `readBand` + the processBlock
+   composition; no UI yet, so `main` stays green and auval passes. **The schema is frozen here.**
+   Two things the build settled that paper could not:
+   - **`engine.process()` is no longer the Zero-Latency path.** Dynamics needs "compute this point's
+     delta, then run this point", which is why the engine hands out `bandAt()`; the adapter now owns
+     that loop and calls `captureSectionInput()` before it. `engine.process()` survives as the
+     zero-dynamics fast path (no capture, no probes — the cost-zero promise, kept literally). It cost
+     the analyzer nothing: TabbyEQ's taps have been adapter-side since the FIR modes landed.
+   - **A release edge was missing from the design.** Whenever the dynamic path does not run —
+     audition, solo, a FIR mode, no dynamic point — the seams must be zeroed and the detectors
+     dropped, or the next block resumes on a duck earned seconds ago (deltas are computed *after*
+     each chunk, so nothing corrects it before the first sample). One shared `releaseDynamics()`,
+     called on every such exit.
+   - Measured, not assumed: with `dyn.on` **false** a point is **bit-identical** to a pre-dynamics
+     build; with `dyn.on` true and range 0 it is within **one float ULP** (1.19e-07) — the band still
+     runs its unity delta section. Bit-identity is a promise about the OFF switch, not about range 0.
 4. **tabby UI** — dynamic handle + range band + live GR + the expandable dynamics row + resolved-ms
    readouts + the type/phase-mode gating.
 5. **De-esser preset** — parameter defaults cribbed from `deesser::DeEsserParams`, which already

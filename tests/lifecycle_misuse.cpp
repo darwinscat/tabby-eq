@@ -288,6 +288,205 @@ int main()
         p->releaseResources();
     }
 
+    // -- 14. Point-level dynamics through the real audio path -------------------------------------------
+    // The adapter's job here is narrow and load-bearing: dynamics must be INERT unless a point asks for
+    // it, must actually engage when it does, and must never resume a stale duck after a block in which
+    // the dynamic path did not run. The threshold is driven MANUALLY throughout: the auto-relative mode
+    // deliberately lets a permanently loud band become "the norm" (DYNAMICS.md § 11), which is correct
+    // behaviour but useless as a fixed reference point for a test.
+    {
+        const double fs = 48000.0;
+        const int    n  = 512;
+        const double f0 = 1000.0;
+        double phase = 0.0;   // continuous across every run below (a steady tone, not a retrigger)
+
+        auto tone = [fs, f0, &phase] (juce::AudioBuffer<float>& b, float amp)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float s = amp * (float) std::sin (phase);
+                phase += juce::MathConstants<double>::twoPi * f0 / fs;
+                for (int c = 0; c < b.getNumChannels(); ++c) b.getWritePointer (c)[i] = s;
+            }
+        };
+        // One static +12 dB bell at f0 on the ST lane — the point every case below starts from.
+        auto makeBand = [] (TabbyEqAudioProcessor& p, int b = 0, float gainDb = 12.0f)
+        {
+            setBool   (p.apvts, tabby::bandId (b, "on"), true);
+            setChoice (p.apvts, tabby::bandId (b, "type"), 0);                       // Bell
+            setBool   (p.apvts, tabby::laneParamId (b, 0, "on"), true);
+            setFloat  (p.apvts, tabby::laneParamId (b, 0, "freq"), 1000.0f);
+            setFloat  (p.apvts, tabby::laneParamId (b, 0, "q"), 1.0f);
+            setFloat  (p.apvts, tabby::laneParamId (b, 0, "gain"), gainDb);
+        };
+        // A manual (non-adaptive) duck: -18 dB of range, threshold far below the programme.
+        auto armDynamics = [] (TabbyEqAudioProcessor& p, float rangeDb, int b = 0)
+        {
+            setBool  (p.apvts, tabby::bandId (b, "dyn_on"), true);
+            setBool  (p.apvts, tabby::bandId (b, "dyn_auto"), false);
+            setFloat (p.apvts, tabby::bandId (b, "dyn_thr"), -30.0f);   // loud tone (-6 dBFS) engages; the quiet resume (-46) does not
+            setFloat (p.apvts, tabby::bandId (b, "dyn_range"), rangeDb);
+        };
+        // Run `blocks` tone blocks of `len` samples; the last one is left in `out`.
+        auto runTone = [&] (TabbyEqAudioProcessor& p, int blocks, int len, juce::AudioBuffer<float>& out)
+        {
+            juce::AudioBuffer<float> buf (2, len);
+            juce::MidiBuffer midi;
+            for (int i = 0; i < blocks; ++i)
+            {
+                tone (buf, 0.5f);
+                p.processBlock (buf, midi);
+            }
+            out.makeCopyOf (buf);
+        };
+        // The same tone at -46 dBFS: far under the manual threshold below, so a healthy point does not
+        // engage on it at all — which is exactly what makes a leftover duck visible.
+        auto runQuiet = [&] (TabbyEqAudioProcessor& p, int len, juce::AudioBuffer<float>& out)
+        {
+            juce::AudioBuffer<float> buf (2, len);
+            juce::MidiBuffer midi;
+            tone (buf, 0.005f);
+            p.processBlock (buf, midi);
+            out.makeCopyOf (buf);
+        };
+        // Peak over a window of >= 1 full cycle == the tone's current amplitude, whatever the window
+        // length — which is what lets the short resumed block below be compared against a 512 reference.
+        auto peak = [] (const juce::AudioBuffer<float>& b) { return (double) b.getMagnitude (0, b.getNumSamples()); };
+        auto identical = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            if (a.getNumSamples() != b.getNumSamples()) return false;
+            for (int c = 0; c < a.getNumChannels(); ++c)
+                for (int i = 0; i < a.getNumSamples(); ++i)
+                    if (! juce::exactlyEqual (a.getReadPointer (c)[i], b.getReadPointer (c)[i])) return false;
+            return true;
+        };
+
+        // (a) INERT when off — bit-identical output, not merely "close". A non-zero range with dyn_on
+        // false must not move a sample, and neither must dyn_on with range 0 ("no dynamics" is a
+        // documented disengage, not a target of zero).
+        juce::AudioBuffer<float> ref;
+        double refQuiet = 0.0;
+        {
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p);
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            runTone (*p, 8, n, ref);
+            check (peak (ref) > 0.0, "dyn: reference static band produces signal");
+            juce::AudioBuffer<float> quiet;
+            runQuiet (*p, 128, quiet);          // the same static band's answer to the quiet resume signal
+            refQuiet = peak (quiet);
+        }
+        {
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p);
+            setFloat (p->apvts, tabby::bandId (0, "dyn_range"), -18.0f);   // armed but OFF
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> got;
+            runTone (*p, 8, n, got);
+            check (identical (got, ref), "dyn: range with dyn_on false is bit-identical to a static point");
+        }
+        {
+            // Range 0 is a documented disengage, so it must not DUCK — but it is not bit-identical:
+            // with dyn.on the band still runs its (unity) delta section, which costs one float ULP.
+            // The bit-identity promise is scoped to dyn.on == false, asserted above; here we pin the
+            // real contract, tightly enough that any actual gain movement fails the check.
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p);
+            armDynamics (*p, 0.0f);                                        // ON but zero range
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> got;
+            runTone (*p, 8, n, got);
+            double maxDiff = 0.0;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < n; ++i)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (got.getReadPointer (c)[i] - ref.getReadPointer (c)[i]));
+            check (maxDiff <= 2.0e-7, "dyn: dyn_on with range 0 moves the signal by at most one ULP");
+        }
+
+        // (b) ENGAGES when asked, and (c) RELEASES when the dynamic path stops running. Same processor:
+        // the released state is only meaningful measured against this instance's own ducked level.
+        {
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p);
+            armDynamics (*p, -18.0f);
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+
+            juce::AudioBuffer<float> engaged;
+            runTone (*p, 40, n, engaged);
+            check (peak (engaged) < peak (ref) * 0.5, "dyn: an engaged point pulls the band down");
+            check (peak (engaged) > 0.0,              "dyn: ...without killing the signal");
+
+            // The release edge. LaneDynamics computes each chunk's delta AFTER processing it, so a seam
+            // left armed would re-apply the full duck to the FIRST sample back — seconds stale after a
+            // long solo. Resuming on QUIET material (well under the threshold) is what makes the two
+            // outcomes separable: a released seam stays at unity for the whole block, while a stale one
+            // opens ducked and crawls back at the release time constant. Re-attack cannot mask it,
+            // because nothing here asks the detector to engage at all.
+            juce::AudioBuffer<float> spill;
+            p->setAudition (true, 1000.0f, 6.0f);
+            runTone (*p, 1, n, spill);                 // one block off the dynamic path
+            p->setAudition (false);
+
+            juce::AudioBuffer<float> resumed;
+            runQuiet (*p, 128, resumed);               // FIRST block back on the EQ path, below threshold
+            check (peak (resumed) > refQuiet * 0.7,    "dyn: the first block after audition opens unducked (release edge)");
+            check (peak (resumed) > peak (engaged) / peak (ref) * refQuiet * 1.5,
+                                                       "dyn: ...measurably above the level it was ducking to");
+
+            // Same edge through the OTHER long-lived monitor state: band-listen. A solo can sit engaged
+            // for seconds, which is exactly how long a leftover duck would be waiting on the way out.
+            juce::AudioBuffer<float> tmp;
+            runTone (*p, 20, n, tmp);                  // re-engage
+            p->setSoloBand (0);
+            runTone (*p, 1, n, tmp);
+            p->setSoloBand (-1);
+            juce::AudioBuffer<float> afterSolo;
+            runQuiet (*p, 128, afterSolo);
+            check (peak (afterSolo) > refQuiet * 0.7,  "dyn: the first block after solo opens unducked (release edge)");
+        }
+
+        // (d) The detectors must probe the SECTION INPUT, not each point's own input. Two identical
+        // dynamic points in series prove it: fed the untouched section input, both see the same
+        // full-level programme and both duck their whole -18 dB range (-36 dB total). A chain that
+        // detected on its own input would hand point 2 an already-ducked signal, it would earn far less
+        // reduction, and the pair would land tens of dB high — the pumping failure mode in miniature.
+        {
+            auto flat = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*flat, 0, 0.0f);
+            makeBand (*flat, 1, 0.0f);
+            flat->setPlayConfigDetails (2, 2, fs, n);
+            flat->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> flatRef;
+            runTone (*flat, 8, n, flatRef);
+
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p, 0, 0.0f);
+            makeBand (*p, 1, 0.0f);
+            armDynamics (*p, -18.0f, 0);
+            armDynamics (*p, -18.0f, 1);
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> chained;
+            runTone (*p, 40, n, chained);
+
+            // Measured: -31.6 dB (0.0264) — twice the -15.8 dB each point earns from an RMS detector
+            // reading -9 dBFS against a -30 dBFS threshold at ratio 4. A chain detecting on its own
+            // input lands near -20 dB (0.10), because point 2 only ever sees point 1's leftovers.
+            check (peak (chained) < peak (flatRef) * 0.04,
+                   "dyn: two chained points each earn their full range (detector sees the section input)");
+            check (peak (chained) > 0.0, "dyn: ...and the chain still passes signal");
+        }
+    }
+
     if (failures == 0) std::cout << "TabbyEQ lifecycle/misuse: all checks passed\n";
     else               std::cerr << "TabbyEQ lifecycle/misuse: " << failures << " failure(s)\n";
     return failures == 0 ? 0 : 1;

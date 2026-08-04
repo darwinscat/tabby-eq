@@ -52,7 +52,7 @@ See **`docs/DYNAMICS.md`** (Rev 2, the agreed design).
   else: the threshold is ALWAYS relative to the lane's own programme level (there is no manual
   threshold — an absolute dBFS shared across lanes 20+ dB apart is meaningless), attack/release are
   **deviations** from values derived from the band's own frequency and Q, and ratio/knee/mode are
-  fixed internally. **4 params per point = 96**, not 840.
+  fixed internally. **6 params per point = 144**, not 840.
 - **De-esser = a dynamic-point preset** — three values, everything else auto.
 - **GR metering** per band+lane (tension-vector / EKG trace, below). *(Needed by the Helper.)*
 - Dynamics is **bypassed in Natural and Linear phase modes** — a moving target cannot be baked
@@ -96,7 +96,8 @@ click-free IR-swap engine so live band edits stay artifact-free.
 - **24 bands**; `bandN_*` param-ID convention (indices never shift).
 - Placement is **shipped** as per-point lanes (`LANES.md`, schema v3) — it superseded the reserved
   `route{ stereo / L / R / M / S }` field. Dynamics is **point-level**:
-  `dyn{ on, rangeDb, atk, rel }` (`DYNAMICS.md` § 6), state v4, additive. External sidechain,
+  `dyn{ on, rangeDb, thrDb, thrAuto, atk, rel }` (`DYNAMICS.md` § 6) — **shipped in the adapter**
+  (144 params, 963 total), state v5, additive. External sidechain,
   down-expand, detector solo and per-lane override are all deliberately absent and all **additive**
   later — confirmed independently by three review seats.
 - Band model reserves **provenance** (`origin`, `traitKey`, `actionId`, `manualDirty`) and a

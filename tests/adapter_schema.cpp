@@ -98,7 +98,7 @@ int main()
         const auto& params = p->getParameters();
         // 3 globals: output, phaseMode, lpQuality. The Natural-phase blend k is NOT a parameter —
         // it is fixed at TabbyEqAudioProcessor::kNaturalBlend (see Parameters.cpp for why).
-        check (params.size() == kNumBands * 34 + 3, "parameter count == 24*34 + 3 globals (819)");
+        check (params.size() == kNumBands * 40 + 3, "parameter count == 24*40 + 3 globals (963)");
 
         std::set<juce::String> names;
         bool unique = true;
@@ -107,16 +107,16 @@ int main()
             const auto nm = prm->getName (256);
             if (! names.insert (nm).second) { unique = false; std::cerr << "  dup name: " << nm << '\n'; }
         }
-        check (unique, "all ~819 display names are unique");
+        check (unique, "all 963 display names are unique");
 
-        // Group-per-band tree: 24 subgroups (34 params each) + 3 top-level global params.
+        // Group-per-band tree: 24 subgroups (40 params each: 4 point + 5x6 lane + 6 dynamics) + 3 globals.
         const auto& tree = p->getParameterTree();
         check (tree.getSubgroups (false).size() == kNumBands, "24 per-band parameter groups");
         check (tree.getParameters (false).size() == 3, "3 top-level global params");
         bool groupsOk = true;
         for (auto* g : tree.getSubgroups (false))
-            if (g->getParameters (false).size() != 34) groupsOk = false;
-        check (groupsOk, "each band group holds 34 params");
+            if (g->getParameters (false).size() != 40) groupsOk = false;
+        check (groupsOk, "each band group holds 40 params");
 
         // ST-lane display names drop the lane word for the point-unique fields; keep it for On/Bypass.
         auto nameOf = [&] (const juce::String& id) { auto* pr = p->apvts.getParameter (id); return pr ? pr->getName (256) : juce::String ("?"); };
@@ -339,6 +339,67 @@ int main()
 
         // (f) re-entrancy: the whole batch above completed without hanging (mirror writes never re-enqueue).
         check (true, "link: no infinite mirror loop (reached here)");
+    }
+
+    // ============================ 8. Point-level dynamics: schema, mapping, additive load ==============
+    {
+        auto p = std::make_unique<TabbyEqAudioProcessor>();
+
+        // (a) defaults — the auto-first contract: dynamics OFF, range 0 (a point that never heard of
+        // dynamics), threshold auto, attack/release at the 0.5 midpoint that MEANS "the derived value".
+        check (rv (p->apvts, bandId (5, "dyn_on"))    < 0.5f,      "dyn: off by default");
+        check (near (rv (p->apvts, bandId (5, "dyn_range")), 0.0), "dyn: range defaults to 0 dB");
+        check (near (rv (p->apvts, bandId (5, "dyn_thr")), -24.0), "dyn: manual threshold defaults to -24 dBFS");
+        check (rv (p->apvts, bandId (5, "dyn_auto"))  > 0.5f,      "dyn: auto threshold ON by default");
+        check (near (rv (p->apvts, bandId (5, "dyn_atk")), 0.5),   "dyn: attack deviation defaults to auto (0.5)");
+        check (near (rv (p->apvts, bandId (5, "dyn_rel")), 0.5),   "dyn: release deviation defaults to auto (0.5)");
+
+        // `auto` is a BOOL of its own, never a sentinel at the end of the continuous threshold: an
+        // automation ramp must not be able to switch modes on its way past a magic value.
+        check (dynamic_cast<juce::AudioParameterBool*> (p->apvts.getParameter (bandId (5, "dyn_auto"))) != nullptr,
+               "dyn: auto threshold is a Bool parameter, not a threshold sentinel");
+
+        auto nameOf = [&] (const juce::String& id) { auto* pr = p->apvts.getParameter (id); return pr ? pr->getName (256) : juce::String ("?"); };
+        check (nameOf (bandId (3, "dyn_on"))    == "B4 Dyn",          "dyn: point power display name");
+        check (nameOf (bandId (3, "dyn_range")) == "B4 Dyn Range",    "dyn: range display name");
+        check (nameOf (bandId (3, "dyn_auto"))  == "B4 Dyn Auto Thr", "dyn: auto threshold display name");
+
+        // (b) readBand maps every field into the point-level DynParams the engine consumes.
+        setRealParam (p->apvts, bandId (7, "dyn_on"),    1.0f);
+        setRealParam (p->apvts, bandId (7, "dyn_range"), -9.0f);
+        setRealParam (p->apvts, bandId (7, "dyn_thr"),  -33.0f);
+        setRealParam (p->apvts, bandId (7, "dyn_auto"),  0.0f);
+        setRealParam (p->apvts, bandId (7, "dyn_atk"),   0.25f);
+        setRealParam (p->apvts, bandId (7, "dyn_rel"),   0.75f);
+        const auto bp = p->readBand (7);
+        check (bp.dyn.on,                       "dyn: readBand maps on");
+        check (near (bp.dyn.rangeDb, -9.0),     "dyn: readBand maps range");
+        check (near (bp.dyn.thrDb,  -33.0),     "dyn: readBand maps the absolute threshold");
+        check (! bp.dyn.thrAuto,                "dyn: readBand maps thrAuto");
+        check (near (bp.dyn.atk, 0.25, 0.002),  "dyn: readBand maps the attack deviation");
+        check (near (bp.dyn.rel, 0.75, 0.002),  "dyn: readBand maps the release deviation");
+        // Dynamics belongs to the POINT: it is read once per band, not per lane (§ 1.1) — the same
+        // settings must come back whichever lanes the point happens to occupy.
+        check (p->readBand (7).dyn == bp.dyn,   "dyn: point-level, stable across reads");
+
+        // (c) ADDITIVE load. A v3 session predates dyn_* entirely; it must land with dynamics off, which
+        // is what makes "an old session sounds bit-identical" true. Build one by round-tripping a state
+        // with dynamics ON and then stripping every dyn_* node — exactly what an old host blob looks like.
+        auto flat = p->apvts.copyState();
+        flat.setProperty ("stateVersion", 3, nullptr);
+        for (int i = flat.getNumChildren(); --i >= 0;)
+            if (flat.getChild (i).getProperty ("id").toString().contains ("_dyn_"))
+                flat.removeChild (i, nullptr);
+
+        auto q = std::make_unique<TabbyEqAudioProcessor>();
+        auto xml = flat.createXml();
+        juce::MemoryBlock mb;
+        ApAccess::copyXmlToBinary (*xml, mb);
+        q->setStateInformation (mb.getData(), (int) mb.getSize());
+        check (rv (q->apvts, bandId (7, "dyn_on")) < 0.5f,           "dyn: a v3 session loads with dynamics off");
+        check (near (rv (q->apvts, bandId (7, "dyn_range")), 0.0),   "dyn: a v3 session loads with range 0");
+        check (rv (q->apvts, bandId (7, "dyn_auto")) > 0.5f,         "dyn: a v3 session loads with auto threshold on");
+        check (! q->readBand (7).dyn.on,                             "dyn: ...and the engine sees a static point");
     }
 
     if (failures == 0) std::cout << "TabbyEQ adapter schema/migration/link: all checks passed\n";

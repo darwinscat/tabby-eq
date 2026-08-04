@@ -260,7 +260,8 @@ int main()
 
         const auto xml = parseState (blob);
         check (xml != nullptr && xml->hasTagName ("Workspace"), "6: a v4 session's root is the <Workspace> envelope");
-        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 4, "6: the envelope carries stateVersion=4");
+        // v5 = point-level dynamics (additive params); the envelope shape itself is unchanged since v4.
+        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 5, "6: the envelope carries stateVersion=5");
         check (xml != nullptr && xml->getIntAttribute ("count") == 4, "6: the envelope stamps the register count");
 
         auto p2_ = std::make_unique<TabbyEqAudioProcessor>(); auto& p2 = *p2_;
