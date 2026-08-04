@@ -169,6 +169,19 @@ public:
     void  clearInClip()  noexcept { inClip.store  (false, std::memory_order_relaxed); }
     void  clearOutClip() noexcept { outClip.store (false, std::memory_order_relaxed); }
 
+    // Live dynamics delta of ONE lane of ONE point, in dB (DYNAMICS.md § 5). SIGNED, not a magnitude:
+    // a negative range ducks and a positive one lifts, and the meter has to show which. The audio
+    // thread publishes it once per block from the value LaneDynamics computed for that lane; the UI
+    // does its own smoothing (this is the raw number, deliberately — a meter and a Helper heuristic
+    // want different time constants). Reads 0 for a static point, for a lane that is not running, and
+    // on every block where the dynamic path did not run at all. Any thread; out-of-range reads 0.
+    float dynamicDeltaDb (int band, int lane) const noexcept
+    {
+        if (! juce::isPositiveAndBelow (band, tabby::kNumBands) || ! juce::isPositiveAndBelow (lane, teq::kNumLanes))
+            return 0.0f;
+        return deltaMeter[(size_t) (band * teq::kNumLanes + lane)].load (std::memory_order_relaxed);
+    }
+
     const juce::String getName() const override { return JucePlugin_Name; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
@@ -367,6 +380,12 @@ private:
     const std::unique_ptr<std::array<LaneDynamics, tabby::kNumBands>> dyn
         { std::make_unique<std::array<LaneDynamics, tabby::kNumBands>>() };
     bool dynRunning = false;   // audio thread only: did the dynamic path run last block? (release edge — see processBlock)
+
+    // Published GR: one atom per band per lane (24 × 5), the size DYNAMICS.md § 5 budgeted. Written by
+    // the audio thread inside the dynamic loop — so a session with no dynamic point pays nothing, not
+    // even these stores — and zeroed on the release edge, so a meter cannot hold a duck the audio no
+    // longer has. std::atomic<float> (not a plain float) because the reader is the message thread.
+    std::array<std::atomic<float>, (size_t) tabby::kNumBands * teq::kNumLanes> deltaMeter {};
 
     std::atomic<float>* outputGain = nullptr;
     teq::LinearSmoother outputGainSmoothed { 1.0f };                // de-zippered output trim (core, JUCE-free)
