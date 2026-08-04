@@ -452,6 +452,63 @@ int main()
             check (peak (afterSolo) > refQuiet * 0.7,  "dyn: the first block after solo opens unducked (release edge)");
         }
 
+        // (e) The published GR (DYNAMICS.md § 5) — the number the meter and later the Helper read. It
+        // is checked against the AUDIBLE duck, not against itself: a number that agrees with the ears
+        // cannot be reading the wrong lane, the wrong band, or a stale block.
+        {
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p, 0, 0.0f);
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> flatRef;
+            runTone (*p, 8, n, flatRef);
+            check (juce::exactlyEqual (p->dynamicDeltaDb (0, 0), 0.0f), "gr: a static point publishes no reduction");
+
+            auto q = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*q, 0, 0.0f);
+            armDynamics (*q, -18.0f, 0);
+            q->setPlayConfigDetails (2, 2, fs, n);
+            q->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> engaged;
+            runTone (*q, 40, n, engaged);
+
+            const double published = q->dynamicDeltaDb (0, 0);
+            const double audible   = 20.0 * std::log10 (peak (engaged) / peak (flatRef));
+            check (published < -1.0,                        "gr: an engaged point publishes a NEGATIVE delta (a duck, signed)");
+            check (std::abs (published - audible) < 1.0,    "gr: the published delta matches the audible one within 1 dB");
+            check (juce::exactlyEqual (q->dynamicDeltaDb (0, 3), 0.0f), "gr: an idle lane of the same point publishes nothing");
+            check (juce::exactlyEqual (q->dynamicDeltaDb (1, 0), 0.0f), "gr: a neighbouring point publishes nothing");
+
+            // Out of range is a read, not a crash: the editor asks per node, and nodes come and go.
+            check (juce::exactlyEqual (q->dynamicDeltaDb (-1, 0), 0.0f), "gr: negative band index reads 0");
+            check (juce::exactlyEqual (q->dynamicDeltaDb (tabby::kNumBands, 0), 0.0f), "gr: past-the-end band index reads 0");
+            check (juce::exactlyEqual (q->dynamicDeltaDb (0, teq::kNumLanes), 0.0f),   "gr: past-the-end lane index reads 0");
+
+            // The meter must not outlive the reduction: the release edge zeroes it with the seam.
+            q->setAudition (true, 1000.0f, 6.0f);
+            juce::AudioBuffer<float> spill;
+            runTone (*q, 1, n, spill);
+            check (juce::exactlyEqual (q->dynamicDeltaDb (0, 0), 0.0f), "gr: the release edge clears the published delta too");
+
+            // And it lands on the LANE that is actually running — here Mid, with Stereo switched off.
+            auto m = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*m, 0, 0.0f);
+            setBool  (m->apvts, tabby::laneParamId (0, 0, "on"), false);   // ST off
+            setBool  (m->apvts, tabby::laneParamId (0, 3, "on"), true);    // Mid on
+            setFloat (m->apvts, tabby::laneParamId (0, 3, "freq"), 1000.0f);
+            setFloat (m->apvts, tabby::laneParamId (0, 3, "q"), 1.0f);
+            armDynamics (*m, -18.0f, 0);
+            m->setPlayConfigDetails (2, 2, fs, n);
+            m->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> mid;
+            runTone (*m, 40, n, mid);
+            check (m->dynamicDeltaDb (0, 3) < -1.0f,                      "gr: a Mid-only point publishes on the Mid lane");
+            check (juce::exactlyEqual (m->dynamicDeltaDb (0, 0), 0.0f),   "gr: ...and not on the Stereo lane it does not use");
+        }
+
         // (d) The detectors must probe the SECTION INPUT, not each point's own input. Two identical
         // dynamic points in series prove it: fed the untouched section input, both see the same
         // full-level programme and both duck their whole -18 dB range (-36 dB total). A chain that

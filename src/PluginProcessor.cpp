@@ -306,6 +306,7 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     // gain reduction — and the release edge starts disarmed to match.
     for (auto& d : *dyn) d.prepare (sampleRate, getTotalNumOutputChannels());
     dynRunning = false;
+    for (auto& m : deltaMeter) m.store (0.0f, std::memory_order_relaxed);   // a stream restart shows no leftover GR
 
     // FIR paths: build BOTH initial FIRs from the current params so either mode is ready immediately.
     prepared.store (false, std::memory_order_relaxed);
@@ -416,7 +417,10 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         {
             (*dyn)[(size_t) b].reset();
             for (int L = 0; L < teq::kNumLanes; ++L)
+            {
                 engine.bandAt (b).setLaneDeltaDb ((teq::Lane) L, 0.0);
+                deltaMeter[(size_t) (b * teq::kNumLanes + L)].store (0.0f, std::memory_order_relaxed);
+            }
         }
         dynRunning = false;
     };
@@ -510,7 +514,15 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             // costs the spectrum nothing.)
             dynRunning = true;
             for (int b = 0; b < tabby::kNumBands; ++b)
-                (*dyn)[(size_t) b].processBand (chans, sc, nc, n, engine.bandAt (b));
+            {
+                auto& d = (*dyn)[(size_t) b];
+                d.processBand (chans, sc, nc, n, engine.bandAt (b));
+                // Publish this block's per-lane delta for the meter + the Helper. deltaDb() is the
+                // audio thread reading its own value, so the only cross-thread step is this store.
+                for (int L = 0; L < teq::kNumLanes; ++L)
+                    deltaMeter[(size_t) (b * teq::kNumLanes + L)].store ((float) d.deltaDb ((teq::Lane) L),
+                                                                        std::memory_order_relaxed);
+            }
         }
     }
 
