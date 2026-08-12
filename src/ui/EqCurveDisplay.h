@@ -7,8 +7,16 @@
 #include <juce_dsp/juce_dsp.h>
 #include <teq/EqBand.h>
 
-#include "eqview/PlotMap.h"
-#include "eqview/SpectrumPane.h"
+#include <felitronics/analysis/PlotMap.h>
+#include <felitronics/analysis/SpectrumPane.h>
+
+// PlotMap and SpectrumPane graduated from the eqview incubator to felitronics-core once OrbitAmp
+// became their second consumer; the eqview names keep reading as before.
+namespace eqview
+{
+using felitronics::analysis::PlotMap;
+using felitronics::analysis::SpectrumPane;
+}
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
 #include "PluginProcessor.h"

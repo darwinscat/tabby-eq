@@ -5,7 +5,9 @@
 
 #include <teq/EqTypes.h>
 
-#include "PlotMap.h"
+#include <felitronics/analysis/PlotMap.h>
+
+namespace eqview { using felitronics::analysis::PlotMap; }
 
 #include <algorithm>
 #include <cmath>
