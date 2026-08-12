@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # TabbyEQ release — cut on pushing a `v*` tag. Builds the four macOS formats in Release, gates on
-# ctest + auval, zips the bundles, and publishes a GitHub Release with the zip attached.
+# ctest + auval, SIGNS them with the family's Developer ID, notarizes and staples them, and publishes
+# a GitHub Release with the zip attached.
 #
-# ⚠️  TODO — CODESIGNING / NOTARIZATION IS OUT OF SCOPE HERE (see the "package" step). The zip ships
-#     UNSIGNED + UN-NOTARIZED: Gatekeeper will quarantine it on other Macs until a Developer-ID sign
-#     + `xcrun notarytool` + staple step is added (needs the signing identity + Apple ID secrets).
-#     Do NOT distribute this artefact publicly until that lands.
+# Runs on the SELF-HOSTED macOS runner (the same one OrbitCab releases from): the Developer ID certs
+# and the notarytool keychain profile live in that machine's Keychain, so nothing secret travels
+# through the workflow — only the identity NAMES (org secrets MACOS_APP_IDENTITY / KCH_PWD) and the
+# profile name (org var NOTARY_PROFILE).
 name: Release
 
 on:
@@ -20,7 +21,8 @@ env:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 300     # notarization is the long pole — Apple's queue, not our build
     steps:
       # Gate: only CLEAN vX.Y.Z tags may publish. The in-plugin update check treats every published
       # release as authoritative (its compare rule parses a numeric semver out of the tag), so a
@@ -50,13 +52,23 @@ jobs:
       - name: Validate the Audio Unit (auval)
         run: auval -v aufx TbEq Dcat
 
-      # TODO(codesign/notarize): the bundles copied here are UNSIGNED. Before public distribution, add a
-      # step that `codesign --deep --options runtime --sign "Developer ID Application: …"` each bundle,
-      # then `xcrun notarytool submit … --wait` the zip and `xcrun stapler staple` it. Requires secrets
-      # (signing cert .p12 + password, APPLE_ID / TEAM_ID / app-specific password). OUT OF SCOPE for now.
-      - name: Package the bundles into a zip
+      # Sign → notarize → staple → zip. The order is forced by the tools: stapler writes the ticket
+      # INTO each bundle, and it cannot write into a zip — so the zip that goes to Apple is a throwaway
+      # transport, and the zip that ships is built afterwards from the stapled bundles.
+      - name: Package, sign, notarize, staple
+        env:
+          APP_ID:  ${{ secrets.MACOS_APP_IDENTITY }}
+          NOTARY:  ${{ vars.NOTARY_PROFILE }}
+          KCH_PWD: ${{ secrets.KCH_PWD }}
         run: |
           set -euo pipefail
+
+          # Let codesign use the signing keys without a GUI prompt — the runner has no interactive
+          # login session, and without this codesign fails with errSecInternalComponent. Unlocking and
+          # re-setting the partition list every run is idempotent.
+          KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain -p "$KCH_PWD" "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCH_PWD" "$KEYCHAIN" >/dev/null
           ART="$(find build -type d -name 'TabbyEQ_artefacts' | head -1)"
           if [ -z "$ART" ]; then echo "::error::TabbyEQ_artefacts dir not found"; exit 1; fi
           echo "Artefacts root: $ART"
@@ -75,6 +87,33 @@ jobs:
           if [ "$COUNT" -lt 4 ]; then
             echo "::error::expected 4 bundles (VST3/AU/CLAP/Standalone), found $COUNT"; exit 1
           fi
+          # Sign the STAGED copies, not the build tree: the standalone already carries an ad-hoc
+          # signature from the build's post-build step, and --force is what replaces it with the real
+          # Developer ID one. The plug-ins run inside a host and need no entitlements of their own;
+          # the standalone is its own process reading the audio INPUT device, so it gets exactly one.
+          for b in "$STAGE/TabbyEQ.vst3" "$STAGE/TabbyEQ.component" "$STAGE/TabbyEQ.clap"; do
+            echo "  signing $b"
+            codesign --force --options runtime --timestamp --sign "$APP_ID" "$b"
+            codesign --verify --strict --verbose=1 "$b"
+          done
+          codesign --force --options runtime --timestamp \
+                   --entitlements installer/standalone.entitlements --sign "$APP_ID" "$STAGE/TabbyEQ.app"
+          codesign --verify --strict --verbose=1 "$STAGE/TabbyEQ.app"
+
+          # One submission carries all four bundles. Apple notarizes what is INSIDE the archive, so a
+          # single throwaway zip is enough — the ticket comes back per bundle.
+          ditto -c -k --sequesterRsrc --keepParent "$STAGE" dist/_notarize.zip
+          xcrun notarytool submit dist/_notarize.zip --keychain-profile "$NOTARY" --wait
+          rm -f dist/_notarize.zip
+
+          # Staple each bundle so it is trusted on a machine that is offline (and so Gatekeeper never
+          # has to ask Apple at first launch), then prove it: a missing ticket fails `stapler validate`.
+          for b in "$STAGE/TabbyEQ.vst3" "$STAGE/TabbyEQ.component" "$STAGE/TabbyEQ.clap" "$STAGE/TabbyEQ.app"; do
+            xcrun stapler staple "$b"
+            xcrun stapler validate "$b"
+          done
+          spctl -a -vvv -t exec "$STAGE/TabbyEQ.app" || true    # informational: what Gatekeeper will say
+
           ZIP="TabbyEQ-${GITHUB_REF_NAME}-macos.zip"
           ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$ZIP"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
@@ -88,4 +127,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" "${ZIP}" \
             --title "TabbyEQ ${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "Unsigned / un-notarized macOS build (VST3 · AU · CLAP · Standalone). See workflow TODO before public distribution."
+            --notes "Signed + notarized macOS build (VST3 · AU · CLAP · Standalone), universal arm64 + x86_64. Every bundle carries a stapled notarization ticket, so it opens without a Gatekeeper prompt."
