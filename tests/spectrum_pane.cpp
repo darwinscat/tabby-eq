@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 //
-// JUCE-free unit for the eqview SpectrumPane (src/eqview/SpectrumPane.h) — the analyzer pipeline
+// JUCE-free unit for the eqview SpectrumPane (felitronics/analysis/SpectrumPane.h) — the analyzer pipeline
 // (Hann window -> real FFT -> per-bin dB smoothing + peak-hold) and the "liquid" column sampler
 // (interpolate where a column spans < 1 bin, bin-PEAK where it spans several, + display tilt).
 // Pins the Hann single-bin compensation (a full-scale exact-bin sine reads ~0 dB), the peak-hold
 // decay rate, the hold-then-fade starve behaviour, and the column/tilt geometry, so moving the
 // pipeline out of the display can never silently change the analyzer's look.
 
-#include "eqview/SpectrumPane.h"
+#include <felitronics/analysis/SpectrumPane.h>
+
+// The header graduated to felitronics-core; the eqview names it was written against still read.
+namespace eqview { using felitronics::analysis::PlotMap; using felitronics::analysis::SpectrumPane; }
 
 #include <cmath>
 #include <cstdio>

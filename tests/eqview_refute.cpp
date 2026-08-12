@@ -9,7 +9,10 @@
 // its public API. A failure here means the CODE deviates from theory (or a derivation is wrong —
 // both get investigated, neither gets ignored). Case authors: codex / deepseek / opus as marked.
 
-#include "eqview/SpectrumPane.h"
+#include <felitronics/analysis/SpectrumPane.h>
+
+// Both headers graduated to felitronics-core; the eqview names the suite was written against still read.
+namespace eqview { using felitronics::analysis::PlotMap; using felitronics::analysis::SpectrumPane; }
 
 #include <cmath>
 #include <complex>

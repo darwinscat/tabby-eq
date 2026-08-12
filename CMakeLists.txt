@@ -442,17 +442,19 @@ target_link_libraries(TabbyEQ_UpdateCompareTest PRIVATE felitronics::appkit)   #
 add_test(NAME tabbyeq_update_compare COMMAND TabbyEQ_UpdateCompareTest)
 
 # ----------------------------------------------------------------------------
-# JUCE-free unit for the eqview PlotMap (src/eqview/PlotMap.h) — the single home of the plot's
-# freq<->px / dB<->px math (step 0 of the eqview layering; the display's coordinate methods are
-# thin wrappers over it). Pins axis anchors, roundtrips, clamping and the deliberate below-range
-# curve overshoot, so the layer split can never silently move a pixel. Same core-tests ctest tier.
+# JUCE-free unit for the eqview PlotMap (now felitronics/analysis/PlotMap.h) — the single home of
+# the plot's freq<->px / dB<->px math (step 0 of the eqview layering; the display's coordinate
+# methods are thin wrappers over it). Pins axis anchors, roundtrips, clamping and the deliberate
+# below-range curve overshoot, so the layer split can never silently move a pixel. The header
+# graduated upstream; the suite stays here and keeps testing the header we actually consume.
 # ----------------------------------------------------------------------------
 add_executable(TabbyEQ_PlotMapTest tests/plot_map.cpp)
-target_include_directories(TabbyEQ_PlotMapTest PRIVATE src)   # eqview/PlotMap.h
+target_include_directories(TabbyEQ_PlotMapTest PRIVATE src)
+target_link_libraries(TabbyEQ_PlotMapTest PRIVATE felitronics::analysis)   # felitronics/analysis/PlotMap.h
 add_test(NAME tabbyeq_plot_map COMMAND TabbyEQ_PlotMapTest)
 
 # ----------------------------------------------------------------------------
-# JUCE-free unit for the eqview SpectrumPane (src/eqview/SpectrumPane.h) — the analyzer pipeline
+# JUCE-free unit for the eqview SpectrumPane (now felitronics/analysis/SpectrumPane.h) — the pipeline
 # (Hann -> FFT -> dB smoothing + peak-hold) and the liquid column sampler + tilt. Pins the Hann
 # single-bin compensation, the peak-hold/starve behaviour and the column geometry. Links teq::core
 # for the Fft seam — still JUCE-free, same core-tests ctest tier.
