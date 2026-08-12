@@ -37,6 +37,14 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     strip.onLanesEdited    = [this] { display.refreshAfterLaneEdit(); };   // lane set / links changed -> re-cache + repaint
     strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step across all visible nodes
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
+    // The dynamics panel opened/closed: the strip is WIDER now, so it must be resized before the canvas
+    // re-places it (placement reads the strip's live width, which is what keeps it inside the graph
+    // when the panel opens next to the right-hand scales).
+    strip.onSizeChanged = [this]
+    {
+        strip.setSize (strip.preferredWidth(), strip.preferredHeight());
+        display.refreshToolbar();
+    };
 
     // OUT rail — the meter IS the trim fader's track (see ui/OutputRail.h); double-click = 0 dB.
     output.setNumDecimalPlacesToDisplay (1);
@@ -160,6 +168,11 @@ void TabbyEqEditor::syncViewFromState()
     // node never sits off-plot. Same-value re-writes inside setGainRange are suppressed no-ops.
     display.setGainRange ((double) proc.apvts.state.getProperty ("gainRangeLive",
                               proc.apvts.state.getProperty ("gainRange", 12.0)), false);
+
+    // Point dynamics: opt-in preview, default OFF — so a session that never enabled it (or predates
+    // the switch) opens with no dynamic affordance anywhere and the static audio path.
+    proc.setDynamicsEnabled ((bool) proc.apvts.state.getProperty ("dynamicsOn", false));
+    strip.refreshDynamicsAvailability();
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
     proc.setSpectrumResolution ((int) proc.apvts.state.getProperty ("specResolution", 11));   // analyzer FFT size (1024..8192)
@@ -558,6 +571,9 @@ void TabbyEqEditor::showViewMenu()
     m.addItem (2, "Per-band curves",  true, display.viewBandCurves());
     m.addItem (3, "Per-band fill",    true, display.viewBandFill());
     m.addItem (4, "Long-press solo",  true, display.viewLongSolo());
+    // Point dynamics is unfinished, so it ships OFF and is opted into here. Off is not a cosmetic
+    // hide: the audio thread takes the no-dynamics fast path too (PluginProcessor).
+    m.addItem (5, "Dynamics (preview)", true, proc.dynamicsEnabled());
 
     juce::PopupMenu addLineMenu;
     const int cur = display.addLineMode();
@@ -614,6 +630,14 @@ void TabbyEqEditor::showViewMenu()
         if (r == 2) { const bool v = ! d.viewBandCurves(); d.setViewBandCurves (v); st.setProperty ("viewBandCurves", v, nullptr); }
         if (r == 3) { const bool v = ! d.viewBandFill();   d.setViewBandFill (v);   st.setProperty ("viewBandFill", v, nullptr); }
         if (r == 4) { const bool v = ! d.viewLongSolo();   d.setViewLongSolo (v);   st.setProperty ("viewLongSolo", v, nullptr); }
+        if (r == 5)
+        {
+            const bool v = ! safe->proc.dynamicsEnabled();
+            safe->proc.setDynamicsEnabled (v);
+            st.setProperty ("dynamicsOn", v, nullptr);
+            safe->strip.refreshDynamicsAvailability();   // rail + panel width follow immediately
+            d.repaint();                                  // ...and so do the handles on the canvas
+        }
         if (r >= 10 && r <= 13) { const int mode = r - 10; d.setAddLineMode (mode); st.setProperty ("addLineMode", mode, nullptr); }
         if (r == 20 || r == 21) { const int v = r - 20; d.setAuditionVisual (v); st.setProperty ("auditionVisual", v, nullptr); }
         if (r == 22) { const bool v = ! d.auditionLockGain(); d.setAuditionLockGain (v); st.setProperty ("audLockGain", v, nullptr); }

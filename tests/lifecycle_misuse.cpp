@@ -320,8 +320,12 @@ int main()
             setFloat  (p.apvts, tabby::laneParamId (b, 0, "gain"), gainDb);
         };
         // A manual (non-adaptive) duck: -18 dB of range, threshold far below the programme.
+        // Dynamics is an opt-in preview (View menu, default OFF), so arming a point also means turning
+        // the feature on — every case below is about what the dynamic path DOES once it runs. The
+        // switch's own contract (armed + disabled == static) is pinned separately, right after (a).
         auto armDynamics = [] (TabbyEqAudioProcessor& p, float rangeDb, int b = 0)
         {
+            p.setDynamicsEnabled (true);
             setBool  (p.apvts, tabby::bandId (b, "dyn_on"), true);
             setBool  (p.apvts, tabby::bandId (b, "dyn_auto"), false);
             setFloat (p.apvts, tabby::bandId (b, "dyn_thr"), -30.0f);   // loud tone (-6 dBFS) engages; the quiet resume (-46) does not
@@ -406,6 +410,33 @@ int main()
                 for (int i = 0; i < n; ++i)
                     maxDiff = juce::jmax (maxDiff, (double) std::abs (got.getReadPointer (c)[i] - ref.getReadPointer (c)[i]));
             check (maxDiff <= 2.0e-7, "dyn: dyn_on with range 0 moves the signal by at most one ULP");
+        }
+
+        // (a2) The FEATURE SWITCH. Dynamics ships OFF (View menu opt-in), and off has to mean the same
+        // thing as "this point is not dynamic" — not a quieter duck, not a delta section running at
+        // unity. A point armed to its full range with the switch off must therefore be BIT-identical
+        // to the static reference, and publish nothing to the GR meter.
+        {
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*p);
+            setBool  (p->apvts, tabby::bandId (0, "dyn_on"), true);
+            setBool  (p->apvts, tabby::bandId (0, "dyn_auto"), false);
+            setFloat (p->apvts, tabby::bandId (0, "dyn_thr"), -30.0f);
+            setFloat (p->apvts, tabby::bandId (0, "dyn_range"), -18.0f);   // fully armed...
+            check (! p->dynamicsEnabled(), "dyn: the preview switch defaults OFF");
+            p->setPlayConfigDetails (2, 2, fs, n);
+            p->prepareToPlay (fs, n);
+            phase = 0.0;
+            juce::AudioBuffer<float> got;
+            runTone (*p, 8, n, got);       // the SAME block count as the reference — the tone's phase must line up
+            check (identical (got, ref), "dyn: a fully armed point with the preview OFF is bit-identical to static");
+            check (juce::exactlyEqual (p->dynamicDeltaDb (0, 0), 0.0f), "dyn: ...and publishes no gain reduction");
+
+            // And the switch is live: the same instance, mid-stream, starts ducking once enabled.
+            p->setDynamicsEnabled (true);
+            juce::AudioBuffer<float> engaged;
+            runTone (*p, 40, n, engaged);
+            check (peak (engaged) < peak (ref) * 0.5, "dyn: enabling the preview mid-stream engages the point");
         }
 
         // (b) ENGAGES when asked, and (c) RELEASES when the dynamic path stops running. Same processor:

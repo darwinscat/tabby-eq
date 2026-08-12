@@ -483,13 +483,23 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     else
     {
         // Zero Latency (matched IIR) — the only mode dynamics rides on.
+        // The feature switch is read ONCE per block and folded into the same `anyDyn` question the
+        // per-point test answers, so "dynamics disabled" and "no point is dynamic" are literally the
+        // same path: sc stays null, the seams get released on the edge below, and engine.process()
+        // runs. A disabled preview therefore costs exactly nothing and cannot leave a duck behind.
+        const bool dynEnabled = dynamicsOn.load (std::memory_order_relaxed);
         bool anyDyn = false;
         for (int b = 0; b < tabby::kNumBands; ++b)
         {
-            const auto bp = readBand (b);
+            auto bp = readBand (b);
+            // Switched off, the point is handed to the engine as a point that simply is not dynamic —
+            // NOT as an armed one nobody drives. Otherwise the band would still run its delta section
+            // at unity, and "disabled" would cost a float ULP against a build from before dynamics
+            // existed. The switch has to be indistinguishable from that build, so clear the flag here.
+            if (! dynEnabled) bp.dyn.on = false;
             engine.setBand (b, bp);
             (*dyn)[(size_t) b].setParams (bp);   // unconditional: it is how a point that just turned dynamics OFF disengages
-            anyDyn = anyDyn || (bp.on && ! bp.bypass && bp.dyn.on && bp.dyn.rangeDb != 0.0);
+            anyDyn = anyDyn || (dynEnabled && bp.on && ! bp.bypass && bp.dyn.on && bp.dyn.rangeDb != 0.0);
         }
 
         float* const* chans = buffer.getArrayOfWritePointers();
@@ -794,6 +804,9 @@ void TabbyEqAudioProcessor::applyLiveState (const juce::ValueTree& t)
         activeLaneAtom[(size_t) i].store ((int) apvts.state.getProperty (tabby::bandId (i, "activeLane"), -1), std::memory_order_relaxed);
     spectrumDomain.store ((int) apvts.state.getProperty ("specDomain", 0), std::memory_order_relaxed);   // analyzer Stereo/Mid/Side (see PluginEditor)
     analyzerOrder.store (juce::jlimit (10, 14, (int) apvts.state.getProperty ("specResolution", 11)), std::memory_order_relaxed);   // analyzer FFT size (see PluginEditor)
+    // Point dynamics is opt-in and defaults OFF, so a state that predates the switch (or was saved
+    // with it off) opens with the preview closed — the audio thread reads this atomic, not the tree.
+    dynamicsOn.store ((bool) apvts.state.getProperty ("dynamicsOn", false), std::memory_order_relaxed);
 }
 
 void TabbyEqAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
