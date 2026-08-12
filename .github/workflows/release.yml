@@ -64,11 +64,18 @@ jobs:
           set -euo pipefail
 
           # Let codesign use the signing keys without a GUI prompt — the runner has no interactive
-          # login session, and without this codesign fails with errSecInternalComponent. Unlocking and
-          # re-setting the partition list every run is idempotent.
+          # login session, and an unnamed partition list makes codesign fail with
+          # errSecInternalComponent. Unlocking and re-setting the list every run is idempotent.
           KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
           security unlock-keychain -p "$KCH_PWD" "$KEYCHAIN"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCH_PWD" "$KEYCHAIN" >/dev/null
+          # The partition list is a PRECAUTION, not a requirement, and it is refused on some hosts
+          # (SecKeychainItemSetAccessWithPassword) even when that same password just unlocked that same
+          # keychain a line earlier — the key's ACL was written in another security session. Failing the
+          # release on the precaution would be wrong: codesign right below is the real gate, and if the
+          # ACL genuinely blocks it, it says so in a message naming exactly that.
+          if ! security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCH_PWD" "$KEYCHAIN" >/dev/null 2>&1; then
+            echo "::warning::set-key-partition-list refused the keychain password (the unlock above succeeded); continuing — codesign is the gate"
+          fi
           ART="$(find build -type d -name 'TabbyEQ_artefacts' | head -1)"
           if [ -z "$ART" ]; then echo "::error::TabbyEQ_artefacts dir not found"; exit 1; fi
           echo "Artefacts root: $ART"
