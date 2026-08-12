@@ -19,12 +19,15 @@ class PowerButton : public juce::Button
 {
 public:
     PowerButton() : juce::Button ({}) {}   // toggle state is driven by the bypass parameter, not self-toggled
+    // Lit colour. The band's own power is violet; the dynamics switch takes the range hue, so two
+    // identical glyphs one above the other can never be read as the same switch.
+    juce::Colour litColour = tabby::palette::violet();
     void paintButton (juce::Graphics& g, bool, bool) override
     {
         auto b = getLocalBounds().toFloat().reduced (5.0f);
         const float cx = b.getCentreX(), cy = b.getCentreY();
         const float r  = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
-        g.setColour (getToggleState() ? tabby::palette::violet() : tabby::palette::textDim());
+        g.setColour (getToggleState() ? litColour : tabby::palette::textDim());
         juce::Path ring;
         ring.addCentredArc (cx, cy, r, r, 0.0f,
                             juce::degreesToRadians (38.0f), juce::degreesToRadians (322.0f), true);
@@ -108,6 +111,50 @@ private:
 };
 
 //==============================================================================
+// The DYN rail — the disclosure lives as a narrow vertical strip down the panel's RIGHT EDGE, and
+// opening it grows the panel SIDEWAYS. Two reasons that beats a button plus a third row: the strip
+// floats over the curve and is placed relative to the selected node, so growing downwards walks it
+// into the frequency axis (and, near the floor, forces the whole panel to jump above the node
+// mid-edit); and the edge rail is always in the same place whatever the type does to the rows.
+// It reports as well as reveals: lit when the point's dynamics is armed, so a closed rail still
+// says whether anything is moving.
+class DynRailButton : public juce::Button
+{
+public:
+    DynRailButton() : juce::Button ({}) {}
+    void setState (bool armed, bool open) { isArmed = armed; isOpen = open; repaint(); }
+    void paintButton (juce::Graphics& g, bool over, bool) override
+    {
+        auto b = getLocalBounds().toFloat();
+        const auto tint = ! isEnabled() ? tabby::palette::textDim()
+                                        : (isArmed ? tabby::palette::orange() : tabby::palette::textDim());
+        g.setColour (tabby::palette::panel().brighter (over ? 0.26f : (isOpen ? 0.16f : 0.10f)));
+        g.fillRoundedRectangle (b, 4.0f);
+        g.setColour (tint.withAlpha (isEnabled() ? 0.55f : 0.25f));
+        g.drawLine (b.getX() + 0.5f, b.getY() + 4.0f, b.getX() + 0.5f, b.getBottom() - 4.0f, 1.0f);   // the seam it opens along
+
+        // "DYN" reading bottom-to-top, the way a spine label does — it has to survive a 14 px column.
+        juce::Graphics::ScopedSaveState ss (g);
+        g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi,
+                                                         b.getCentreX(), b.getCentreY()));
+        g.setColour (tint);
+        g.setFont (juce::Font (juce::FontOptions (8.5f).withStyle ("Bold")));
+        auto text = juce::Rectangle<float> (b.getCentreX() - b.getHeight() * 0.5f, b.getCentreY() - b.getWidth() * 0.5f,
+                                            b.getHeight(), b.getWidth());
+        g.drawText ("DYN", text.withTrimmedLeft (10.0f), juce::Justification::centred);
+
+        juce::Path chev;   // › closed / ‹ open — drawn in the ROTATED frame, so it points sideways on screen
+        const float cx = text.getX() + 8.0f, cy = text.getCentreY(), h = 3.0f, w = isOpen ? -2.5f : 2.5f;
+        chev.startNewSubPath (cx - w * 0.5f, cy - h);
+        chev.lineTo (cx + w * 0.5f, cy);
+        chev.lineTo (cx - w * 0.5f, cy + h);
+        g.strokePath (chev, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+private:
+    bool isArmed = false, isOpen = false;
+};
+
+//==============================================================================
 // The selected-band inspector strip: shows AND keyboard-edits the real freq / Q / gain / type / slope of
 // whichever band+lane is selected on the curve (#8). One set of controls serves all 24 bands × 5 lanes:
 // when the selection changes it rebinds its APVTS attachments to the ACTIVE lane's parameters, so the strip
@@ -124,6 +171,9 @@ public:
     std::function<void(int)> onLaneChanged;  // active lane changed (menu/wheel) — editor highlights that node
     std::function<void()>    onLanesEdited;  // lane set / link edited — editor repaints the canvas
     void setActiveLane (int lane);           // set the editing lane WITHOUT firing onLaneChanged (external sync)
+    std::function<void()> onSizeChanged;     // the dynamics panel opened/closed — the editor re-sizes + re-places
+    int  preferredWidth()  const noexcept { return kColMain + (dynRowShown ? kColDyn : 0); }
+    int  preferredHeight() const noexcept { return kRowTop; }   // the panel grows sideways, never down
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -154,7 +204,15 @@ private:
     int  activeLane = 0;         // teq::Lane index (0..4) currently edited by the strip
     bool engaged = false;        // mouse over / editing -> the background paints fully opaque
 
+    void toggleDynRow();                     // open/close the dynamics panel (and resize through onSizeChanged)
+    void refreshDyn();                        // sync the DYN button + the row's enabled/auto state
+    juce::String resolvedTimeText (bool attack) const;   // the deviation's ACTUAL ms, from the band's own fc/Q
+
     static constexpr float kCorner = 10.0f;   // panel corner radius (FabFilter-esque rounding)
+    static constexpr int   kRowTop  = 64;     // height — CONSTANT: the panel never grows downwards
+    static constexpr int   kColMain = 234;    // collapsed width = top row (202) + margins (2x8) + the rail (16)
+    static constexpr int   kColDyn  = 168;    // what the dynamics panel adds on the right
+    static constexpr int   kRail   = 16;      // the DYN spine down the right edge
 
     juce::Label        title;
     PowerButton        onButton;                 // enable / bypass — power glyph, top-left
@@ -165,9 +223,19 @@ private:
     ChevronButton      nextButton { +1 };   // lightweight outline >
     juce::ComboBox     slopeBox;
     juce::Slider       freq, q, gain;            // value + unit shown inside each LinearBar
+    DynRailButton      dynRail;                  // right-edge spine: reports armed + reveals the panel
+    PowerButton        dynOnButton;              // the dynamics on/off switch itself
+    juce::Slider       dynRange, dynAtk, dynRel; // range dB · attack/release DEVIATIONS (text = resolved ms)
+    juce::Slider       dynThr;                   // absolute threshold — disabled (and reading "Auto") while auto is on
+    juce::TextButton   dynAutoButton { "A" };    // the explicit auto/manual switch, styled like the S button
+    bool               dynOpen = false;          // the row is closed by default (§ 8)
+    bool               dynRowShown = false;      // ...and never shown at all on a type without gain
 
     std::unique_ptr<ComboAtt>  slopeAtt;
     std::unique_ptr<SliderAtt> freqAtt, qAtt, gainAtt;
+    std::unique_ptr<SliderAtt> dynRangeAtt, dynThrAtt, dynAtkAtt, dynRelAtt;
+    std::unique_ptr<juce::ParameterAttachment> dynOnAtt, dynAutoAtt;
+    bool dynArmed = false, dynAuto = true;       // last seen, for the button + the threshold readout
     // The power button reads BOTH bypass levels (a node is dark if either is set) but WRITES the one
     // the strip's readout names — the active lane on a split point, the point otherwise. See onClick.
     std::unique_ptr<juce::ParameterAttachment> bypassAtt;     // POINT bypass

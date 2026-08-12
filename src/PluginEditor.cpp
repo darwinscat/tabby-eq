@@ -37,6 +37,14 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     strip.onLanesEdited    = [this] { display.refreshAfterLaneEdit(); };   // lane set / links changed -> re-cache + repaint
     strip.onStep   = [this] (int d) { display.stepSelection (d); };   // < / > step across all visible nodes
     strip.onEdited = [this] { display.refreshToolbar(); };            // re-place toolbar after a slider edit
+    // The dynamics panel opened/closed: the strip is WIDER now, so it must be resized before the canvas
+    // re-places it (placement reads the strip's live width, which is what keeps it inside the graph
+    // when the panel opens next to the right-hand scales).
+    strip.onSizeChanged = [this]
+    {
+        strip.setSize (strip.preferredWidth(), strip.preferredHeight());
+        display.refreshToolbar();
+    };
 
     // OUT rail — the meter IS the trim fader's track (see ui/OutputRail.h); double-click = 0 dB.
     output.setNumDecimalPlacesToDisplay (1);

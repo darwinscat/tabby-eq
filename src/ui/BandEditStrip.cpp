@@ -3,6 +3,8 @@
 
 #include "ui/BandEditStrip.h"
 
+#include <felitronics/dynamics/BandBallistics.h>   // the resolved attack/release the engine actually uses
+
 #include <cmath>
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
@@ -86,6 +88,47 @@ BandEditStrip::BandEditStrip (TabbyEqAudioProcessor& p) : proc (p)
     setupField (freq);
     setupField (q);
     setupField (gain);
+
+    // --- the dynamics row (DYNAMICS.md § 8) -------------------------------------------------------
+    // Closed by default: the promise of the feature is that Range is usually the only number anyone
+    // touches, and a row of four bars on every selection would contradict it.
+    dynRail.onClick = [this] { toggleDynRow(); };
+    addAndMakeVisible (dynRail);
+
+    dynOnButton.onClick = [this]
+    {
+        if (dynOnAtt != nullptr) dynOnAtt->setValueAsCompleteGesture (dynOnButton.getToggleState() ? 0.0f : 1.0f);
+    };
+    dynOnButton.litColour = tabby::palette::orange();      // the range hue: this switch owns the movement
+    addChildComponent (dynOnButton);                       // visible only while the row is open
+
+    for (auto* s : { &dynRange, &dynAtk, &dynRel }) { setupField (*s); s->setVisible (false); }
+    setupField (dynThr); dynThr.setVisible (false);
+    dynRange.setColour (juce::Slider::trackColourId, tabby::palette::orange().withAlpha (0.45f));   // the primary knob wears the gain hue
+
+    // Auto vs manual is an EXPLICIT switch, not a side effect of touching the bar. Auto is the normal
+    // state (§ 2.3) and the one people will sit in, so leaving it must be a decision you can see
+    // yourself make — and, just as importantly, one you can find your way back from without guessing
+    // which gesture undoes it. Lit = auto; the bar is disabled underneath it, because a number that
+    // isn't in effect must not look editable.
+    dynAutoButton.setClickingTogglesState (true);
+    dynAutoButton.setColour (juce::TextButton::buttonOnColourId, tabby::palette::orange());
+    dynAutoButton.setTooltip ("Threshold: Auto (relative to this band's own programme level)");
+    dynAutoButton.onClick = [this]
+    {
+        if (dynAutoAtt != nullptr) dynAutoAtt->setValueAsCompleteGesture (dynAutoButton.getToggleState() ? 1.0f : 0.0f);
+    };
+    addChildComponent (dynAutoButton);
+    // A range pulled off zero ARMS the point, exactly as dragging the node's handle does — otherwise
+    // the bar would move and nothing would happen, which is the worst thing a control can do.
+    dynRange.onValueChange = [this]
+    {
+        if (! dynArmed && std::abs (dynRange.getValue()) >= 0.1 && dynOnAtt != nullptr)
+            dynOnAtt->setValueAsCompleteGesture (1.0f);
+    };
+    // The resolved ms depends on the band's fc/Q, so a freq or Q edit changes what those bars SAY.
+    freq.onValueChange = [this] { dynAtk.updateText(); dynRel.updateText(); };
+    q.onValueChange    = [this] { dynAtk.updateText(); dynRel.updateText(); };
 
     // A MOUSE bar drag = ONE labelled undo step (grab = begin, release = end): mid-drag pauses
     // never fragment it into settle bursts, and the editor's key-navigation gate covers the open
@@ -246,7 +289,8 @@ void BandEditStrip::rebind()
 {
     // Drop the old bindings first (an attachment must outlive nothing it points at).
     slopeAtt.reset(); freqAtt.reset(); qAtt.reset(); gainAtt.reset(); bypassAtt.reset(); laneBypAtt.reset();
-    if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); return; }
+    dynRangeAtt.reset(); dynThrAtt.reset(); dynAtkAtt.reset(); dynRelAtt.reset(); dynOnAtt.reset(); dynAutoAtt.reset();
+    if (curBand < 0) { onButton.setToggleState (false, juce::dontSendNotification); refreshDyn(); return; }
 
     slopeAtt = std::make_unique<ComboAtt>  (proc.apvts, laneId ("slope"), slopeBox);   // active lane
     freqAtt  = std::make_unique<SliderAtt> (proc.apvts, laneId ("freq"),  freq);
@@ -268,7 +312,88 @@ void BandEditStrip::rebind()
             [this] (float v) { laneByp = v >= 0.5f; refreshPower(); });
         laneBypAtt->sendInitialUpdate();
     }
+    // Dynamics is POINT-level (§ 1.1): unlike everything above, these four do NOT carry a lane id.
+    dynRangeAtt = std::make_unique<SliderAtt> (proc.apvts, tabby::bandId (curBand, "dyn_range"), dynRange);
+    dynThrAtt   = std::make_unique<SliderAtt> (proc.apvts, tabby::bandId (curBand, "dyn_thr"),   dynThr);
+    dynAtkAtt   = std::make_unique<SliderAtt> (proc.apvts, tabby::bandId (curBand, "dyn_atk"),   dynAtk);
+    dynRelAtt   = std::make_unique<SliderAtt> (proc.apvts, tabby::bandId (curBand, "dyn_rel"),   dynRel);
+    if (auto* dp = proc.apvts.getParameter (tabby::bandId (curBand, "dyn_on")))
+    {
+        dynOnAtt = std::make_unique<juce::ParameterAttachment> (*dp,
+            [this] (float v) { dynArmed = v >= 0.5f; refreshDyn(); });
+        dynOnAtt->sendInitialUpdate();
+    }
+    if (auto* ap = proc.apvts.getParameter (tabby::bandId (curBand, "dyn_auto")))
+    {
+        dynAutoAtt = std::make_unique<juce::ParameterAttachment> (*ap,
+            [this] (float v)
+            {
+                dynAuto = v >= 0.5f;
+                dynAutoButton.setToggleState (dynAuto, juce::dontSendNotification);
+                dynThr.setEnabled (! dynAuto);
+                dynThr.updateText();
+            });
+        dynAutoAtt->sendInitialUpdate();
+    }
+
+    // Attack/release are 0..1 DEVIATIONS, but nobody thinks in deviations — so the BAR is the deviation
+    // and the TEXT is the millisecond value it resolves to for THIS band's fc/Q. That is what keeps
+    // "auto" from being opaque: you can see that a 7 kHz band chose 1 ms. Applied here, not in the
+    // constructor: a SliderAttachment installs the parameter's own text function when it binds, so an
+    // earlier assignment is simply overwritten (and reads "0.50", which is exactly the opacity we are
+    // trying to remove).
+    dynAtk.textFromValueFunction = [this] (double) { return resolvedTimeText (true); };
+    dynRel.textFromValueFunction = [this] (double) { return resolvedTimeText (false); };
+    dynThr.textFromValueFunction = [this] (double v) { return dynAuto ? juce::String ("Auto")
+                                                                     : juce::String (v, 1) + " dB"; };
+    dynRange.textFromValueFunction = [] (double v) { return juce::String (std::abs (v) < 0.05 ? 0.0 : v, 1) + " dB"; };
+    dynAtk.updateText(); dynRel.updateText(); dynThr.updateText(); dynRange.updateText();
+
     refreshPower();
+    refreshDyn();
+}
+
+void BandEditStrip::toggleDynRow()
+{
+    dynOpen = ! dynOpen;
+    refreshDyn();
+    if (onSizeChanged) onSizeChanged();   // the panel got WIDER/narrower; only the editor can re-size + re-place it
+}
+
+void BandEditStrip::refreshDyn()
+{
+    // Gainless types have no gain for a detector to modulate (§ 2.1), so the whole affordance goes
+    // away for them rather than sitting there disabled and inviting a click.
+    const bool relevant = curBand >= 0 && gain.isVisible();
+    dynRail.setEnabled (relevant);
+    dynRail.setState (dynArmed && relevant, dynOpen && relevant);
+    const bool showRow = dynOpen && relevant;
+    const bool heightChanged = showRow != dynRowShown;
+    dynRowShown = showRow;
+    dynOnButton.setVisible (showRow);
+    dynAutoButton.setVisible (showRow);
+    dynAutoButton.setToggleState (dynAuto, juce::dontSendNotification);
+    dynThr.setEnabled (! dynAuto);
+    dynOnButton.setToggleState (dynArmed, juce::dontSendNotification);
+    for (juce::Slider* s : { (juce::Slider*) &dynRange, (juce::Slider*) &dynThr,
+                             (juce::Slider*) &dynAtk,   (juce::Slider*) &dynRel })
+        s->setVisible (showRow);
+    dynThr.updateText();
+    resized();
+    if (heightChanged && onSizeChanged) onSizeChanged();   // e.g. switching to a gainless type gives the panel's width back
+}
+
+// The deviation's ACTUAL time, straight from the core law the engine runs — not a UI re-derivation,
+// so the number cannot drift from what the detector does.
+juce::String BandEditStrip::resolvedTimeText (bool attack) const
+{
+    if (curBand < 0) return {};
+    const double fs = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+    const auto   bp = proc.readBand (curBand);
+    const auto&  lp = bp.lanes[(size_t) juce::jlimit (0, teq::kNumLanes - 1, activeLane)];
+    const auto   t  = felitronics::dynamics::BandBallistics::compute (fs, lp.freq, lp.Q, bp.dyn.atk, bp.dyn.rel);
+    const double ms = attack ? t.attackMs : t.releaseMs;
+    return (ms < 10.0 ? juce::String (ms, 1) : juce::String (juce::roundToInt (ms))) + " ms";
 }
 
 bool BandEditStrip::splitPoint() const
@@ -325,6 +450,8 @@ void BandEditStrip::showTypeMenu()
 
 void BandEditStrip::updateForType()
 {
+    struct DynSync { BandEditStrip& s; ~DynSync() { s.refreshDyn(); } } dynSync { *this };   // type decided -> the DYN row follows
+
     if (curBand < 0) { slopeBox.setVisible (false); return; }
 
     const auto t       = tabby::filterTypeFromChoice (bandTypeIndex());
@@ -377,11 +504,43 @@ void BandEditStrip::paint (juce::Graphics& g)
 
 void BandEditStrip::resized()
 {
-    auto r = getLocalBounds().reduced (8, 6);
+    auto full = getLocalBounds();
 
-    // WIDTH DISCIPLINE: the strip window's width (EqCurveDisplay::kToolbarW = 218) is exactly this top
-    // row's buttons + margins — 22+6+12+30+12+8+30+8+24+6+44 = 202 inner + 2×8. The value bars below
-    // divide the same width evenly. The strip never resizes between selections.
+    // The rail owns the right EDGE at full height — it is the seam the panel opens along, so it must
+    // stay put whatever the rows inside do.
+    dynRail.setBounds (full.removeFromRight (kRail).reduced (0, 5).withTrimmedRight (3));
+
+    // Open: the dynamics panel takes the width the rail just uncovered, laid out on the SAME two row
+    // lines as the main side, so the bars line up straight across the seam.
+    if (dynRowShown)
+    {
+        auto dyn = full.removeFromRight (kColDyn).reduced (6, 6);
+        auto top = dyn.removeFromTop (22);
+        dyn.removeFromTop (8);
+        dynOnButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));
+        top.removeFromLeft (6);
+        {
+            // Range is the primary control (§ 1.2), so it keeps the remainder; the threshold gets a
+            // fixed slot with its switch immediately to the left, reading "A | value" as one unit.
+            auto thr = top.removeFromRight (52);
+            top.removeFromRight (2);
+            dynAutoButton.setBounds (top.removeFromRight (18).withSizeKeepingCentre (18, 22));
+            top.removeFromRight (4);
+            dynRange.setBounds (top);
+            dynThr.setBounds (thr);
+        }
+        auto row2 = dyn.removeFromTop (22);
+        const int bw2 = (row2.getWidth() - 4) / 2;
+        dynAtk.setBounds (row2.removeFromLeft (bw2)); row2.removeFromLeft (4);
+        dynRel.setBounds (row2);
+    }
+
+    auto r = full.reduced (8, 6);
+
+    // WIDTH DISCIPLINE: the collapsed width (kColMain = 234) is exactly this top row's buttons +
+    // margins + the rail — 22+6+12+30+12+8+30+8+24+6+44 = 202 inner + 2×8 + 16. The value bars below
+    // divide the same width evenly. The HEIGHT never changes; the WIDTH grows by kColDyn when the
+    // dynamics panel is disclosed (preferredWidth()).
     auto top = r.removeFromTop (22);
     r.removeFromTop (8);
     onButton.setBounds (top.removeFromLeft (22).withSizeKeepingCentre (22, 22));      // power (point enable/bypass)
@@ -395,7 +554,6 @@ void BandEditStrip::resized()
     soloButton.setBounds (top.removeFromLeft (24).withSizeKeepingCentre (24, 22));
     top.removeFromLeft (6);
     laneButton.setBounds (top.removeFromLeft (44).withSizeKeepingCentre (44, 22));    // placement-lane dropdown
-
     // bottom row (one line), adapts to the type:
     //   HP/LP/Notch -> FREQ + SLOPE combo (as before — the combo replaces Q/gain) · otherwise the visible
     //   value bars split the row EVENLY: bell/shelf freq|Q|gain at exactly 1/3 each (bp/ap + tilt: halves).
