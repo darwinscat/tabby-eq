@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Entitlements for the macOS Standalone app, signed under the hardened runtime (required for
+     notarization). TabbyEQ's standalone runs in its OWN process and reads the system audio INPUT
+     device to draw the live spectrum, so it needs the audio-input entitlement; without it macOS
+     denies input under the hardened runtime and the analyzer stays flat. The VST3/AU/CLAP plug-ins
+     do NOT use this — they run inside the host and are covered by the host's own permission. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
