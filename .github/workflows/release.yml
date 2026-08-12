@@ -38,6 +38,14 @@ jobs:
         with:
           fetch-depth: 0                 # full history + tags so `git describe --tags` resolves the release tag
 
+      # A hosted runner starts empty; THIS one does not. The workspace (and its build/ with a CMake
+      # cache, fetched deps and object files) survives from the previous run — including a run of a
+      # different commit, or of a build that died half-way. A release artefact is exactly the thing
+      # that must not be assembled out of two different trees, so the tree is wiped first: it costs a
+      # few minutes of rebuild and buys the guarantee that the zip came from this tag alone.
+      - name: Wipe the previous run's build tree (self-hosted workspaces persist)
+        run: rm -rf build dist
+
       - name: Configure (Release; all four formats; JUCE fetched)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
