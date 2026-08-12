@@ -172,7 +172,10 @@ public:
     std::function<void()>    onLanesEdited;  // lane set / link edited — editor repaints the canvas
     void setActiveLane (int lane);           // set the editing lane WITHOUT firing onLaneChanged (external sync)
     std::function<void()> onSizeChanged;     // the dynamics panel opened/closed — the editor re-sizes + re-places
-    int  preferredWidth()  const noexcept { return kColMain + (dynRowShown ? kColDyn : 0); }
+    void refreshDynamicsAvailability();      // the View-menu switch flipped — the rail appears/vanishes (and resizes us)
+    // With dynamics off the rail is not merely hidden: the strip gives its 16 px back, so nothing on
+    // the panel hints at a feature that is switched off.
+    int  preferredWidth()  const noexcept { return kColMain - (dynAvailable() ? 0 : kRail) + (dynRowShown ? kColDyn : 0); }
     int  preferredHeight() const noexcept { return kRowTop; }   // the panel grows sideways, never down
 
     void paint (juce::Graphics&) override;
@@ -206,6 +209,7 @@ private:
 
     void toggleDynRow();                     // open/close the dynamics panel (and resize through onSizeChanged)
     void refreshDyn();                        // sync the DYN button + the row's enabled/auto state
+    bool dynAvailable() const noexcept { return proc.dynamicsEnabled(); }   // the View-menu preview switch
     juce::String resolvedTimeText (bool attack) const;   // the deviation's ACTUAL ms, from the band's own fc/Q
 
     static constexpr float kCorner = 10.0f;   // panel corner radius (FabFilter-esque rounding)

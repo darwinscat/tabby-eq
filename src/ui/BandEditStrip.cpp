@@ -353,6 +353,15 @@ void BandEditStrip::rebind()
     refreshDyn();
 }
 
+// The View-menu switch flipped under us. Switching OFF must also close an open panel: leaving it
+// disclosed would keep the strip wide for a feature that is no longer there.
+void BandEditStrip::refreshDynamicsAvailability()
+{
+    if (! dynAvailable()) dynOpen = false;
+    refreshDyn();
+    if (onSizeChanged) onSizeChanged();   // the collapsed width itself changed (the rail's 16 px)
+}
+
 void BandEditStrip::toggleDynRow()
 {
     dynOpen = ! dynOpen;
@@ -363,8 +372,10 @@ void BandEditStrip::toggleDynRow()
 void BandEditStrip::refreshDyn()
 {
     // Gainless types have no gain for a detector to modulate (§ 2.1), so the whole affordance goes
-    // away for them rather than sitting there disabled and inviting a click.
-    const bool relevant = curBand >= 0 && gain.isVisible();
+    // away for them rather than sitting there disabled and inviting a click. The View-menu switch is
+    // the same question one level up: with the preview off there is no rail at all.
+    const bool relevant = dynAvailable() && curBand >= 0 && gain.isVisible();
+    dynRail.setVisible (dynAvailable());
     dynRail.setEnabled (relevant);
     dynRail.setState (dynArmed && relevant, dynOpen && relevant);
     const bool showRow = dynOpen && relevant;
@@ -507,8 +518,10 @@ void BandEditStrip::resized()
     auto full = getLocalBounds();
 
     // The rail owns the right EDGE at full height — it is the seam the panel opens along, so it must
-    // stay put whatever the rows inside do.
-    dynRail.setBounds (full.removeFromRight (kRail).reduced (0, 5).withTrimmedRight (3));
+    // stay put whatever the rows inside do. Switched off, it takes no width either (preferredWidth
+    // agrees), so the collapsed strip is exactly the panel it was before dynamics existed.
+    if (dynAvailable())
+        dynRail.setBounds (full.removeFromRight (kRail).reduced (0, 5).withTrimmedRight (3));
 
     // Open: the dynamics panel takes the width the rail just uncovered, laid out on the SAME two row
     // lines as the main side, so the bars line up straight across the seam.

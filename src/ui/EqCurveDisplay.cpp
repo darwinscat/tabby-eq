@@ -223,6 +223,10 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
 // --- point dynamics (DYNAMICS.md § 8) --------------------------------------------------------------
 bool EqCurveDisplay::dynRelevant (int b) const noexcept
 {
+    // The feature switch first (View menu, off by default): the ONE question every dynamics affordance
+    // on this canvas asks — the range band, the handle, its hit test and the "+" suppression over it —
+    // so a disabled preview cannot leave a stray grab target behind on any one of those paths.
+    if (! proc.dynamicsEnabled()) return false;
     // Gain-bearing types only. The five gainless ones (HP/LP/notch/all-pass/band-pass) have no gain for
     // a detector to modulate, so a dynamics affordance on them would be a control that does nothing.
     return b >= 0 && b < tabby::kNumBands && traces.param (b).on && hasGain (traces.param (b).type);

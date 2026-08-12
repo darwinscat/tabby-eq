@@ -129,6 +129,14 @@ public:
     void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
     int   getSpectrumDomain() const noexcept { return spectrumDomain.load (std::memory_order_relaxed); }
 
+    // Point dynamics: an OPT-IN preview feature, OFF by default (View menu; rides the state tree as
+    // "dynamicsOn"). Off, the audio thread takes the same fast path as "no point is dynamic" — the
+    // seams are released and engine.process() runs — and the UI shows no dynamic affordance at all.
+    // The dyn_* parameters stay registered either way: they are part of state v5, and hiding a
+    // feature must never change the parameter list a host has already learned.
+    void  setDynamicsEnabled (bool v) noexcept { dynamicsOn.store (v, std::memory_order_relaxed); }
+    bool  dynamicsEnabled()     const noexcept { return dynamicsOn.load (std::memory_order_relaxed); }
+
     // Analyzer resolution: spectrum FFT order 10..14 (1024/2048/4096/8192/16384). Read once per block by
     // the audio thread; changing it force-publishes a fresh frame at the new size (click-free live switch).
     // The [10,14] clamp MUST stay within eqview::SpectrumPane's [kMinOrder,kMaxOrder]=[10,14] (kMaxOrder
@@ -409,6 +417,7 @@ private:
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };   // max |sample| since last UI read (linear)
     std::atomic<bool>  inClip { false }, outClip { false }; // sticky >= 0 dBFS clip until the UI resets
 
+    std::atomic<bool>  dynamicsOn { false };   // point dynamics: opt-in preview, OFF until the View menu says otherwise
     std::atomic<int>   spectrumDomain { 0 };   // analyzer domain: 0 Stereo (ch0) / 1 Mid / 2 Side
     std::atomic<int>   analyzerOrder  { 11 };  // analyzer FFT order 10..14 → 1024/2048/4096/8192/16384 (2048 default)
     std::atomic<float> correlation { 1.0f };   // L/R phase correlation (-1..+1) for the meter
