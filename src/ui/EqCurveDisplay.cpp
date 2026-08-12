@@ -88,7 +88,7 @@ EqCurveDisplay::~EqCurveDisplay()
 }
 
 //==============================================================================
-// The freq↔px / dB↔px math lives in eqview::PlotMap (src/eqview/PlotMap.h, unit-tested) — these
+// The freq↔px / dB↔px math lives in eqview::PlotMap (felitronics/analysis/PlotMap.h) — these
 // wrappers only feed it the component's live geometry, so every caller keeps its old signature.
 eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
 {

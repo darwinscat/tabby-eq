@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 //
-// JUCE-free unit for the eqview PlotMap (src/eqview/PlotMap.h) — the single home of the plot's
+// JUCE-free unit for the eqview PlotMap (felitronics/analysis/PlotMap.h) — the single home of the plot's
 // freq↔px / dB↔px math (step 0 of the eqview layering). Pins the axis anchors, the roundtrips, the
 // clamping, and the DELIBERATE below-range overshoot of the curve scale, so splitting the display
 // into layers can never silently move a pixel. Runs in the plugin-OFF core-tests ctest.
 
-#include "eqview/PlotMap.h"
+#include <felitronics/analysis/PlotMap.h>
+
+// The header graduated to felitronics-core; the eqview name it was written against still reads.
+namespace eqview { using felitronics::analysis::PlotMap; }
 
 #include <cmath>
 #include <cstdio>
