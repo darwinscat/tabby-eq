@@ -220,6 +220,61 @@ std::pair<juce::Point<float>, juce::Point<float>> EqCurveDisplay::whiskerEnds (i
     return { { e.left.x, e.left.y }, { e.right.x, e.right.y } };
 }
 
+// --- point dynamics (DYNAMICS.md § 8) --------------------------------------------------------------
+bool EqCurveDisplay::dynRelevant (int b) const noexcept
+{
+    // Gain-bearing types only. The five gainless ones (HP/LP/notch/all-pass/band-pass) have no gain for
+    // a detector to modulate, so a dynamics affordance on them would be a control that does nothing.
+    return b >= 0 && b < tabby::kNumBands && traces.param (b).on && hasGain (traces.param (b).type);
+}
+
+bool EqCurveDisplay::dynShowsGrip (int b, int lane, Hit hoverHit) const noexcept
+{
+    if (! dynRelevant (b) || ! laneOn (b, lane)) return false;
+    if (traces.param (b).dyn.rangeDb != 0.0) return true;                    // a real range is permanent state
+    if (draggingRange && b == draggingBand && lane == draggingLane) return true;
+    if (b == selBand && lane == selLane) return true;                        // selected -> offer the gesture
+    return hoverHit.band == b && hoverHit.lane == lane;                       // hovered -> ditto
+}
+
+float EqCurveDisplay::dynHandleY (int b, int lane) const noexcept
+{
+    const auto&  lp = traces.param (b).lanes[(size_t) lane];
+    const double r  = traces.param (b).dyn.rangeDb;
+    if (r == 0.0) return nodePos (b, lane).y + kNodeR + kDynGrip;            // resting grip, clear of the node's ring + halo
+    return dbToY (juce::jlimit (-kGainMax, kGainMax, lp.gainDb + r));
+}
+
+double EqCurveDisplay::dynLiveDeltaDb (int b, int lane) const noexcept
+{
+    return (double) proc.dynamicDeltaDb (b, lane);
+}
+
+int EqCurveDisplay::dynHandleAt (juce::Point<float> p, int& laneOut) const noexcept
+{
+    const Hit hov = nodeAt (p);
+    for (int b = 0; b < tabby::kNumBands; ++b)
+    {
+        if (! dynRelevant (b)) continue;
+        for (int L = 0; L < teq::kNumLanes; ++L)
+        {
+            if (! laneOn (b, L) || ! dynShowsGrip (b, L, hov)) continue;
+            const auto  pos = nodePos (b, L);
+            const float hy  = dynHandleY (b, L);
+            // Nearer to the handle than to its own node — the resting grip lives close enough that
+            // the node's grab radius would otherwise swallow it.
+            if (std::abs (p.x - pos.x) < 10.0f && std::abs (p.y - hy) < 8.0f
+                && std::abs (p.y - hy) < std::abs (p.y - pos.y))
+            {
+                laneOut = L;
+                return b;
+            }
+        }
+    }
+    laneOut = 0;
+    return -1;
+}
+
 juce::Colour EqCurveDisplay::bandColour (int b) const noexcept
 {
     if (perBandColors)   // hand-picked fixed colour per band slot
@@ -292,7 +347,11 @@ void EqCurveDisplay::endDragGesture()
     driveAudition (false);   // never leave the drag-audition latched
     if (draggingBand >= 0)
     {
-        if (draggingQ)
+        if (draggingRange)
+        {
+            if (auto* rp = proc.apvts.getParameter (tabby::bandId (draggingBand, "dyn_range"))) rp->endChangeGesture();
+        }
+        else if (draggingQ)
         {
             if (auto* prm = proc.apvts.getParameter (laneParamId (draggingBand, draggingLane, whiskerSlope ? "slope" : "q")))
                 prm->endChangeGesture();
@@ -312,6 +371,7 @@ void EqCurveDisplay::endDragGesture()
     draggingLane = 0;
     draggingGain = false;
     draggingQ    = false;
+    draggingRange = false;
     qDragSide    = 0;
     whiskerSlope = false;
 }
@@ -347,28 +407,28 @@ void EqCurveDisplay::setToolbar (juce::Component* t) noexcept
 // 0 — Classic: the original. Centre the strip on the node, above it (below if it'd clip the top), clamp.
 juce::Rectangle<int> EqCurveDisplay::placeClassic (juce::Point<float> node) const noexcept
 {
-    const int W = kToolbarW;
+    const int W = toolbarW();
     int tx = (int) (node.x - (float) W * 0.5f);
-    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);            // above the node...
+    int ty = (int) (node.y - kNodeR - 12.0f - toolbarH());            // above the node...
     if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);               // ...or below if no room
     tx = juce::jlimit (2, juce::jmax (2, getWidth()  - W - 2), tx);
     ty = juce::jlimit (2, stripMaxY(), ty);
-    return { tx, ty, W, kToolbarH };
+    return { tx, ty, W, toolbarH() };
 }
 
 // 1 — Anchor-to-open-side: don't straddle the node. Sit it just inside one horizontal end and extend into the
 // larger canvas gap, so it covers (at most) the neighbours on the emptier side instead of both sides at once.
 juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) const noexcept
 {
-    const int   W     = kToolbarW;
+    const int   W     = toolbarW();
     const bool right = node.x < (float) getWidth() * 0.5f;           // more room to the right → extend right
     int tx = right ? (int) (node.x - (float) W * 0.12f)
                    : (int) (node.x - (float) W * 0.88f);
-    int ty = (int) (node.y - kNodeR - 12.0f - kToolbarH);
+    int ty = (int) (node.y - kNodeR - 12.0f - toolbarH());
     if (ty < 2) ty = (int) (node.y + kNodeR + 12.0f);
     tx = juce::jlimit (2, juce::jmax (2, getWidth()  - W - 2), tx);
     ty = juce::jlimit (2, stripMaxY(), ty);
-    return { tx, ty, W, kToolbarH };
+    return { tx, ty, W, toolbarH() };
 }
 
 // 2/3 core — score 8 candidate slots around the node (above/below/left/right + diagonals) by how many OTHER
@@ -376,7 +436,7 @@ juce::Rectangle<int> EqCurveDisplay::placeAnchorSide (juce::Point<float> node) c
 // flicker while dragging). Returns the clamped winner + its post-clamp occlusion + slot index.
 juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept
 {
-    const float gap = kNodeR + 12.0f, W = (float) kToolbarW, H = (float) kToolbarH;
+    const float gap = kNodeR + 12.0f, W = (float) toolbarW(), H = (float) toolbarH();
     const juce::Point<float> cand[8] = {
         { node.x - W * 0.5f,  node.y - gap - H },   // 0 above-center
         { node.x - W * 0.5f,  node.y + gap     },   // 1 below-center
@@ -413,7 +473,7 @@ juce::Rectangle<int> EqCurveDisplay::bestFloatCandidate (juce::Point<float> node
     const int ty = juce::jlimit (2, stripMaxY(), (int) cand[best].y);
     const juce::Rectangle<float> rc ((float) tx, (float) ty, W, H);
     occlOut = 0; for (int i = 0; i < no; ++i) if (rc.contains (others[i])) ++occlOut;
-    return { tx, ty, (int) W, kToolbarH };
+    return { tx, ty, (int) W, toolbarH() };
 }
 
 void EqCurveDisplay::positionToolbar()
@@ -447,10 +507,10 @@ void EqCurveDisplay::positionToolbar()
             if (occl > 0)   // no clean local slot → dock to the far horizontal edge
             {
                 const bool dockTop = node.y > (float) getHeight() * 0.5f;
-                const int W  = kToolbarW;
+                const int W  = toolbarW();
                 const int tx = juce::jlimit (2, juce::jmax (2, getWidth() - W - 2), (int) (node.x - (float) W * 0.5f));
                 const int ty = dockTop ? 2 : stripMaxY();
-                b = { tx, ty, W, kToolbarH };
+                b = { tx, ty, W, toolbarH() };
                 lastPlaceSlot = -2;   // docked
             }
             else lastPlaceSlot = slot;
@@ -461,8 +521,8 @@ void EqCurveDisplay::positionToolbar()
             // FabFilter-style: the strip lives in the reserved bottom lane and only slides horizontally to
             // track the selected band's frequency. Nodes can't enter the lane (dbToY squeezes them above it),
             // so the strip can never occlude a node; it sits at the lane top, clear of the freq axis below it.
-            b = { juce::jlimit (2, juce::jmax (2, getWidth() - kToolbarW - 2), (int) (node.x - (float) kToolbarW * 0.5f)),
-                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), kToolbarW, kToolbarH };
+            b = { juce::jlimit (2, juce::jmax (2, getWidth() - toolbarW() - 2), (int) (node.x - (float) toolbarW() * 0.5f)),
+                  juce::jlimit (2, stripMaxY(), plotBottomY() + 3), toolbarW(), toolbarH() };
             break;
 
         case ToolbarPlace::Classic:
@@ -494,7 +554,7 @@ void EqCurveDisplay::resized()
 }
 
 // Lowest allowed toolbar TOP: keeps the strip's bottom above the freq-axis label strip at the very bottom.
-int EqCurveDisplay::stripMaxY() const noexcept { return juce::jmax (2, getHeight() - kToolbarH - kBottomAxisH); }
+int EqCurveDisplay::stripMaxY() const noexcept { return juce::jmax (2, getHeight() - toolbarH() - kBottomAxisH); }
 
 double EqCurveDisplay::nextGainStep (double r) noexcept   // smallest step strictly greater than r (clamps at the max)
 {
@@ -961,6 +1021,72 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         }
     }
 
+    // --- point dynamics: the range band, the live GR ride, and the grab handle --------------------
+    // Drawn UNDER the nodes so the node always stays the thing you click. In a FIR phase mode the
+    // whole affordance is greyed: dynamics is bypassed there (a moving target cannot be baked into a
+    // static IR), and a range band drawn in full colour would promise movement that isn't happening.
+    {
+        const bool firMode = ((int) (proc.apvts.getRawParameterValue ("phaseMode")->load() + 0.5f)) >= 1;
+        const Hit  hov     = nodeAt (hoverPos);   // once per frame, not once per node
+        for (int b = 0; b < tabby::kNumBands; ++b)
+        {
+            if (! dynRelevant (b)) continue;
+            const auto& dp = traces.param (b).dyn;
+            for (int L = 0; L < teq::kNumLanes; ++L)
+            {
+                if (! laneOn (b, L) || ! dynShowsGrip (b, L, hov)) continue;
+                const auto  pos = nodePos (b, L);
+                const float hy  = dynHandleY (b, L);
+                const auto  col = firMode ? juce::Colours::grey : nodeColour (b, L);
+                // Switched off (or bypassed by the phase mode) reads as HOLLOW: the range is still there,
+                // and still yours, but nothing is riding it.
+                const bool  live = dp.on && ! firMode;
+                const float a    = firMode ? 0.35f : (dp.on ? 1.0f : 0.55f);
+
+                if (dp.rangeDb != 0.0)   // the range TRACK: how far this point may move, and which way
+                {
+                    juce::Rectangle<float> track (pos.x - kDynBandW * 0.5f, juce::jmin (pos.y, hy),
+                                                  kDynBandW, std::abs (hy - pos.y));
+                    g.setColour (col.withAlpha (0.18f * a));
+                    g.fillRoundedRectangle (track, kDynBandW * 0.5f);
+
+                    // ...and the FILLED part: where the gain actually sits this instant. Reading the
+                    // published delta (not re-deriving it) is what keeps the picture honest — it is the
+                    // same number the engine applied, so the bar cannot drift from the sound.
+                    const double d = live ? dynLiveDeltaDb (b, L) : 0.0;
+                    if (std::abs (d) > 0.05)
+                    {
+                        const float ly = dbToY (juce::jlimit (-kGainMax, kGainMax,
+                                                              traces.param (b).lanes[(size_t) L].gainDb + d));
+                        juce::Rectangle<float> live (pos.x - kDynBandW * 0.5f, juce::jmin (pos.y, ly),
+                                                     kDynBandW, std::abs (ly - pos.y));
+                        g.setColour (col.withAlpha (0.55f * a));
+                        g.fillRoundedRectangle (live, kDynBandW * 0.5f);
+                        // the riding node: a hollow ghost of the real one, at the gain being played NOW
+                        g.setColour (col.withAlpha (0.85f * a));
+                        g.drawEllipse (pos.x - kNodeR + 1.5f, ly - kNodeR + 1.5f, (kNodeR - 1.5f) * 2, (kNodeR - 1.5f) * 2, 1.4f);
+                    }
+                }
+
+                // The handle itself. At rest it sits clear of the node with a dotted tether, so it reads
+                // as "pull me away" rather than as a stray mark; the dark outline keeps it legible over
+                // the curve fill, the spectrum and the grid alike.
+                if (dp.rangeDb == 0.0)
+                {
+                    g.setColour (col.withAlpha (0.35f * a));
+                    for (float y = pos.y + kNodeR + 3.0f; y < hy - 3.0f; y += 4.0f)
+                        g.fillRect (pos.x - 0.75f, y, 1.5f, 2.0f);
+                }
+                const juce::Rectangle<float> grip (pos.x - 7.0f, hy - 2.5f, 14.0f, 5.0f);
+                g.setColour (juce::Colours::black.withAlpha (0.55f * a));
+                g.fillRoundedRectangle (grip.expanded (1.0f), 3.0f);
+                g.setColour (col.withAlpha ((dp.rangeDb != 0.0 ? 1.0f : 0.85f) * a));
+                if (live || dp.rangeDb == 0.0) g.fillRoundedRectangle (grip, 2.5f);
+                else                           g.drawRoundedRectangle (grip, 2.5f, 1.4f);   // off: hollow
+            }
+        }
+    }
+
     // --- nodes (one per enabled lane; ≥ 2 lanes -> lane colour + permanent badge) ------------------
     auto drawNode = [&] (int b, int lane)
     {
@@ -1390,6 +1516,25 @@ void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
+    // The dynamic handle, BEFORE the "+" placement test: the resting grip sits a couple of dozen pixels
+    // under its node, which for a boosted bell is right on the 0 dB add line — so "+" would swallow the
+    // grab and start placing a band instead. Dragging the handle also ARMS dynamics: the FabFilter
+    // gesture is to pull the range out, not to switch a mode on and then hunt for a range.
+    {
+        int hl = 0;
+        const int hb = dynHandleAt (e.position, hl);
+        if (hb >= 0)
+        {
+            selectBand (hb, hl);
+            draggingBand = hb; draggingLane = hl; draggingRange = true;
+            proc.beginHistoryGesture ("Dynamics Band " + juce::String (hb + 1));   // arm + range = ONE step
+            if (auto* rp = proc.apvts.getParameter (tabby::bandId (hb, "dyn_range"))) rp->beginChangeGesture();
+            grabKeyboardFocus();
+            repaint();
+            return;
+        }
+    }
+
     // "+" near a trigger line -> start a press-drag placement (drag to set gain, release to commit)
     const auto addBtn = addButtonAt();
     if (addBtn.x >= 0.0f)
@@ -1489,6 +1634,18 @@ void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
     const double laneF0 = traces.param (draggingBand).lanes[(size_t) draggingLane].freq;   // the dragged lane
     lastDragFreq = (float) (draggingQ ? laneF0 : xToFreq (e.position.x));
     driveAudition (e.mods.isAltDown(), lastDragFreq, audQSetting);                            // Alt = narrow band-listen
+    if (draggingRange)   // dynamic handle: the cursor IS the range end, so the band grows under your hand
+    {
+        const auto&  lp = traces.param (draggingBand).lanes[(size_t) draggingLane];
+        const double r  = juce::jlimit (-24.0, 24.0, yToDb (e.position.y) - lp.gainDb);
+        // Dead zone at the node: a range under a tenth of a dB is not a setting anyone meant, and 0 is
+        // the documented disengage — so a handle dragged home genuinely switches the movement off.
+        setParam (tabby::bandId (draggingBand, "dyn_range"), std::abs (r) < 0.1 ? 0.0 : r);
+        if (std::abs (r) >= 0.1 && proc.apvts.getRawParameterValue (tabby::bandId (draggingBand, "dyn_on"))->load() < 0.5f)
+            setParamGestured (tabby::bandId (draggingBand, "dyn_on"), 1.0);   // pulling a range arms the point
+        positionToolbar();
+        return;
+    }
     if (draggingQ)      // Neutron-style Q-whisker drag: handle distance from centre -> bandwidth -> Q
     {
         const double fx = xToFreq (e.position.x);
@@ -1660,6 +1817,9 @@ juce::Point<float> EqCurveDisplay::addButtonAt() const noexcept
             return { -1.0f, -1.0f };
     }
 
+    // ...nor over a dynamic handle, for the same reason: it is a grab target sitting near the 0 dB line.
+    { int hl = 0; if (dynHandleAt (hoverPos, hl) >= 0) return { -1.0f, -1.0f }; }
+
     bool anyFree = false;
     for (int i = 0; i < tabby::kNumBands; ++i) if (! traces.param (i).on) { anyFree = true; break; }
     if (! anyFree)                                        return { -1.0f, -1.0f };   // all bands used
@@ -1671,6 +1831,24 @@ void EqCurveDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
     refreshDesigns();
     const Hit hit = nodeAt (e.position);
+
+    // Double-click on the dynamic handle = the on/off switch for the point's dynamics, and it KEEPS the
+    // range: switching off is a comparison ("does this even help?"), not a decision to redial. Same
+    // reasoning as the per-band ghost below — the state stays, only its effect stops. Checked first, so
+    // a handle sitting near the 0 dB line never falls through to the add-a-band path.
+    {
+        int hl = 0;
+        const int hb = dynHandleAt (e.position, hl);
+        if (hb >= 0)
+        {
+            const bool on = proc.apvts.getRawParameterValue (tabby::bandId (hb, "dyn_on"))->load() > 0.5f;
+            proc.beginHistoryGesture ((on ? "Dynamics Off Band " : "Dynamics On Band ") + juce::String (hb + 1));
+            setParamGestured (tabby::bandId (hb, "dyn_on"), on ? 0.0 : 1.0);
+            proc.endHistoryGesture();
+            repaint();
+            return;
+        }
+    }
 
     // The band this very click sequence just created is NOT a bypass target. On empty canvas the
     // FIRST click already adds a band (the "+" press-drag placement commits on release), so by the

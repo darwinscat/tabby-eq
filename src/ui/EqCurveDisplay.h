@@ -164,6 +164,22 @@ private:
     double compositeDbAxis (double f, teq::Axis a) const noexcept;   // one stereo axis composite (dB), from the cache
     juce::Point<float> nodePos (int band, int lane) const noexcept;
     std::pair<juce::Point<float>, juce::Point<float>> whiskerEnds (int b, int lane) const noexcept;
+
+    // --- point dynamics (DYNAMICS.md § 8) ------------------------------------------------------------
+    // The dynamic handle hangs off the node at the far end of the range; with no range yet it rests one
+    // grip-length below, which is the affordance the whole feature is dragged out of. Affordances exist
+    // only for gain-bearing types (a notch or an all-pass has no gain to modulate) and only on a node the
+    // user is already looking at — selected or hovered — unless the point already carries a range, in
+    // which case the band is permanent state and always drawn.
+    bool  dynRelevant  (int b) const noexcept;                       // the point's type can carry dynamics at all
+    // `hoverHit` is passed in rather than looked up inside: this runs per node inside paint, and a
+    // nodeAt() per node would rescan every node — 120 × 120 distance tests a frame.
+    bool  dynShowsGrip (int b, int lane, Hit hoverHit) const noexcept;   // draw/hit the grab handle right now
+    float dynHandleY   (int b, int lane) const noexcept;             // y of the handle (range end, or the resting grip)
+    double dynLiveDeltaDb (int b, int lane) const noexcept;          // the published GR for this lane (0 when idle)
+    // The handle under a point, or band -1. ONE home for the grab geometry: mouseDown grabs by it and
+    // addButtonAt() suppresses the "+" over it, so the two can never disagree about where the handle is.
+    int   dynHandleAt (juce::Point<float> p, int& laneOut) const noexcept;
     juce::Colour bandColour (int b) const noexcept;    // per-band (or per-type) colour
     juce::Colour nodeColour (int b, int lane) const noexcept;   // lane colour for split points, else per-band
     double       bandDb (int b, double f, int lane) const noexcept;   // one lane's response (dB)
@@ -189,6 +205,10 @@ private:
     juce::Rectangle<int> placeClassic    (juce::Point<float> node) const noexcept;   // 0: centered above/below + clamp
     juce::Rectangle<int> placeAnchorSide (juce::Point<float> node) const noexcept;   // 1: extend into the open side
     juce::Rectangle<int> bestFloatCandidate (juce::Point<float> node, int& occlOut, int& slotOut) const noexcept;   // 2/3 core
+    // The strip's LIVE size — it grows sideways when the dynamics panel is disclosed, so placement must
+    // ask the component rather than trust the constants (which are only the collapsed defaults).
+    int    toolbarH() const noexcept { return toolbar != nullptr && toolbar->getHeight() > 0 ? toolbar->getHeight() : kToolbarH; }
+    int    toolbarW() const noexcept { return toolbar != nullptr && toolbar->getWidth()  > 0 ? toolbar->getWidth()  : kToolbarW; }
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
@@ -212,6 +232,7 @@ private:
     bool draggingGain = false;
     double gainDragRefY = 0.0, gainDragRefGain = 0.0;   // relative gain-drag anchor (re-based on auto-zoom)
     bool draggingQ    = false;   // dragging a Q-whisker handle (sets bandwidth, not freq/gain)
+    bool draggingRange = false;  // dragging the dynamic handle (sets dyn range, and arms dynamics)
     int  qDragSide    = 0;       // which handle: +1 right / -1 left (clamps to its side, no crossing)
     bool whiskerSlope = false;   // the dragged whisker sets slope (HP/LP) rather than Q
 
@@ -251,9 +272,11 @@ private:
     enum class AudVisual { Spotlight, Bell };
     AudVisual audVisual = AudVisual::Bell;            // how the audition is drawn (View option)
     juce::Component* toolbar = nullptr;               // floating per-band toolbar (owned by the editor)
-    static constexpr int kToolbarW    = 218, kToolbarH = 64;   // fixed size = EXACTLY the strip's top-row buttons +
-                                                               // margins (see BandEditStrip::resized) — the strip
-                                                               // never resizes between selections
+    static constexpr int kToolbarW    = 234, kToolbarH = 64;   // COLLAPSED size = EXACTLY the strip's top-row buttons +
+                                                               // margins + the DYN rail (see BandEditStrip::resized).
+                                                               // The HEIGHT never changes; the WIDTH grows when the
+                                                               // dynamics panel is disclosed, which is why placement
+                                                               // reads toolbarW()/toolbarH(), not these
     static constexpr int kBottomAxisH = 16;           // freq-label strip at the very bottom the edit-strip must NOT cover
     // Right gutter reserved for the two scales — a CONSTANT number of pixels, never a fraction of
     // the width. The plot (grid, curves, spectrum, fog, the Nyquist hairline) stops at its left
@@ -302,6 +325,8 @@ private:
     static constexpr double kSpecTop   = 6.0,  kSpecBottom = -90.0;
     static constexpr float  kNodeR     = eqview::handles::kNodeR;   // single home = HandleMath (drawing + hit-tests share it)
     static constexpr float  kAddThreshold = 36.0f;       // px from the curve to surface the "+" add button
+    static constexpr float  kDynGrip   = 16.0f;          // resting offset of the dynamic handle below a node (px)
+    static constexpr float  kDynBandW  = 7.0f;           // width of the range band drawn under the node
     static constexpr float  kPeakFallDb = 0.8f;          // peak-hold fall (~24 dB/s at 30 Hz)
     static constexpr double kTiltDbPerOct = 4.5;         // analyzer tilt — pink-noise comp, like Pro-Q / Neutron
     static constexpr double kTiltPivotHz  = 1000.0;      // tilt pivot (highs lift, lows drop around 1 kHz)
