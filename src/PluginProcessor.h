@@ -124,6 +124,9 @@ public:
     // Pull the latest analyzer frame; reports the FFT order it was captured at (the UI discards a frame
     // whose order != the resolution it currently wants, so a live switch never shows a wrong-size frame).
     bool pullSpectrum (bool pre, float* dst, int& outOrder) noexcept { return (pre ? *preTap : *postTap).tryPull (dst, outOrder); }
+    // …and the hop that actually happened before this frame (samples pushed since the previous publish):
+    // the multi-resolution pane Welch-covers exactly that interval, so a click between two frames is seen.
+    bool pullSpectrum (bool pre, float* dst, int& outOrder, int& outHop) noexcept { return (pre ? *preTap : *postTap).tryPull (dst, outOrder, outHop); }
 
     // Analyzer domain: which signal the spectrum shows — 0 Stereo (ch0) / 1 Mid (L+R)/2 / 2 Side (L-R)/2.
     void  setSpectrumDomain (int d) noexcept { spectrumDomain.store (d, std::memory_order_relaxed); }
