@@ -29,6 +29,7 @@ option(TABBYEQ_BUILD_PLUGIN     "Build the JUCE plugin (VST3/AU/Standalone/CLAP)
 option(TABBYEQ_BUILD_TESTS      "Build the headless adapter lifecycle/misuse test (ctest)"        OFF)
 option(TABBYEQ_BUILD_CORE_TESTS "Build + ctest felitronics-core's JUCE-free self-tests"           ON)
 option(TABBYEQ_ENABLE_SANITIZERS "Instrument TabbyEQ's own sources with ASan+UBSan (Clang/GCC)"   OFF)
+option(TABBYEQ_WITH_PFFFT       "Analyzer spectrum panes on felitronics-core's pffft SIMD FFT (ordered backend); the scalar reference otherwise" OFF)
 
 if(TABBYEQ_ENABLE_SANITIZERS AND NOT (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU"))
     message(FATAL_ERROR "TABBYEQ_ENABLE_SANITIZERS requires Clang or GCC (MSVC has no UBSan).")
@@ -64,6 +65,12 @@ endfunction()
 include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
 set(TABBYEQ_FCORE_TAG "v0.22.1" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+if(TABBYEQ_WITH_PFFFT)
+    # The core's optional compiled backend (pffft, BSD — recorded in THIRD_PARTY_NOTICES.md there). Only the
+    # analyzer rides it (SpectrumPaneT / MultiResSpectrumPaneT<…, PffftOrderedRealFft>); the audio path is
+    # unchanged — the FIR modes keep the core's default convolver backend.
+    set(FELITRONICS_WITH_PFFFT ON CACHE BOOL "felitronics-core: build the pffft backend (TabbyEQ's analyzer rides it)" FORCE)
+endif()
 set(FELITRONICS_BUILD_TESTS ${TABBYEQ_BUILD_CORE_TESTS})   # keep the JUCE-free core self-tests in this repo's `ctest` (unless the sanitizer job opts out)
 enable_testing()                  # so this repo's ctest discovers felitronics-core's suites + our adapter test (top-level)
 if(TABBYEQ_FCORE_DIR AND EXISTS "${TABBYEQ_FCORE_DIR}/CMakeLists.txt")
@@ -242,6 +249,11 @@ target_link_libraries(TabbyEQ PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+if(TABBYEQ_WITH_PFFFT)
+    # EqCurveDisplay.h picks the panes' FFT on this definition; every TU of the plugin target sees the same one.
+    target_compile_definitions(TabbyEQ PRIVATE TABBYEQ_WITH_PFFFT=1)
+    target_link_libraries(TabbyEQ PRIVATE felitronics::fftpffft)
+endif()
 
 # Re-sign the Standalone ad-hoc with the correct bundle id so macOS TCC (mic access) persists
 # across rebuilds — JUCE's linker-sign otherwise uses the exe name ("TabbyEQ") as the identifier.

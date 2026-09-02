@@ -10,15 +10,27 @@
 #include <felitronics/analysis/PlotMap.h>
 #include <felitronics/analysis/SpectrumPane.h>
 #include <felitronics/analysis/MultiResSpectrumPane.h>
+#if TABBYEQ_WITH_PFFFT
+ #include <felitronics/fftpffft/PffftOrderedRealFft.h>
+#endif
 
 // PlotMap and SpectrumPane graduated from the eqview incubator to felitronics-core once OrbitAmp
 // became their second consumer; the eqview names keep reading as before. MultiResSpectrumPane was
 // born in core (docs/ANALYZER-MULTIRES.md there) — the constant-Q sibling of the classic pane.
+// Both panes take their FFT as a parameter: the core's scalar reference, or — with the build option
+// TABBYEQ_WITH_PFFFT — pffft's SIMD transform in packed order (≈3× cheaper per tick, bit-for-bit the
+// same picture: nulled against the scalar in the core's pffft suite). Only the analyzer changes; the
+// audio path does not.
 namespace eqview
 {
 using felitronics::analysis::PlotMap;
-using felitronics::analysis::SpectrumPane;
-using felitronics::analysis::MultiResSpectrumPane;
+#if TABBYEQ_WITH_PFFFT
+using PaneFft = felitronics::fftpffft::PffftOrderedRealFft;
+#else
+using PaneFft = felitronics::core::fft::DefaultRealFft;
+#endif
+using SpectrumPane         = felitronics::analysis::SpectrumPaneT<PaneFft>;
+using MultiResSpectrumPane = felitronics::analysis::MultiResSpectrumPaneT<felitronics::analysis::RollingSpectrumTap::kMaxOrder, 4, PaneFft>;
 }
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
