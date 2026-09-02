@@ -831,20 +831,22 @@ void EqCurveDisplay::setAnalyzerFft (bool pffft)
 void EqCurveDisplay::buildSpectrumPaths (const eqview::PaneBox& pane, juce::Path& fillOut, juce::Path& peakOut) const
 {
     const auto pm = plotMap();
-    float lastY = pm.height;
+    float lastYFill = pm.height, lastYPeak = pm.height;
     pane.buildColumns (pm, traces.sampleRate(), anaTilt, kTiltPivotHz,
         [&] (int i, float x, float yS, float yP)
         {
             if (i == 0) { fillOut.startNewSubPath (0.0f, pm.height); fillOut.lineTo (0.0f, yS); peakOut.startNewSubPath (x, yP); }
             else          peakOut.lineTo (x, yP);
             fillOut.lineTo (x, yS);
-            lastY = yS;
+            lastYFill = yS; lastYPeak = yP;
         });
-    // Run the last column's level out to the component edge, not to the axis: the spectrum crosses
-    // the axis with the curve and dissolves with it (see the gutter fade in paint).
+    // Run each trace's OWN last level out to the component edge, not to the axis: the spectrum crosses
+    // the axis with the curve and dissolves with it (see the gutter fade in paint). The peak line used
+    // to be run out to the FILL's last level — a slanted segment across the gutter whenever the two
+    // traces differed at the axis, i.e. almost always (Oleh's "полосочка" at the right edge).
     const float tailX = (float) getWidth();
-    peakOut.lineTo (tailX, lastY);
-    fillOut.lineTo (tailX, lastY); fillOut.lineTo (tailX, pm.height); fillOut.closeSubPath();
+    peakOut.lineTo (tailX, lastYPeak);
+    fillOut.lineTo (tailX, lastYFill); fillOut.lineTo (tailX, pm.height); fillOut.closeSubPath();
 }
 
 void EqCurveDisplay::timerCallback()
