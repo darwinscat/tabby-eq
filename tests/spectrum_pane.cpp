@@ -106,14 +106,16 @@ int main()
         const double held = fillDbAt (fBin);
         for (int i = 0; i < 15; ++i) p.starve();                   // within the hold window
         check (nearEq (fillDbAt (fBin), held, 1.0e-6), "starve holds the spectrum for 15 ticks");
-        // THEORY PIN: the fade is v <- v + 0.05*(-120 - v) = 0.95*v - 6, applied for the FIRST
-        // time on exactly the 16th starve tick. The fade is affine and column interpolation is
-        // linear, so the probe transforms by the same map — the expected values are exact.
+        // THEORY PIN: the fade is v <- v + 0.05*(floor - v) = 0.95*v - 10 with the pane's -200 dB
+        // floor (it was -120 until the tilted floor surfaced as a line — see the header), applied for
+        // the FIRST time on exactly the 16th starve tick. The fade is affine and column interpolation
+        // is linear, so the probe transforms by the same map — the expected values are exact.
+        constexpr double kFloor = Pane::kFloorDb;
         p.starve();
-        const double afterOne = 0.95 * held - 6.0;
+        const double afterOne = 0.95 * held + 0.05 * kFloor;
         check (nearEq (fillDbAt (fBin), afterOne, 0.05), "fade starts EXACTLY on the 16th tick, rate 0.05");
         p.starve();
-        check (nearEq (fillDbAt (fBin), 0.95 * afterOne - 6.0, 0.05), "fade continues at exactly 0.05 per tick");
+        check (nearEq (fillDbAt (fBin), 0.95 * afterOne + 0.05 * kFloor, 0.05), "fade continues at exactly 0.05 per tick");
         for (int i = 0; i < 28; ++i) p.starve();                   // genuinely starved -> fades on down
         check (fillDbAt (fBin) < held - 3.0, "genuine starvation fades toward the floor");
     }
@@ -130,10 +132,11 @@ int main()
         check (xMonotonic && nearEq (lastX, pm.width, 1e-3), "columns ascend and end at width");
 
         // tilt: at the pivot the tilted and untilted values must agree; above it the tilt LIFTS
-        // (higher dB -> smaller y). The silent pane sits at -120 dB, BELOW the display floor of the
-        // default scale (everything would clamp to the bottom and hide the tilt) — so probe on a
-        // deeper scale whose floor keeps -120 dB inside the plot: 6..-186 over 96 px = 2 dB/px.
-        eqview::PlotMap deep = pm; deep.specBottom = -186.0;
+        // (higher dB -> smaller y). The silent pane sits at the -200 dB floor, BELOW the display
+        // floor of the default scale (everything would clamp to the bottom and hide the tilt) — so
+        // probe on a deeper scale that keeps the floor inside the plot: 6..-300 over 153 px = 2 dB/px.
+        // (On the real display the tilted floor stays under the bottom — that is the point of -200.)
+        eqview::PlotMap deep = pm; deep.height = 153.0f; deep.plotBottom = 153.0f; deep.specBottom = -300.0;
         float yPivotNoTilt = 0, yPivotTilt = 0, yHiNoTilt = 0, yHiTilt = 0;
         const double xPivot = deep.freqToX (1000.0), xHi = deep.freqToX (8000.0);
         auto grab = [&] (double tilt, float& yPv, float& yHi8k)
@@ -166,8 +169,8 @@ int main()
     // --- crew pins (codex round): the constants that define the LOOK must not drift silently ----
     {
         // deep probe scale: 6..-186 dBFS over 96 px = 2 dB/px -> dB = 6 - 2*y (keeps -120 visible)
-        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 96.0f; deep.plotBottom = 96.0f;
-        deep.specTop = 6.0; deep.specBottom = -186.0;
+        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 153.0f; deep.plotBottom = 153.0f;
+        deep.specTop = 6.0; deep.specBottom = -300.0;   // 2 dB/px, deep enough to hold the -200 floor and one tick up from it
         auto fillDbAt = [&] (Pane& p, double fs, double fHz)
         {
             float best = 0.0f; double bestDx = 1.0e9; const double xT = deep.freqToX (fHz);
@@ -176,15 +179,15 @@ int main()
             return 6.0 - 2.0 * (double) best;
         };
 
-        // 0.25 smoothing: ONE ingest from the -120 floor toward a ~0 dB exact-bin sine lands at
-        // ~-90 dB (-120 + 0.25*120). A changed smoothing constant moves this by tens of dB.
+        // 0.25 smoothing: ONE ingest from the -200 floor toward a ~0 dB exact-bin sine lands at
+        // ~-150 dB (-200 + 0.25*200). A changed smoothing constant moves this by tens of dB.
         { Pane p; feedSine (p, 100, 1);
-          check (nearEq (fillDbAt (p, 48000.0, 100.0 * 48000.0 / kN2048), -90.0, 2.5), "0.25 smoothing: first tick lands at ~-90 dB"); }
+          check (nearEq (fillDbAt (p, 48000.0, 100.0 * 48000.0 / kN2048), -150.0, 2.5), "0.25 smoothing: first tick lands at ~-150 dB"); }
 
-        // zero input stays EXACTLY on the -120 floor (gain 0 -> minus-infinity clamp -> no drift)
+        // zero input stays EXACTLY on the -200 floor (gain 0 -> minus-infinity clamp -> no drift)
         { Pane p; for (int t = 0; t < 3; ++t) { float* in = p.frameInput();
               for (int i = 0; i < kN2048; ++i) in[i] = 0.0f; p.ingest (11); }
-          check (nearEq (fillDbAt (p, 48000.0, 1000.0), -120.0, 1e-3), "zero input holds the -120 dB floor"); }
+          check (nearEq (fillDbAt (p, 48000.0, 1000.0), (double) Pane::kFloorDb, 1e-3), "zero input holds the -200 dB floor"); }
 
         // DC packing (spec[0], im forced 0): windowed DC reads ~+6 dB at bin 0 (Hann sum = N/2,
         // norm = N/4). Probe with a huge fs so the 20 Hz column sits at 98% of bin 0.

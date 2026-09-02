@@ -63,10 +63,12 @@ namespace theory
         return std::abs (X);
     }
 
-    static double binDb (double mag) { const double g = mag / ((double) N * 0.25);
-                                       return g > 0.0 ? std::max (-120.0, 20.0 * std::log10 (g)) : -120.0; }
+    static constexpr double kFloor = -200.0;   // the pane's floor (SpectrumPane::kFloorDb) — deep below any plot bottom
 
-    static double smooth1 (double target) { return -120.0 + 0.25 * (target + 120.0); }   // one tick from the floor
+    static double binDb (double mag) { const double g = mag / ((double) N * 0.25);
+                                       return g > 0.0 ? std::max (kFloor, 20.0 * std::log10 (g)) : kFloor; }
+
+    static double smooth1 (double target) { return kFloor + 0.25 * (target - kFloor); }   // one tick from the floor
 }
 
 //==============================================================================
@@ -78,9 +80,9 @@ struct BinProbe { double fill = 0.0, peak = 0.0; };
 static BinProbe probeBin (const eqview::SpectrumPane& p, double fs, double fHz)
 {
     eqview::PlotMap pm;
-    pm.width = 900.0f; pm.height = 160.0f; pm.plotBottom = 160.0f;
+    pm.width = 900.0f; pm.height = 240.0f; pm.plotBottom = 240.0f;
     pm.freqMin = fHz * 0.9; pm.freqMax = fHz / 0.9;
-    pm.specTop = 20.0; pm.specBottom = -140.0;                       // 160 dB / 160 px = 1 dB/px
+    pm.specTop = 20.0; pm.specBottom = -220.0;                       // 240 dB / 240 px = 1 dB/px; deep enough for one tick up from the -200 floor
     BinProbe out; double bestDx = 1.0e9; const double xT = 450.0;
     p.buildColumns (pm, fs, 0.0, 1000.0, [&] (int, float x, float yF, float yP)
     {
@@ -194,12 +196,12 @@ int main()
         feedSine (p, 100.0, 1);
 
         const double d = theory::binDb (theory::sineBinMag (100.0, 100));
-        double s = -120.0, pk = -120.0;
+        double s = theory::kFloor, pk = theory::kFloor;
         for (int t = 0; t < 40; ++t) { s += 0.25 * (d - s); pk = std::max (pk - 0.8, s); }
         for (int i = 1; i <= L; ++i)
         {
-            if (i >= 16) s += 0.05 * (-120.0 - s);                     // fade starts on the 16th tick
-            pk = std::max (-120.0, pk - 0.8);                          // peak ALWAYS decays while starved
+            if (i >= 16) s += 0.05 * (theory::kFloor - s);             // fade starts on the 16th tick
+            pk = std::max (theory::kFloor, pk - 0.8);                  // peak ALWAYS decays while starved
         }
         s += 0.25 * (d - s); pk = std::max (pk - 0.8, s);              // the returning frame
 
@@ -214,16 +216,17 @@ int main()
     //==========================================================================================
     // [codex #6] Tilt algebra at the axis extremes on a flat (silent) spectrum — negative
     // octaves at 20 Hz must DROP the display, positive at 20 kHz must LIFT it, exactly
-    // d(f) = -120 + 4.5·log2(f/1000), on a 1 dB/px map (y = 40 - d).
+    // d(f) = floor + 4.5·log2(f/1000) with the -200 floor, on a 1 dB/px map deep enough to
+    // hold it (y = 40 - d, bottom at -300).
     {
-        Pane p;                                                        // silent: flat -120 dB
-        eqview::PlotMap pm; pm.width = 900.0f; pm.height = 240.0f; pm.plotBottom = 240.0f;
-        pm.freqMin = 20.0; pm.freqMax = 20000.0; pm.specTop = 40.0; pm.specBottom = -200.0;
+        Pane p;                                                        // silent: flat at the floor
+        eqview::PlotMap pm; pm.width = 900.0f; pm.height = 340.0f; pm.plotBottom = 340.0f;
+        pm.freqMin = 20.0; pm.freqMax = 20000.0; pm.specTop = 40.0; pm.specBottom = -300.0;
         float yFirst = 0.0f, yLast = 0.0f;
         p.buildColumns (pm, fs, 4.5, 1000.0, [&] (int i, float, float yF, float)
         { if (i == 0) yFirst = yF; yLast = yF; });
-        check (nearEq (yFirst, 185.397352854, 0.01), "codex6: tilt at 20 Hz (hand: -120+4.5*log2(0.02))");
-        check (nearEq (yLast,  140.551323573, 0.01), "codex6: tilt at 20 kHz (hand: -120+4.5*log2(20))");
+        check (nearEq (yFirst, 265.397352854, 0.01), "codex6: tilt at 20 Hz (hand: -200+4.5*log2(0.02))");
+        check (nearEq (yLast,  220.551323573, 0.01), "codex6: tilt at 20 kHz (hand: -200+4.5*log2(20))");
     }
 
     //==========================================================================================
@@ -236,8 +239,8 @@ int main()
     {
         Pane p;
         { float* in = p.frameInput(); for (int i = 0; i < theory::N; ++i) in[i] = 1.0f; p.ingest (11); }
-        eqview::PlotMap pm; pm.width = 256.0f; pm.height = 160.0f; pm.plotBottom = 160.0f;
-        pm.freqMin = 120.0; pm.freqMax = 20000.0; pm.specTop = 20.0; pm.specBottom = -140.0;   // 1 dB/px
+        eqview::PlotMap pm; pm.width = 256.0f; pm.height = 240.0f; pm.plotBottom = 240.0f;
+        pm.freqMin = 120.0; pm.freqMax = 20000.0; pm.specTop = 20.0; pm.specBottom = -220.0;   // 1 dB/px, deep enough for one tick up from the -200 floor
         float yFirst = -1.0f;
         p.buildColumns (pm, fs, 0.0, 1000.0, [&] (int i, float, float yF, float) { if (i == 0) yFirst = yF; });
         const double got = 20.0 - (double) yFirst;
@@ -290,20 +293,22 @@ int main()
         const double dbLo = maxFillDb (c, fs, 6.0, -90.0);
         check (nearEq (dbHi - dbLo, 6.02060, 0.01), "opus2: amplitude linearity A vs A/2 == 6.0206 dB");
 
-        // [opus #8] Above-Nyquist axis span at fs=8000 must be a flat floor plateau (clamp to the
-        // Nyquist bin, NO folding of the 390.6 Hz tone upward) while the tone itself reads true.
+        // [opus #8] Above-Nyquist axis span at fs=8000 must be a FLAT plateau (clamp to the Nyquist
+        // bin, NO folding of the 390.6 Hz tone upward) far below the tone, while the tone itself
+        // reads true. (With the -200 floor the plateau is the Nyquist bin's real leakage, not the
+        // floor — flat and deep is the pin, not a particular number.)
         Pane d; feedSine (d, 100.0, 60);
-        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 96.0f; deep.plotBottom = 96.0f;
-        deep.freqMin = 20.0; deep.freqMax = 28000.0; deep.specTop = 6.0; deep.specBottom = -186.0;
-        double dbAt10k = 0.0, bestDx = 1e9; float minY = 1.0e9f;
-        const double xT = deep.freqToX (10000.0);
+        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 153.0f; deep.plotBottom = 153.0f;
+        deep.freqMin = 20.0; deep.freqMax = 28000.0; deep.specTop = 6.0; deep.specBottom = -300.0;   // 2 dB/px
+        double plateauLo = 1e9, plateauHi = -1e9; float minY = 1.0e9f;
+        const double xNyq = deep.freqToX (4000.0 * 1.05);
         d.buildColumns (deep, 8000.0, 0.0, 1000.0, [&] (int, float x, float yF, float)
         {
             minY = std::min (minY, yF);
-            const double dx = std::abs ((double) x - xT);
-            if (dx < bestDx) { bestDx = dx; dbAt10k = 6.0 - 2.0 * (double) yF; }
+            if ((double) x > xNyq) { const double db = 6.0 - 2.0 * (double) yF; plateauLo = std::min (plateauLo, db); plateauHi = std::max (plateauHi, db); }
         });
-        check (dbAt10k <= -119.5, "opus8: above-Nyquist span is a -120 dB plateau (no folding)");
+        check (plateauHi - plateauLo < 0.05, "opus8: above-Nyquist span is one flat plateau (the Nyquist bin repeated, no folding)");
+        check (plateauHi < -100.0,           "opus8: …and it sits far below the tone");
         check (nearEq (6.0 - 2.0 * (double) minY, -0.00424, 0.05), "opus8: the sub-Nyquist tone reads true at fs=8000");
     }
 
@@ -370,9 +375,9 @@ int main()
     // 3*log2(0.02) = -16.932 dB BELOW the pivot (a sign flip would read above; log10/ln misuse
     // reads -7.36/-10.86).
     {
-        Pane p;                                                        // silent: -120 dB flat
-        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 96.0f; deep.plotBottom = 96.0f;
-        deep.freqMin = 20.0; deep.freqMax = 28000.0; deep.specTop = 6.0; deep.specBottom = -186.0;
+        Pane p;                                                        // silent: flat at the -200 floor
+        eqview::PlotMap deep; deep.width = 900.0f; deep.height = 153.0f; deep.plotBottom = 153.0f;
+        deep.freqMin = 20.0; deep.freqMax = 28000.0; deep.specTop = 6.0; deep.specBottom = -300.0;   // 2 dB/px, deep enough for floor + tilt
         double db20 = 0.0, dbPivot = 0.0, b20 = 1e9, bPv = 1e9;
         const double xPv = deep.freqToX (1000.0);
         p.buildColumns (deep, fs, 3.0, 1000.0, [&] (int i, float x, float yF, float)
@@ -381,7 +386,7 @@ int main()
             const double dx = std::abs ((double) x - xPv);
             if (dx < bPv) { bPv = dx; dbPivot = 6.0 - 2.0 * (double) yF; }
         });
-        check (nearEq (dbPivot, -120.0, 0.1), "opus5: tilt is zero at the pivot");
+        check (nearEq (dbPivot, -200.0, 0.1), "opus5: tilt is zero at the pivot");
         check (nearEq (db20 - dbPivot, -16.93157, 0.1), "opus5: 20 Hz sits exactly 3*log2(0.02) dB BELOW the pivot");
     }
 
