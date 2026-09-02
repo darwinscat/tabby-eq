@@ -969,23 +969,38 @@ void EqCurveDisplay::paint (juce::Graphics& g)
 
     // --- spectrum (filled) ------------------------------------------------
     {
+        // Whatever reaches the bottom of the scale DISSOLVES into it: the last few percent of the height
+        // fade every trace to nothing, so a reading below the range never lies along the bottom edge as
+        // a line (it used to — the envelope "creeping" along the floor whenever the signal dropped under
+        // the range). Pro-Q draws its floor the same way. The fade is a strip of pixels, not of dB, so
+        // it looks the same at every Range.
+        const float dissolveTop = h - juce::jmax (18.0f, h * 0.07f);
+        auto dissolving = [&] (juce::Colour c, float alpha)
+        {
+            return juce::ColourGradient (c.withAlpha (alpha), 0.0f, dissolveTop, c.withAlpha (0.0f), 0.0f, h, false);
+        };
         if (showAnaPre)   // pre-EQ first: neutral, dimmed — reads as "the input" behind the coloured post
         {
             juce::Path preFill, prePeak;
             buildSpectrumPaths (anaMulti ? *multiPre : *analyzerPrePane, preFill, prePeak);
-            g.setColour (tabby::palette::text().withAlpha (0.08f));
+            g.setGradientFill (dissolving (tabby::palette::text(), 0.08f));
             g.fillPath (preFill);
-            g.setColour (tabby::palette::text().withAlpha (0.28f));
+            g.setGradientFill (dissolving (tabby::palette::text(), 0.28f));
             g.strokePath (prePeak, juce::PathStrokeType (1.0f));
         }
         if (showAnaPost)
         {
             juce::Path specFill, specPeakPath;
             buildSpectrumPaths (anaMulti ? *multiPost : *analyzer, specFill, specPeakPath);
-            g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
-                                                     tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
+            {
+                juce::ColourGradient fill (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
+                                           tabby::palette::spectrum().withAlpha (0.0f),  0.0f, h, false);
+                fill.addColour (juce::jlimit (0.001, 0.999, (double) ((dissolveTop - h * 0.30f) / (h - h * 0.30f))),
+                                tabby::palette::spectrum().withAlpha (0.05f));   // the old floor alpha, then to nothing
+                g.setGradientFill (fill);
+            }
             g.fillPath (specFill);
-            g.setColour (tabby::palette::spectrum().withAlpha (0.55f));
+            g.setGradientFill (dissolving (tabby::palette::spectrum(), 0.55f));
             g.strokePath (specPeakPath, juce::PathStrokeType (1.0f));
         }
     }
