@@ -51,12 +51,76 @@ namespace
     };
 }
 
+#if TABBYEQ_WITH_PFFFT
+ #include <felitronics/fftpffft/PffftOrderedRealFft.h>
+#endif
+
+namespace eqview
+{
+// One pane in a box: the virtual seam over the core's templates, so the display can hold either backend.
+template <class Pane>
+struct Boxed final : PaneBox
+{
+    Pane pane;
+    float* frameInput() noexcept override                    { return pane.frameInput(); }
+    void   ingest (int order) noexcept override              { pane.ingest (order); }
+    void   starve() noexcept override                        { pane.starve(); }
+    void   reset() noexcept override                         { pane.reset(); }
+    void   setSpeed (float c, float f) noexcept override     { pane.smoothCoeff = c; pane.peakFallDb = f; }
+    void   setCover (int hop) noexcept override
+    {
+        if constexpr (requires { pane.coverSamples; }) pane.coverSamples = hop;
+        else                                            juce::ignoreUnused (hop);
+    }
+    int    frameOrder() const noexcept override
+    {
+        if constexpr (requires { pane.frameOrder(); }) return pane.frameOrder();
+        else                                            return -1;
+    }
+    void   buildColumns (const PlotMap& pm, double fs, double tilt, double pivot,
+                         const std::function<void (int, float, float, float)>& emit) const override
+    {
+        pane.buildColumns (pm, fs, tilt, pivot, [&] (int i, float x, float a, float b) { emit (i, x, a, b); });
+    }
+};
+
+using ScalarFft = felitronics::core::fft::DefaultRealFft;
+constexpr int kTapOrder = felitronics::analysis::RollingSpectrumTap::kMaxOrder;
+
+std::unique_ptr<PaneBox> makeClassicPane (bool pffft)
+{
+   #if TABBYEQ_WITH_PFFFT
+    if (pffft) return std::make_unique<Boxed<felitronics::analysis::SpectrumPaneT<felitronics::fftpffft::PffftOrderedRealFft>>>();
+   #else
+    juce::ignoreUnused (pffft);
+   #endif
+    return std::make_unique<Boxed<felitronics::analysis::SpectrumPaneT<ScalarFft>>>();
+}
+
+std::unique_ptr<PaneBox> makeMultiPane (bool pffft)
+{
+   #if TABBYEQ_WITH_PFFFT
+    if (pffft) return std::make_unique<Boxed<felitronics::analysis::MultiResSpectrumPaneT<kTapOrder, 4, felitronics::fftpffft::PffftOrderedRealFft>>>();
+   #else
+    juce::ignoreUnused (pffft);
+   #endif
+    return std::make_unique<Boxed<felitronics::analysis::MultiResSpectrumPaneT<kTapOrder, 4, ScalarFft>>>();
+}
+
+bool pffftAvailable() noexcept
+{
+   #if TABBYEQ_WITH_PFFFT
+    return true;
+   #else
+    return false;
+   #endif
+}
+} // namespace eqview
+
 EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
 {
-    analyzer.peakFallDb = kPeakFallDb;   // the pane readies its own Hann window / FFT plan / dB arrays
-    multiPost = std::make_unique<eqview::MultiResSpectrumPane>();   // the multi-res pair: tiers + FFT plans + prefix sums
-    multiPre  = std::make_unique<eqview::MultiResSpectrumPane>();
-    for (auto* m : { multiPost.get(), multiPre.get() }) m->peakFallDb = kPeakFallDb;
+    anaFall = kPeakFallDb;
+    makePanes();                        // the four boxes on the scalar backend; the editor's sync may switch them
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
 
@@ -680,7 +744,7 @@ void EqCurveDisplay::pushSpectrum()
         {
             if (proc.pullSpectrum (true, multiPre->frameInput(), got, hop))
             {
-                if (got == want && got == multiPre->frameOrder()) { multiPre->coverSamples = hop; multiPre->ingest (got); }
+                if (got == want && got == multiPre->frameOrder()) { multiPre->setCover (hop); multiPre->ingest (got); }
             }
             else multiPre->starve();
         }
@@ -690,7 +754,7 @@ void EqCurveDisplay::pushSpectrum()
         {
             if (proc.pullSpectrum (false, multiPost->frameInput(), got, hop))
             {
-                if (got == want && got == multiPost->frameOrder()) { multiPost->coverSamples = hop; multiPost->ingest (got); }
+                if (got == want && got == multiPost->frameOrder()) { multiPost->setCover (hop); multiPost->ingest (got); }
             }
             else multiPost->starve();
         }
@@ -700,15 +764,15 @@ void EqCurveDisplay::pushSpectrum()
     }
     if (showAnaPre)
     {
-        if (proc.pullSpectrum (true, analyzerPrePane.frameInput(), got)) { if (got == want) analyzerPrePane.ingest (got); }
-        else                                                             analyzerPrePane.starve();
+        if (proc.pullSpectrum (true, analyzerPrePane->frameInput(), got)) { if (got == want) analyzerPrePane->ingest (got); }
+        else                                                              analyzerPrePane->starve();
     }
     else
         (void) proc.pullSpectrum (true, tapDrain.data(), got);   // keep the hidden tap fresh: an unpulled
     if (showAnaPost)                                             // tap holds its frame, so re-enabling
     {                                                            // would first show STALE audio
-        if (proc.pullSpectrum (false, analyzer.frameInput(), got)) { if (got == want) analyzer.ingest (got); }
-        else                                                       analyzer.starve();
+        if (proc.pullSpectrum (false, analyzer->frameInput(), got)) { if (got == want) analyzer->ingest (got); }
+        else                                                        analyzer->starve();
     }
     else
         (void) proc.pullSpectrum (false, tapDrain.data(), got);
@@ -718,22 +782,14 @@ void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept
 {
     // 0 Slow / 1 Medium / 2 Fast — the spectrum's attack/release feel: per-frame smoothing plus
     // the peak-hold decay, applied to both panes so pre and post always move together.
-    const float coeff = preset == 0 ? 0.12f : preset == 2 ? 0.50f : 0.25f;
-    const float fall  = preset == 0 ? 0.4f  : preset == 2 ? 1.6f  : 0.8f;
-    for (auto* p : { &analyzer, &analyzerPrePane })
-    {
-        p->smoothCoeff = coeff;
-        p->peakFallDb  = fall;
-    }
+    anaSmooth = preset == 0 ? 0.12f : preset == 2 ? 0.50f : 0.25f;
+    anaFall   = preset == 0 ? 0.4f  : preset == 2 ? 1.6f  : 0.8f;
     // Same numbers for the multi panes. Their one-pole runs on POWER (the seam maths needs it), so the
     // feel differs at equal coefficients: attack settles in ~6 ticks instead of ~17, and silence fades as
     // a release (−1.25 dB/tick at Medium) instead of collapsing — analyzer-normal, but "Medium" is not the
     // same motion in both modes.
-    for (auto* m : { multiPost.get(), multiPre.get() })
-    {
-        m->smoothCoeff = coeff;
-        m->peakFallDb  = fall;
-    }
+    for (auto* b : { analyzer.get(), analyzerPrePane.get(), multiPost.get(), multiPre.get() })
+        b->setSpeed (anaSmooth, anaFall);
 }
 
 void EqCurveDisplay::setAnalyzerMulti (bool on)
@@ -743,7 +799,26 @@ void EqCurveDisplay::setAnalyzerMulti (bool on)
     // The pair we switch TO is reset, so its next frame seeds directly — a clean cut into the mode, neither a
     // fade-in from the floor nor a minutes-old spectrum resuming. The pair we leave keeps nothing worth keeping.
     if (on) { multiPost->reset(); multiPre->reset(); }
-    else    { analyzer.reset();   analyzerPrePane.reset(); }
+    else    { analyzer->reset();  analyzerPrePane->reset(); }
+    repaint();
+}
+
+void EqCurveDisplay::makePanes()
+{
+    analyzer        = eqview::makeClassicPane (anaPffft);
+    analyzerPrePane = eqview::makeClassicPane (anaPffft);
+    multiPost       = eqview::makeMultiPane   (anaPffft);
+    multiPre        = eqview::makeMultiPane   (anaPffft);
+    for (auto* b : { analyzer.get(), analyzerPrePane.get(), multiPost.get(), multiPre.get() })
+        b->setSpeed (anaSmooth, anaFall);
+}
+
+void EqCurveDisplay::setAnalyzerFft (bool pffft)
+{
+    pffft = pffft && eqview::pffftAvailable();     // a build without pffft only ever has the scalar boxes
+    if (anaPffft == pffft) return;
+    anaPffft = pffft;
+    makePanes();                                   // fresh boxes: the next frame seeds — a clean cut, no fade-in
     repaint();
 }
 
@@ -753,8 +828,7 @@ void EqCurveDisplay::setAnalyzerMulti (bool on)
 // The column math lives in the pane; here we only wrap the emitted points into JUCE paths. The
 // geometry has ONE source — the PlotMap — for both the columns and the closing edges (a separate
 // width parameter could silently detach the fill's closing edge from the last column).
-template <class PaneT>
-void EqCurveDisplay::buildSpectrumPaths (const PaneT& pane, juce::Path& fillOut, juce::Path& peakOut) const
+void EqCurveDisplay::buildSpectrumPaths (const eqview::PaneBox& pane, juce::Path& fillOut, juce::Path& peakOut) const
 {
     const auto pm = plotMap();
     float lastY = pm.height;
@@ -896,8 +970,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (showAnaPre)   // pre-EQ first: neutral, dimmed — reads as "the input" behind the coloured post
         {
             juce::Path preFill, prePeak;
-            if (anaMulti) buildSpectrumPaths (*multiPre, preFill, prePeak);
-            else          buildSpectrumPaths (analyzerPrePane, preFill, prePeak);
+            buildSpectrumPaths (anaMulti ? *multiPre : *analyzerPrePane, preFill, prePeak);
             g.setColour (tabby::palette::text().withAlpha (0.08f));
             g.fillPath (preFill);
             g.setColour (tabby::palette::text().withAlpha (0.28f));
@@ -906,8 +979,7 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (showAnaPost)
         {
             juce::Path specFill, specPeakPath;
-            if (anaMulti) buildSpectrumPaths (*multiPost, specFill, specPeakPath);
-            else          buildSpectrumPaths (analyzer, specFill, specPeakPath);
+            buildSpectrumPaths (anaMulti ? *multiPost : *analyzer, specFill, specPeakPath);
             g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
                                                      tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
             g.fillPath (specFill);

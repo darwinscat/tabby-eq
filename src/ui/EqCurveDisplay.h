@@ -10,27 +10,40 @@
 #include <felitronics/analysis/PlotMap.h>
 #include <felitronics/analysis/SpectrumPane.h>
 #include <felitronics/analysis/MultiResSpectrumPane.h>
-#if TABBYEQ_WITH_PFFFT
- #include <felitronics/fftpffft/PffftOrderedRealFft.h>
-#endif
+#include <functional>
+#include <memory>
 
 // PlotMap and SpectrumPane graduated from the eqview incubator to felitronics-core once OrbitAmp
 // became their second consumer; the eqview names keep reading as before. MultiResSpectrumPane was
 // born in core (docs/ANALYZER-MULTIRES.md there) — the constant-Q sibling of the classic pane.
-// Both panes take their FFT as a parameter: the core's scalar reference, or — with the build option
-// TABBYEQ_WITH_PFFFT — pffft's SIMD transform in packed order (≈3× cheaper per tick, bit-for-bit the
-// same picture: nulled against the scalar in the core's pffft suite). Only the analyzer changes; the
-// audio path does not.
 namespace eqview
 {
 using felitronics::analysis::PlotMap;
-#if TABBYEQ_WITH_PFFFT
-using PaneFft = felitronics::fftpffft::PffftOrderedRealFft;
-#else
-using PaneFft = felitronics::core::fft::DefaultRealFft;
-#endif
-using SpectrumPane         = felitronics::analysis::SpectrumPaneT<PaneFft>;
-using MultiResSpectrumPane = felitronics::analysis::MultiResSpectrumPaneT<felitronics::analysis::RollingSpectrumTap::kMaxOrder, 4, PaneFft>;
+using felitronics::analysis::SpectrumPane;             // the classic pane on the core's scalar reference FFT
+using felitronics::analysis::MultiResSpectrumPane;     // the constant-Q pane on the same
+
+// Both panes take their FFT as a parameter in core. The display talks to them through this seam so the
+// backend is chosen at RUNTIME — the scalar reference, or, when the build carries TABBYEQ_WITH_PFFFT,
+// pffft's SIMD transform in packed order (≈3× cheaper per tick, numerically equivalent: nulled against
+// the scalar in the core's pffft suite). Beside, not instead: Analyzer → FFT switches, the audio path
+// never changes. A box owns one pane on the heap; the display holds four (classic + multi, pre + post)
+// and remakes them when the backend changes, so the first frame after a switch seeds cleanly.
+struct PaneBox
+{
+    virtual ~PaneBox() = default;
+    virtual float* frameInput() noexcept = 0;
+    virtual void   ingest (int order) noexcept = 0;
+    virtual void   starve() noexcept = 0;
+    virtual void   reset() noexcept = 0;
+    virtual void   setSpeed (float smoothCoeff, float peakFallDb) noexcept = 0;
+    virtual void   setCover (int hopSamples) noexcept = 0;       // the multi pane's Welch cover; a no-op on the classic one
+    virtual int    frameOrder() const noexcept = 0;              // multi: the tap order it needs; classic: −1 (any)
+    virtual void   buildColumns (const PlotMap& pm, double fs, double tiltDbPerOct, double tiltPivotHz,
+                                 const std::function<void (int, float, float, float)>& emit) const = 0;
+};
+std::unique_ptr<PaneBox> makeClassicPane (bool pffft);   // EqCurveDisplay.cpp; pffft falls back to scalar when not built in
+std::unique_ptr<PaneBox> makeMultiPane   (bool pffft);
+bool pffftAvailable() noexcept;                          // TABBYEQ_WITH_PFFFT at build time
 }
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
@@ -119,6 +132,9 @@ public:
     void setAnalyzerMulti  (bool on);
     bool analyzerMulti()     const noexcept { return anaMulti; }
     int  multiFrameOrder()   const noexcept { return multiPost->frameOrder(); }
+    // FFT backend of every pane: the scalar reference or pffft (only when built in — see eqview::pffftAvailable).
+    void setAnalyzerFft    (bool pffft);
+    bool analyzerPffft()     const noexcept { return anaPffft; }
     bool analyzerPreShown()  const noexcept { return showAnaPre; }
     bool analyzerPostShown() const noexcept { return showAnaPost; }
     bool analyzerFrozen()    const noexcept { return anaFrozen; }
@@ -233,20 +249,21 @@ private:
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
-    template <class PaneT>
-    void   buildSpectrumPaths (const PaneT& pane, juce::Path& fillOut, juce::Path& peakOut) const;   // fill + peak-hold paths from either pane (geometry from plotMap())
+    void   buildSpectrumPaths (const eqview::PaneBox& pane, juce::Path& fillOut, juce::Path& peakOut) const;   // fill + peak-hold paths from any pane (geometry from plotMap())
+    void   makePanes();                                                                                       // (re)create the four boxes on the current backend
 
     TabbyEqAudioProcessor& proc;
 
-    // analyzer — the JUCE-free spectrum pipeline (window/FFT/dB smoothing/peak-hold/columns) lives
-    // in eqview::SpectrumPane (unit-tested); this component owns the frame source + path assembly.
-    eqview::SpectrumPane analyzer;          // post-EQ pane (primary, coloured)
-    eqview::SpectrumPane analyzerPrePane;   // pre-EQ pane (dimmed grey, drawn behind)
+    // analyzer — the JUCE-free spectrum pipelines (window/FFT/smoothing/peak-hold/columns) live in
+    // felitronics-core's panes (unit-tested there); this component owns the frame source + path assembly.
+    // Four boxes on the heap (the multi pane is ~0.8 MB): classic post/pre and multi-res post/pre, on
+    // whichever FFT backend Analyzer → FFT selected (see eqview::PaneBox).
+    std::unique_ptr<eqview::PaneBox> analyzer, analyzerPrePane;   // classic pane: post (coloured) / pre (dimmed, behind)
+    std::unique_ptr<eqview::PaneBox> multiPost, multiPre;         // constant-Q multi-resolution pane: post / pre
     std::array<float, eqview::SpectrumPane::kMaxSize> tapDrain {};   // discard buffer for HIDDEN taps (max window; see pushSpectrum)
-    // The constant-Q multi-resolution panes (16384 / 4096 / 1024 from one frame, band-power stitched —
-    // felitronics-core's MultiResSpectrumPane, unit-tested there). ~0.7 MB each, so on the heap.
-    std::unique_ptr<eqview::MultiResSpectrumPane> multiPost, multiPre;
-    bool anaMulti = true;                           // which pane pair is fed and drawn (Analyzer → Resolution)
+    bool  anaMulti = true;                          // which pane pair is fed and drawn (Analyzer → Resolution)
+    bool  anaPffft = false;                         // which FFT the boxes were made with (Analyzer → FFT)
+    float anaSmooth = 0.25f, anaFall = 0.8f;        // the speed preset in effect (re-applied when boxes are remade)
 
     // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
     // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().

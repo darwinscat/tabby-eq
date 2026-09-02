@@ -66,9 +66,12 @@ include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
 set(TABBYEQ_FCORE_TAG "v0.22.1" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 if(TABBYEQ_WITH_PFFFT)
-    # The core's optional compiled backend (pffft, BSD — recorded in THIRD_PARTY_NOTICES.md there). Only the
-    # analyzer rides it (SpectrumPaneT / MultiResSpectrumPaneT<…, PffftOrderedRealFft>); the audio path is
-    # unchanged — the FIR modes keep the core's default convolver backend.
+    # The core's optional compiled backend (pffft, BSD/FFTPACK — its notice is reproduced in this repo's
+    # THIRD_PARTY_NOTICES.md, a condition of shipping it in a binary). The analyzer rides it, switchable at
+    # runtime beside the scalar reference (Analyzer → FFT). NB the core's FELITRONICS_WITH_PFFFT definition
+    # reaches every TU through felitronics::convolution's usage requirements; the only core code that changes
+    # its AUDIO backend on it is CabConvolver, which TabbyEQ does not use — the FIR modes keep the default
+    # convolver, so the audio path is unchanged.
     set(FELITRONICS_WITH_PFFFT ON CACHE BOOL "felitronics-core: build the pffft backend (TabbyEQ's analyzer rides it)" FORCE)
 endif()
 set(FELITRONICS_BUILD_TESTS ${TABBYEQ_BUILD_CORE_TESTS})   # keep the JUCE-free core self-tests in this repo's `ctest` (unless the sanitizer job opts out)
@@ -250,9 +253,10 @@ target_link_libraries(TabbyEQ PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 if(TABBYEQ_WITH_PFFFT)
-    # EqCurveDisplay.h picks the panes' FFT on this definition; every TU of the plugin target sees the same one.
+    # EqCurveDisplay.cpp instantiates the pffft panes on this definition (EqCurveDisplay.h keeps one layout
+    # either way — the backend sits behind a virtual seam); every TU of the plugin target sees the same one.
     target_compile_definitions(TabbyEQ PRIVATE TABBYEQ_WITH_PFFFT=1)
-    target_link_libraries(TabbyEQ PRIVATE felitronics::fftpffft)
+    target_link_libraries(TabbyEQ PRIVATE felitronics::fftpffft)   # explicit, though convolution already carries it
 endif()
 
 # Re-sign the Standalone ad-hoc with the correct bundle id so macOS TCC (mic access) persists

@@ -178,6 +178,7 @@ void TabbyEqEditor::syncViewFromState()
     // Analyzer resolution: the constant-Q multi-resolution pane (default) asks the tap for its longest
     // frame; the classic fixed-size pane asks for the stored FFT order. The display's mode is set FIRST,
     // so a frame at the new order is never fed to the wrong pane.
+    display.setAnalyzerFft ((bool) proc.apvts.state.getProperty ("anaFft", true));   // pffft when the build has it, else scalar
     const bool specMulti = (bool) proc.apvts.state.getProperty ("specMulti", true);
     display.setAnalyzerMulti (specMulti);
     proc.setSpectrumResolution (specMulti ? display.multiFrameOrder()
@@ -329,12 +330,18 @@ namespace
             speedVal.onClick = [this] { speedMenu(); };
             tiltVal.onClick  = [this] { tiltMenu(); };
             resVal.onClick   = [this] { resMenu(); };
+            // The FFT row exists only in a build that carries pffft: beside the scalar, switchable live.
+            if (eqview::pffftAvailable())
+            {
+                initRow (fftLbl, "FFT:", fftVal);
+                fftVal.onClick = [this] { fftMenu(); };
+            }
 
             initToggle (freezeBtn, "Freeze", display.analyzerFrozen());
             freezeBtn.onClick = [this] { display.setAnalyzerFrozen (freezeBtn.getToggleState()); };
 
             refreshValues();
-            setSize (216, 172);
+            setSize (216, 172 + (eqview::pffftAvailable() ? 22 : 0));
         }
 
         void paint (juce::Graphics& g) override
@@ -350,8 +357,10 @@ namespace
             rowTop.removeFromLeft (6);
             postBtn.setBounds (rowTop.removeFromLeft (62));
             r.removeFromTop (6);
-            for (auto row : { std::pair<juce::Label*, FlatItem*> { &rangeLbl, &rangeVal },
-                              { &speedLbl, &speedVal }, { &tiltLbl, &tiltVal }, { &resLbl, &resVal } })
+            std::vector<std::pair<juce::Label*, FlatItem*>> rows { { &rangeLbl, &rangeVal }, { &speedLbl, &speedVal },
+                                                                    { &tiltLbl, &tiltVal }, { &resLbl, &resVal } };
+            if (eqview::pffftAvailable()) rows.push_back ({ &fftLbl, &fftVal });
+            for (auto row : rows)
             {
                 auto line = r.removeFromTop (22);
                 row.first->setBounds (line.removeFromLeft (86));
@@ -393,6 +402,18 @@ namespace
             tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty (tiltId(), tiltDefault()), 1) + " dB/oct");
             resVal.setButtonText (isMulti() ? juce::String ("Multi")
                                             : juce::String (1 << juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11))));
+            fftVal.setButtonText ((bool) proc.apvts.state.getProperty ("anaFft", true) ? "pffft (SIMD)" : "Scalar");
+        }
+
+        void fftMenu()
+        {
+            juce::PopupMenu m;
+            const bool pf = (bool) proc.apvts.state.getProperty ("anaFft", true);
+            m.addItem (1, "pffft (SIMD)", true, pf);
+            m.addItem (2, "Scalar reference", true, ! pf);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&fftVal),
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp ("anaFft", r == 1); });
         }
 
         void rangeMenu()
@@ -458,8 +479,8 @@ namespace
         EqCurveDisplay&        display;
         std::function<void()>  onChanged;
         juce::TextButton preBtn, postBtn, freezeBtn;
-        juce::Label rangeLbl, speedLbl, tiltLbl, resLbl;
-        FlatItem    rangeVal, speedVal, tiltVal, resVal;
+        juce::Label rangeLbl, speedLbl, tiltLbl, resLbl, fftLbl;
+        FlatItem    rangeVal, speedVal, tiltVal, resVal, fftVal;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerPanel)
     };
