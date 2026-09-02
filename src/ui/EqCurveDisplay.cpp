@@ -672,21 +672,27 @@ void EqCurveDisplay::pushSpectrum()
     int got = -1;
     if (anaMulti)
     {
-        // The multi-res panes want the tap's longest frame, and they are told the hop it is published at:
-        // their short tiers Welch-cover exactly that interval, so a click between two frames is never missed.
-        const int cover = proc.getSpectrumHopSamples();
-        multiPre->coverSamples = cover; multiPost->coverSamples = cover;
+        // The multi-res panes want the tap's longest frame, and each frame carries the hop that actually
+        // happened before it (a block boundary or a missed tick stretches the requested ~1600): the short
+        // tiers Welch-cover exactly that interval, so a click between two frames is never missed.
+        int hop = 0;
         if (showAnaPre)
         {
-            if (proc.pullSpectrum (true, multiPre->frameInput(), got)) { if (got == want && got == multiPre->frameOrder()) multiPre->ingest (got); }
-            else                                                        multiPre->starve();
+            if (proc.pullSpectrum (true, multiPre->frameInput(), got, hop))
+            {
+                if (got == want && got == multiPre->frameOrder()) { multiPre->coverSamples = hop; multiPre->ingest (got); }
+            }
+            else multiPre->starve();
         }
         else
             (void) proc.pullSpectrum (true, tapDrain.data(), got);
         if (showAnaPost)
         {
-            if (proc.pullSpectrum (false, multiPost->frameInput(), got)) { if (got == want && got == multiPost->frameOrder()) multiPost->ingest (got); }
-            else                                                          multiPost->starve();
+            if (proc.pullSpectrum (false, multiPost->frameInput(), got, hop))
+            {
+                if (got == want && got == multiPost->frameOrder()) { multiPost->coverSamples = hop; multiPost->ingest (got); }
+            }
+            else multiPost->starve();
         }
         else
             (void) proc.pullSpectrum (false, tapDrain.data(), got);
@@ -719,7 +725,11 @@ void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept
         p->smoothCoeff = coeff;
         p->peakFallDb  = fall;
     }
-    for (auto* m : { multiPost.get(), multiPre.get() })   // same numbers; the multi pane's one-pole runs on power
+    // Same numbers for the multi panes. Their one-pole runs on POWER (the seam maths needs it), so the
+    // feel differs at equal coefficients: attack settles in ~6 ticks instead of ~17, and silence fades as
+    // a release (−1.25 dB/tick at Medium) instead of collapsing — analyzer-normal, but "Medium" is not the
+    // same motion in both modes.
+    for (auto* m : { multiPost.get(), multiPre.get() })
     {
         m->smoothCoeff = coeff;
         m->peakFallDb  = fall;
@@ -730,8 +740,10 @@ void EqCurveDisplay::setAnalyzerMulti (bool on)
 {
     if (anaMulti == on) return;
     anaMulti = on;
-    multiPost->reset();   // the next frame seeds directly — a clean cut into the new mode, no fade-in from the floor
-    multiPre->reset();
+    // The pair we switch TO is reset, so its next frame seeds directly — a clean cut into the mode, neither a
+    // fade-in from the floor nor a minutes-old spectrum resuming. The pair we leave keeps nothing worth keeping.
+    if (on) { multiPost->reset(); multiPre->reset(); }
+    else    { analyzer.reset();   analyzerPrePane.reset(); }
     repaint();
 }
 

@@ -421,13 +421,14 @@ namespace
         void tiltMenu()
         {
             juce::PopupMenu m;
-            const double cur = (double) proc.apvts.state.getProperty (tiltId(), tiltDefault());
+            const juce::Identifier id (tiltId());    // the mode the menu was opened FOR — resolved now, not when it closes
+            const double cur = (double) proc.apvts.state.getProperty (id, tiltDefault());
             static constexpr double tilts[] = { 0.0, 1.5, 3.0, 4.5, 6.0 };
             for (int i = 0; i < 5; ++i)
                 m.addItem (i + 1, juce::String (tilts[i], 1) + " dB/oct", true, std::abs (cur - tilts[i]) < 0.01);
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tiltVal),
-                [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
-                { if (safe != nullptr && r > 0) safe->setProp (safe->tiltId(), tilts[r - 1]); });
+                [safe = juce::Component::SafePointer<AnalyzerPanel> (this), id] (int r)
+                { if (safe != nullptr && r > 0) safe->setProp (id, tilts[r - 1]); });
         }
 
         void resMenu()
