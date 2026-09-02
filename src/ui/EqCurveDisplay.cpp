@@ -54,6 +54,9 @@ namespace
 EqCurveDisplay::EqCurveDisplay (TabbyEqAudioProcessor& p) : proc (p)
 {
     analyzer.peakFallDb = kPeakFallDb;   // the pane readies its own Hann window / FFT plan / dB arrays
+    multiPost = std::make_unique<eqview::MultiResSpectrumPane>();   // the multi-res pair: tiers + FFT plans + prefix sums
+    multiPre  = std::make_unique<eqview::MultiResSpectrumPane>();
+    for (auto* m : { multiPost.get(), multiPre.get() }) m->peakFallDb = kPeakFallDb;
     proc.setAnalyzerActive (true);
     setWantsKeyboardFocus (true);     // so Esc can cancel an in-progress add-drag
 
@@ -667,6 +670,28 @@ void EqCurveDisplay::pushSpectrum()
     // and hold the last drawn curve — never a blank or a wrong-size (garbage) frame across a live switch.
     const int want = proc.getSpectrumResolution();
     int got = -1;
+    if (anaMulti)
+    {
+        // The multi-res panes want the tap's longest frame, and they are told the hop it is published at:
+        // their short tiers Welch-cover exactly that interval, so a click between two frames is never missed.
+        const int cover = proc.getSpectrumHopSamples();
+        multiPre->coverSamples = cover; multiPost->coverSamples = cover;
+        if (showAnaPre)
+        {
+            if (proc.pullSpectrum (true, multiPre->frameInput(), got)) { if (got == want && got == multiPre->frameOrder()) multiPre->ingest (got); }
+            else                                                        multiPre->starve();
+        }
+        else
+            (void) proc.pullSpectrum (true, tapDrain.data(), got);
+        if (showAnaPost)
+        {
+            if (proc.pullSpectrum (false, multiPost->frameInput(), got)) { if (got == want && got == multiPost->frameOrder()) multiPost->ingest (got); }
+            else                                                          multiPost->starve();
+        }
+        else
+            (void) proc.pullSpectrum (false, tapDrain.data(), got);
+        return;
+    }
     if (showAnaPre)
     {
         if (proc.pullSpectrum (true, analyzerPrePane.frameInput(), got)) { if (got == want) analyzerPrePane.ingest (got); }
@@ -694,6 +719,20 @@ void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept
         p->smoothCoeff = coeff;
         p->peakFallDb  = fall;
     }
+    for (auto* m : { multiPost.get(), multiPre.get() })   // same numbers; the multi pane's one-pole runs on power
+    {
+        m->smoothCoeff = coeff;
+        m->peakFallDb  = fall;
+    }
+}
+
+void EqCurveDisplay::setAnalyzerMulti (bool on)
+{
+    if (anaMulti == on) return;
+    anaMulti = on;
+    multiPost->reset();   // the next frame seeds directly — a clean cut into the new mode, no fade-in from the floor
+    multiPre->reset();
+    repaint();
 }
 
 // Spectrum on the display's log grid: linear-interpolate the sparse bass (smooth, no stair-steps),
@@ -702,7 +741,8 @@ void EqCurveDisplay::setAnalyzerSpeed (int preset) noexcept
 // The column math lives in the pane; here we only wrap the emitted points into JUCE paths. The
 // geometry has ONE source — the PlotMap — for both the columns and the closing edges (a separate
 // width parameter could silently detach the fill's closing edge from the last column).
-void EqCurveDisplay::buildSpectrumPaths (const eqview::SpectrumPane& pane, juce::Path& fillOut, juce::Path& peakOut) const
+template <class PaneT>
+void EqCurveDisplay::buildSpectrumPaths (const PaneT& pane, juce::Path& fillOut, juce::Path& peakOut) const
 {
     const auto pm = plotMap();
     float lastY = pm.height;
@@ -844,7 +884,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (showAnaPre)   // pre-EQ first: neutral, dimmed — reads as "the input" behind the coloured post
         {
             juce::Path preFill, prePeak;
-            buildSpectrumPaths (analyzerPrePane, preFill, prePeak);
+            if (anaMulti) buildSpectrumPaths (*multiPre, preFill, prePeak);
+            else          buildSpectrumPaths (analyzerPrePane, preFill, prePeak);
             g.setColour (tabby::palette::text().withAlpha (0.08f));
             g.fillPath (preFill);
             g.setColour (tabby::palette::text().withAlpha (0.28f));
@@ -853,7 +894,8 @@ void EqCurveDisplay::paint (juce::Graphics& g)
         if (showAnaPost)
         {
             juce::Path specFill, specPeakPath;
-            buildSpectrumPaths (analyzer, specFill, specPeakPath);
+            if (anaMulti) buildSpectrumPaths (*multiPost, specFill, specPeakPath);
+            else          buildSpectrumPaths (analyzer, specFill, specPeakPath);
             g.setGradientFill (juce::ColourGradient (tabby::palette::spectrum().withAlpha (0.22f), 0.0f, h * 0.30f,
                                                      tabby::palette::spectrum().withAlpha (0.03f), 0.0f, h, false));
             g.fillPath (specFill);

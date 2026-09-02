@@ -145,6 +145,10 @@ public:
     // MaxOrder, SpectrumPane::kMinOrder, and the AnalyzerPanel menu.
     void  setSpectrumResolution (int order) noexcept { analyzerOrder.store (juce::jlimit (10, 14, order), std::memory_order_relaxed); }
     int   getSpectrumResolution() const noexcept     { return analyzerOrder.load (std::memory_order_relaxed); }
+    // The publish hop in samples at the current resolution (~30 fps, never longer than the window). The
+    // multi-resolution pane Welch-covers exactly this interval with its short tiers, so a click that lands
+    // between two published frames is still analysed (MultiResSpectrumPane::coverSamples).
+    int   getSpectrumHopSamples() const noexcept     { return juce::jmin (1 << analyzerOrder.load (std::memory_order_relaxed), analyzerHopBase.load (std::memory_order_relaxed)); }
     float getCorrelation()   const noexcept { return correlation.load (std::memory_order_relaxed); }   // L/R phase correlation -1..+1
     teq::BandParams readBand (int b) const noexcept;   // BandParams v2 from the APVTS atomics (5 lanes)
 

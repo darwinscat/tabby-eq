@@ -9,13 +9,16 @@
 
 #include <felitronics/analysis/PlotMap.h>
 #include <felitronics/analysis/SpectrumPane.h>
+#include <felitronics/analysis/MultiResSpectrumPane.h>
 
 // PlotMap and SpectrumPane graduated from the eqview incubator to felitronics-core once OrbitAmp
-// became their second consumer; the eqview names keep reading as before.
+// became their second consumer; the eqview names keep reading as before. MultiResSpectrumPane was
+// born in core (docs/ANALYZER-MULTIRES.md there) — the constant-Q sibling of the classic pane.
 namespace eqview
 {
 using felitronics::analysis::PlotMap;
 using felitronics::analysis::SpectrumPane;
+using felitronics::analysis::MultiResSpectrumPane;
 }
 #include "eqview/TraceSet.h"
 #include "eqview/HandleMath.h"
@@ -97,7 +100,13 @@ public:
     void setAnalyzerFrozen (bool f) noexcept            { anaFrozen = f; }
     void setAnalyzerTilt   (double dbPerOct) noexcept   { anaTilt = dbPerOct; repaint(); }
     void setAnalyzerRange  (double dB) noexcept         { anaRange = juce::jlimit (30.0, 200.0, dB); repaint(); }
-    void setAnalyzerSpeed  (int preset) noexcept;       // 0 Slow / 1 Medium / 2 Fast — both panes
+    void setAnalyzerSpeed  (int preset) noexcept;       // 0 Slow / 1 Medium / 2 Fast — every pane
+    // Resolution mode: the constant-Q MULTI-resolution pane (several FFT lengths at once, stitched by
+    // frequency — the lows read, the highs don't smear) vs the classic fixed-size pane. The multi pane
+    // asks the tap for its longest frame; the editor pushes that order to the processor.
+    void setAnalyzerMulti  (bool on);
+    bool analyzerMulti()     const noexcept { return anaMulti; }
+    int  multiFrameOrder()   const noexcept { return multiPost->frameOrder(); }
     bool analyzerPreShown()  const noexcept { return showAnaPre; }
     bool analyzerPostShown() const noexcept { return showAnaPost; }
     bool analyzerFrozen()    const noexcept { return anaFrozen; }
@@ -212,7 +221,8 @@ private:
     int    stripMaxY() const noexcept;                     // lowest toolbar top that keeps the bottom freq axis clear
     static double nextGainStep (double r) noexcept;        // next larger step in kGainSteps (clamps at the max)
     int    gainStepIndex() const noexcept;                 // nearest kGainSteps index for the current gainRange
-    void   buildSpectrumPaths (const eqview::SpectrumPane& pane, juce::Path& fillOut, juce::Path& peakOut) const;   // liquid + peak-hold (geometry from plotMap())
+    template <class PaneT>
+    void   buildSpectrumPaths (const PaneT& pane, juce::Path& fillOut, juce::Path& peakOut) const;   // fill + peak-hold paths from either pane (geometry from plotMap())
 
     TabbyEqAudioProcessor& proc;
 
@@ -221,6 +231,10 @@ private:
     eqview::SpectrumPane analyzer;          // post-EQ pane (primary, coloured)
     eqview::SpectrumPane analyzerPrePane;   // pre-EQ pane (dimmed grey, drawn behind)
     std::array<float, eqview::SpectrumPane::kMaxSize> tapDrain {};   // discard buffer for HIDDEN taps (max window; see pushSpectrum)
+    // The constant-Q multi-resolution panes (16384 / 4096 / 1024 from one frame, band-power stitched —
+    // felitronics-core's MultiResSpectrumPane, unit-tested there). ~0.7 MB each, so on the heap.
+    std::unique_ptr<eqview::MultiResSpectrumPane> multiPost, multiPre;
+    bool anaMulti = true;                           // which pane pair is fed and drawn (Analyzer → Resolution)
 
     // traces — the response-curve calculator (param snapshot + per-lane designs + dB evaluation)
     // lives in eqview::TraceSet (unit-tested); shared by curve / nodes / hit-test via param()/design().

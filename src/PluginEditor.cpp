@@ -175,14 +175,22 @@ void TabbyEqEditor::syncViewFromState()
     strip.refreshDynamicsAvailability();
 
     proc.setSpectrumDomain ((int) proc.apvts.state.getProperty ("specDomain", 0));   // analyzer Stereo/Mid/Side
-    proc.setSpectrumResolution ((int) proc.apvts.state.getProperty ("specResolution", 11));   // analyzer FFT size (1024..8192)
+    // Analyzer resolution: the constant-Q multi-resolution pane (default) asks the tap for its longest
+    // frame; the classic fixed-size pane asks for the stored FFT order. The display's mode is set FIRST,
+    // so a frame at the new order is never fed to the wrong pane.
+    const bool specMulti = (bool) proc.apvts.state.getProperty ("specMulti", true);
+    display.setAnalyzerMulti (specMulti);
+    proc.setSpectrumResolution (specMulti ? display.multiFrameOrder()
+                                          : (int) proc.apvts.state.getProperty ("specResolution", 11));
 
     // The analyzer settings ride the snapshot too (view state, suppressed writes — AnalyzerPanel).
     display.setAnalyzerShow  ((bool) proc.apvts.state.getProperty ("anaPre", false),
                               (bool) proc.apvts.state.getProperty ("anaPost", true));
     display.setAnalyzerRange ((double) proc.apvts.state.getProperty ("anaRange", 90.0));
     display.setAnalyzerSpeed ((int) proc.apvts.state.getProperty ("anaSpeed", 1));
-    display.setAnalyzerTilt  ((double) proc.apvts.state.getProperty ("anaTilt", 4.5));
+    // The tilt is per MODE: a per-bin display wants ~+4.5 dB/oct to make music look flat, a constant-Q
+    // one already shows pink noise flat, so its natural tilt is ~+1.5. Two props, one control.
+    display.setAnalyzerTilt  ((double) proc.apvts.state.getProperty (specMulti ? "anaTiltMulti" : "anaTilt", specMulti ? 1.5 : 4.5));
     refreshAnalyzerItem();
 }
 
@@ -371,14 +379,20 @@ namespace
             refreshValues();
         }
 
+        // Resolution mode + the tilt prop that belongs to it (see syncViewFromState).
+        bool        isMulti()     const { return (bool) proc.apvts.state.getProperty ("specMulti", true); }
+        const char* tiltId()      const { return isMulti() ? "anaTiltMulti" : "anaTilt"; }
+        double      tiltDefault() const { return isMulti() ? 1.5 : 4.5; }
+
         void refreshValues()
         {
             const int range = (int) proc.apvts.state.getProperty ("anaRange", 90);
             rangeVal.setButtonText (juce::String (range) + " dB");
             static const char* speeds[] = { "Slow", "Medium", "Fast" };
             speedVal.setButtonText (speeds[juce::jlimit (0, 2, (int) proc.apvts.state.getProperty ("anaSpeed", 1))]);
-            tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty ("anaTilt", 4.5), 1) + " dB/oct");
-            resVal.setButtonText (juce::String (1 << juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11))));
+            tiltVal.setButtonText (juce::String ((double) proc.apvts.state.getProperty (tiltId(), tiltDefault()), 1) + " dB/oct");
+            resVal.setButtonText (isMulti() ? juce::String ("Multi")
+                                            : juce::String (1 << juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11))));
         }
 
         void rangeMenu()
@@ -407,27 +421,36 @@ namespace
         void tiltMenu()
         {
             juce::PopupMenu m;
-            const double cur = (double) proc.apvts.state.getProperty ("anaTilt", 4.5);
+            const double cur = (double) proc.apvts.state.getProperty (tiltId(), tiltDefault());
             static constexpr double tilts[] = { 0.0, 1.5, 3.0, 4.5, 6.0 };
             for (int i = 0; i < 5; ++i)
                 m.addItem (i + 1, juce::String (tilts[i], 1) + " dB/oct", true, std::abs (cur - tilts[i]) < 0.01);
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tiltVal),
                 [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
-                { if (safe != nullptr && r > 0) safe->setProp ("anaTilt", tilts[r - 1]); });
+                { if (safe != nullptr && r > 0) safe->setProp (safe->tiltId(), tilts[r - 1]); });
         }
 
         void resMenu()
         {
-            // The stored value is the FFT ORDER (10..13); the menu shows the SIZE (1024..8192). setProp
-            // records the suppressed view-state prop, and onChanged -> syncViewFromState pushes the order
-            // to the processor's analyzer atomic (a live, click-free switch).
+            // "Multi" = the constant-Q multi-resolution pane (several FFT lengths at once); the sizes are
+            // the classic single-FFT pane, stored as the FFT ORDER (10..14) while the menu shows the SIZE.
+            // setProp records the suppressed view-state props, and onChanged -> syncViewFromState pushes
+            // the mode to the display and the order to the processor's analyzer atomic (a live, click-free
+            // switch). Picking a size sets the order first, then leaves multi — one sync lands both.
             juce::PopupMenu m;
-            const int cur = juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11));
+            const bool multi = isMulti();
+            const int  cur   = juce::jlimit (10, 14, (int) proc.apvts.state.getProperty ("specResolution", 11));
+            m.addItem (1, "Multi-resolution", true, multi);
+            m.addSeparator();
             for (int ord = 10; ord <= 14; ++ord)
-                m.addItem (ord, juce::String (1 << ord), true, cur == ord);
+                m.addItem (ord, juce::String (1 << ord), true, ! multi && cur == ord);
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&resVal),
                 [safe = juce::Component::SafePointer<AnalyzerPanel> (this)] (int r)
-                { if (safe != nullptr && r > 0) safe->setProp ("specResolution", r); });
+                {
+                    if (safe == nullptr || r <= 0) return;
+                    if (r == 1) safe->setProp ("specMulti", true);
+                    else      { safe->setProp ("specResolution", r); safe->setProp ("specMulti", false); }
+                });
         }
 
         TabbyEqAudioProcessor& proc;
