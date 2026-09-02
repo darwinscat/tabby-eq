@@ -64,7 +64,7 @@ endfunction()
 # fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
 include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_FCORE_TAG "v0.22.1" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+set(TABBYEQ_FCORE_TAG "v0.22.2" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 if(TABBYEQ_WITH_PFFFT)
     # The core's optional compiled backend (pffft, BSD/FFTPACK — its notice is reproduced in this repo's
     # THIRD_PARTY_NOTICES.md, a condition of shipping it in a binary). The analyzer rides it, switchable at
