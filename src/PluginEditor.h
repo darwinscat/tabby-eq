@@ -31,6 +31,21 @@
 // mark), the compare + preset cells, and the top-most underline overlay; ChromeBar lays the three
 // zones out in resized(). The compare cell is its OWN DragAndDropContainer, so the editor no longer
 // is one.
+// The call-out bubble in TabbyEQ's palette. The family version popover (appkit VersionBadge) paints
+// no ground of its own — the bubble under it is the host LookAndFeel's, and JUCE's default V4 draws a
+// grey one. This paints THE BUBBLE (nose included), so the popover reads as our panel instead of a
+// card floating on someone else's card. Everything else stays LookAndFeel_V4.
+struct TabbyCallOutLnF final : juce::LookAndFeel_V4
+{
+    void drawCallOutBoxBackground (juce::CallOutBox& box, juce::Graphics& g,
+                                   const juce::Path& path, juce::Image& cachedImage) override;
+
+    // ONE per module, never a member: a call-out is parented to the top-level window and can outlive
+    // the editor that cast it (a standalone rebuilding its editor under an open popup), and it paints
+    // through this object every repaint.
+    static TabbyCallOutLnF& shared();
+};
+
 class TabbyEqEditor final : public juce::AudioProcessorEditor,
                             private juce::Timer
 {
@@ -149,7 +164,14 @@ private:
     // ---- top-right pinned glyphs ----
     tabby::ui::GlyphButton gearBtn { tabby::ui::GlyphButton::Glyph::Gear };         // View options menu (flat, top-right)
     tabby::ui::GlyphButton fullBtn { tabby::ui::GlyphButton::Glyph::Fullscreen };   // kiosk fullscreen — standalone only
-    tabby::InfoButton infoButton { proc.updateChecker() };   // (i) — build/version + update-check popover, top-bar right (near POST)
+    // The FAMILY badge (felitronics-appkit): "v0.6.0 / <format>" + the shared popover — brand mark,
+    // GitHub-linked build stamp, opt-in update check and the Feed the Cat block. It sits BESIDE our
+    // own (i), which keeps its compact, copyable stamp popover.
+    felitronics::appkit::VersionBadge versionBadge {
+        proc.updateChecker(),
+        tabby::makeVersionBadgeConfig (tabby::pluginFormatName (proc.wrapperType)),
+        tabby::pluginFormatName (proc.wrapperType) };
+    tabby::InfoButton infoButton { proc.updateChecker(), versionBadge };   // (i) — casts the family popover, top-bar right
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)

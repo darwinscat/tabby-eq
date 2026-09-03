@@ -86,6 +86,11 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     pushCompareModel();               // active register + edited dots + undo/redo enable + peek labels
 
     addAndMakeVisible (infoButton);   // (i) build/version popover — top-bar right
+    versionBadge.setBrandTypeface (mark.wordmarkTypeface);   // the popover's wordmark = the header's
+    // INVISIBLE on purpose: the (i) is the door, the badge is only the window's owner. It stays a CHILD
+    // (its popover parents itself to the top-level through it) and takes the (i)'s bounds in resized(),
+    // so the call-out points at the button the user actually clicked.
+    addChildComponent (versionBadge);
 
     // ---- bottom toolbar (FabFilter-style): flat items, every popup opens UPWARD ----
     // Phase mode + Linear quality live in ONE item now ("Zero Latency" / "Natural Phase" /
@@ -195,8 +200,37 @@ void TabbyEqEditor::syncViewFromState()
     refreshAnalyzerItem();
 }
 
+TabbyCallOutLnF& TabbyCallOutLnF::shared()
+{
+    static TabbyCallOutLnF lnf;
+    return lnf;
+}
+
+void TabbyCallOutLnF::drawCallOutBoxBackground (juce::CallOutBox& box, juce::Graphics& g,
+                                                const juce::Path& path, juce::Image& cachedImage)
+{
+    // Same shape as JUCE's default (shadow cached into the box-sized image, then fill + stroke) —
+    // only the ground and the edge are ours: the panel grey and the violet hairline the rest of the
+    // chrome uses.
+    if (cachedImage.isNull())
+    {
+        cachedImage = { juce::Image::ARGB, box.getWidth(), box.getHeight(), true };
+        juce::Graphics g2 (cachedImage);
+        juce::DropShadow (juce::Colours::black.withAlpha (0.7f), 8, { 0, 2 }).drawForPath (g2, path);
+    }
+
+    g.setColour (juce::Colours::black);
+    g.drawImageAt (cachedImage, 0, 0);
+
+    g.setColour (tabby::palette::panel());
+    g.fillPath (path);
+    g.setColour (tabby::palette::violet().withAlpha (0.35f));
+    g.strokePath (path, juce::PathStrokeType (1.0f));
+}
+
 TabbyEqEditor::~TabbyEqEditor()
 {
+    setLookAndFeel (nullptr);
     // A host may destroy the editor MID-DRAG. The display's own dtor closes a node drag, but the
     // slider brackets (strip bars, output fader) would leak their open gesture on the
     // out-living PROCESSOR — navigation gate stuck, settle commits blocked, forever. Close the
@@ -759,6 +793,7 @@ void TabbyEqEditor::resized()
     constexpr int kCatMargin = 4;
     const int minStartX = kCatMargin - (int) felitronics::appkit::chrome::BrandBlister::contentLeftOffset();
     bar.layout (topBar, kBarH, minStartX);
+    versionBadge.setBounds (infoButton.getBounds());   // the invisible window-owner rides the (i)
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT rail| ---------------------------------
     // The rails run the FULL height below the top bar and are the SAME width; the bottom toolbar

@@ -16,6 +16,10 @@
 #   FCORE_LOCAL      ON when the sibling felitronics-core checkout is used, OFF when the pin is fetched
 #   FCORE_DIR        the sibling checkout path (only read when FCORE_LOCAL)
 #   FCORE_TAG        the pinned felitronics-core tag (used when fetched, or as a local fallback)
+#   APPKIT_LOCAL / APPKIT_DIR / APPKIT_TAG   the same three for felitronics-appkit
+#   JUCE_TAG         the pinned JUCE tag (reported as-is — JUCE is always fetched)
+#   FCORE_SRC / APPKIT_SRC / JUCE_SRC   the source tree each dependency was ACTUALLY built from
+#                    (the sibling checkout or FetchContent's clone) — read for its short hash
 # ----------------------------------------------------------------------------
 
 # --- kBuildNumber: 14-digit UTC YYYYMMDDHHMMSS -----------------------------------------------
@@ -71,25 +75,57 @@ if(GIT_EXECUTABLE AND SRC_DIR)
     endif()
 endif()
 
-# --- kCoreVersion: the resolved felitronics-core -------------------------------------------
+# --- kCoreVersion / kAppkitVersion: the resolved sibling-or-pin dependencies -----------------
 # The parent CMake knows which FetchContent path it took (sibling checkout vs pinned fetch) and
-# passes FCORE_LOCAL. Sibling => describe it live (it may have advanced); fetched => the pin.
-set(_core "unknown")
-if(FCORE_LOCAL AND FCORE_DIR AND EXISTS "${FCORE_DIR}/.git")
-    if(GIT_EXECUTABLE)
-        execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always
-            WORKING_DIRECTORY "${FCORE_DIR}"
-            RESULT_VARIABLE _c_rc OUTPUT_VARIABLE _c_out
+# passes <DEP>_LOCAL. Sibling => describe it live (it may have advanced); fetched => the pin.
+function(_tabby_resolve_dep out local dir tag)
+    set(_v "unknown")
+    if(local AND dir AND EXISTS "${dir}/.git")
+        if(GIT_EXECUTABLE)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always
+                WORKING_DIRECTORY "${dir}"
+                RESULT_VARIABLE _rc OUTPUT_VARIABLE _out
+                OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(_rc EQUAL 0 AND NOT _out STREQUAL "")
+                set(_v "${_out} (local)")
+            endif()
+        endif()
+        if(_v STREQUAL "unknown" AND tag)
+            set(_v "${tag} (local)")     # sibling present but not a git repo
+        endif()
+    elseif(tag)
+        set(_v "${tag}")                  # the pinned public release was fetched
+    endif()
+    set(${out} "${_v}" PARENT_SCOPE)
+endfunction()
+
+_tabby_resolve_dep(_core   "${FCORE_LOCAL}"  "${FCORE_DIR}"  "${FCORE_TAG}")
+_tabby_resolve_dep(_appkit "${APPKIT_LOCAL}" "${APPKIT_DIR}" "${APPKIT_TAG}")
+
+# The exact commit each dependency was built from. A version string cannot always say it — a sibling
+# checkout sitting on a tag describes as the bare tag — but the tree on disk always can.
+function(_tabby_dep_hash out dir)
+    set(_h "")
+    if(GIT_EXECUTABLE AND dir AND EXISTS "${dir}/.git")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+            WORKING_DIRECTORY "${dir}"
+            RESULT_VARIABLE _rc OUTPUT_VARIABLE _out
             OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-        if(_c_rc EQUAL 0 AND NOT _c_out STREQUAL "")
-            set(_core "${_c_out} (local)")
+        if(_rc EQUAL 0 AND NOT _out STREQUAL "")
+            set(_h "g${_out}")
         endif()
     endif()
-    if(_core STREQUAL "unknown" AND FCORE_TAG)
-        set(_core "${FCORE_TAG} (local)")    # sibling present but not a git repo
-    endif()
-elseif(FCORE_TAG)
-    set(_core "${FCORE_TAG}")                 # the pinned public release was fetched
+    set(${out} "${_h}" PARENT_SCOPE)
+endfunction()
+
+_tabby_dep_hash(_core_hash   "${FCORE_SRC}")
+_tabby_dep_hash(_appkit_hash "${APPKIT_SRC}")
+_tabby_dep_hash(_juce_hash   "${JUCE_SRC}")
+
+# JUCE is always fetched at its pin — no sibling path, so the tag IS the answer.
+set(_juce "unknown")
+if(JUCE_TAG)
+    set(_juce "${JUCE_TAG}")
 endif()
 
 # --- escape the collected values for C++ double-quoted string literals ----------------------
@@ -110,6 +146,11 @@ _tabby_cxx_escape(_describe)
 _tabby_cxx_escape(_hash)
 _tabby_cxx_escape(_builder)
 _tabby_cxx_escape(_core)
+_tabby_cxx_escape(_appkit)
+_tabby_cxx_escape(_juce)
+_tabby_cxx_escape(_core_hash)
+_tabby_cxx_escape(_appkit_hash)
+_tabby_cxx_escape(_juce_hash)
 
 # --- emit the header ------------------------------------------------------------------------
 set(_content "// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -129,7 +170,14 @@ namespace tabby::version
     inline constexpr const char* kGitHash     = \"${_hash}\";   // short HEAD hash (or \"unknown\")
     inline constexpr bool        kGitDirty    = ${_dirty};       // uncommitted tracked changes present
     inline constexpr const char* kBuilder     = \"${_builder}\"; // env TABBYEQ_BUILDER, else username
-    inline constexpr const char* kCoreVersion = \"${_core}\";    // resolved felitronics-core
+    inline constexpr const char* kCoreVersion   = \"${_core}\";    // resolved felitronics-core
+    inline constexpr const char* kAppkitVersion = \"${_appkit}\";  // resolved felitronics-appkit
+    inline constexpr const char* kJuceVersion   = \"${_juce}\";    // the pinned JUCE tag
+
+    // The commit each dependency was built from (empty when its tree is not a git checkout).
+    inline constexpr const char* kCoreHash      = \"${_core_hash}\";
+    inline constexpr const char* kAppkitHash    = \"${_appkit_hash}\";
+    inline constexpr const char* kJuceHash      = \"${_juce_hash}\";
 }
 ")
 
