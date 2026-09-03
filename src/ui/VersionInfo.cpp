@@ -4,6 +4,11 @@
 #include "ui/VersionInfo.h"
 #include "ui/Palette.h"
 
+#include <felitronics/appkit/Brand.h>   // brand::feedTheCatLink / drawPaw — the family tip jar
+
+#include "ui/BrandMark.h"                // tabby::brand::drawMark — the badge popover mirrors the window header
+#include "BinaryData.h"                  // logodarwinscat_svg — the family mark beside the byline
+
 #include "TabbyVersion.h"   // GENERATED at build time (build dir) — the only include of it (see VersionInfo.h)
 
 namespace tabby
@@ -13,202 +18,115 @@ namespace tabby
     const char* currentDescribe() { return version::kDescribe; }
 
     //==========================================================================
-    // The 14-digit UTC build stamp (YYYYMMDDHHMMSS) sliced into human blocks:
-    // 20260713092444 -> "2026-07-13 09:24:44 UTC". Falls back to the raw digits if the stamp
-    // ever isn't the expected shape (generator failure paths bake a 0).
-    static juce::String prettyBuildStamp()
+    // The platform, for the tip jar's URL: appkit signs the canonical hop with ?from=<slug>, and the
+    // platform rides along as &os=<token> so the hop's access log can tell a macOS click from a
+    // Windows one. Compile-time — a shipped binary is one platform. Neither parameter reaches the
+    // payment page: /feed-the-cat logs them and 302s clean.
+    static constexpr const char* platformToken()
     {
-        const auto raw = juce::String (version::kBuildNumber);
-        if (raw.length() != 14)
-            return raw;
-        return raw.substring (0, 4)  + "-" + raw.substring (4, 6)   + "-" + raw.substring (6, 8)
-             + " "
-             + raw.substring (8, 10) + ":" + raw.substring (10, 12) + ":" + raw.substring (12, 14)
-             + " UTC";
+       #if JUCE_MAC
+        return "macos";
+       #elif JUCE_WINDOWS
+        return "windows";
+       #elif JUCE_LINUX || JUCE_BSD
+        return "linux";
+       #else
+        return "other";
+       #endif
     }
 
     //==========================================================================
-    // The build-info block, assembled once from the baked constants:
-    //   TabbyEQ v0.1.0-3-g1234abc
-    //   build 2026-07-13 09:24:44 UTC
-    //   g1234abc (dirty) · oleh
-    //   core v0.2.0
-    static juce::String buildInfoText()
+    juce::String pluginFormatName (juce::AudioProcessor::WrapperType w)
     {
-        juce::String hashLine = juce::String ("g") + version::kGitHash;
-        if (version::kGitDirty) hashLine << " (dirty)";
-        hashLine << " " << juce::String::fromUTF8 ("\xc2\xb7") << " " << version::kBuilder;   // middot separator
-
-        juce::StringArray lines;
-        lines.add (juce::String ("TabbyEQ ") + version::kDescribe);
-        lines.add (juce::String ("build ")   + prettyBuildStamp());
-        lines.add (hashLine);
-        lines.add (juce::String ("core ")    + version::kCoreVersion);
-        return lines.joinIntoString ("\n");
+        using AP = juce::AudioProcessor;
+        if (w == AP::wrapperType_VST3)        return "VST3";
+        if (w == AP::wrapperType_AudioUnit)   return "AU";
+        if (w == AP::wrapperType_AudioUnitv3) return "AUv3";
+        if (w == AP::wrapperType_Standalone)  return "Standalone";
+        if (w == AP::wrapperType_Undefined)   return "CLAP";   // the only unwrapped format we ship
+        return AP::getWrapperTypeDescription (w);
     }
 
     //==========================================================================
-    // The popover body: the panel-styled, monospaced version block (click it to copy) + an opt-in
-    // "Check for updates" row below. Only the button click hits the network; the result lands on the
-    // message thread. If an update is already known (a prior check, persisted), it shows up front.
-    class InfoContent final : public juce::Component,
-                              private juce::Timer
+    // The product half of the shared badge. The checker already carries the slug and the running
+    // version (the badge derives its GitHub links from them), so this fills in only what it cannot
+    // know: identity, the baked build stamp, the dependency line, the mark and the palette.
+    felitronics::appkit::VersionBadge::Config makeVersionBadgeConfig (const juce::String& format)
     {
-    public:
-        InfoContent (UpdateChecker& uc, juce::Component::SafePointer<InfoButton> ownerButton)
-            : checker (uc), owner (ownerButton), text (buildInfoText())
+        felitronics::appkit::VersionBadge::Config cfg;
+        cfg.productName = "TabbyEQ";
+        cfg.byline      = "by Darwin's Cat";
+        cfg.productUrl  = "https://darwinscat.com/tabbyeq";
+
+        cfg.gitHash     = version::kGitHash;
+        cfg.buildNumber = version::kBuildNumber;
+        cfg.gitDirty    = false;   // kDescribe already ends in "-dirty" when it is — no second badge
+        cfg.builder     = version::kBuilder;
+        // JUCE still says "Mac OSX 26.5.1" — a name Apple retired in 2012; the row shows today's.
+        cfg.os          = juce::SystemStats::getOperatingSystemName().replace ("Mac OSX", "macOS");
+        cfg.arch        =
+           #if JUCE_ARM
+            "arm64";
+           #else
+            "x86_64";
+           #endif
+
+        // AGPL is not fine print here: the plugin IS the licence's subject, and a reader looking for
+        // it looks at the version row.
+        cfg.licence = "AGPL-3.0+";   // the shorthand for -or-later: the same grant, four chars less
+
+        // What this build actually rides, as a list with its versions in one column. Each version
+        // links to that repo's release tag; JUCE's tags are bare numbers, hence no leading v.
+        cfg.dependencies = {
+            { "felitronics-core",   version::kCoreVersion,   "darwinscat/felitronics-core",   version::kCoreHash,   {} },
+            { "felitronics-appkit", version::kAppkitVersion, "darwinscat/felitronics-appkit", version::kAppkitHash, {} },
+            { "JUCE",               version::kJuceVersion,   "juce-framework/JUCE",           version::kJuceHash,   {} } };
+
+        // The popover's title mark = the window header's mark, so the two read as one product.
+        cfg.drawMark = [] (juce::Graphics& g, float cx, float cy, float d)
         {
-            check.setButtonText ("Check for updates");
-            check.onClick = [this] { runCheck(); };
-            addAndMakeVisible (check);
+            tabby::brand::drawMark (g, juce::Rectangle<float> (cx - d * 0.5f, cy - d * 0.5f, d, d));
+        };
 
-            result.setFont (juce::FontOptions (11.5f));
-            result.setJustificationType (juce::Justification::centredLeft);
-            result.setColour (juce::Label::textColourId, tabby::palette::textDim());
-            addAndMakeVisible (result);
-
-            releaseLink.setColour (juce::HyperlinkButton::textColourId, tabby::palette::orange());
-            releaseLink.setJustificationType (juce::Justification::centredLeft);
-            addChildComponent (releaseLink);   // hidden until an update is actually available
-
-            // If an update is already known from a previous check, surface it immediately.
-            if (checker.updateAvailable())
-                showUpdate (checker.storedLatest());
-
-            setSize (kWidth, kHeight);
-            setWantsKeyboardFocus (false);
-        }
-
-        void paint (juce::Graphics& g) override
+        // ...and the byline carries the CAT from the window header, so the popover repeats the
+        // header's pair: the product's mark over the family's. The drawable is module-lifetime on
+        // purpose — the popup is parented to the top-level window and can outlive the editor that
+        // owns the header's own copy.
+        cfg.drawByline = [] (juce::Graphics& g, float cx, float cy, float d)
         {
-            auto r = getLocalBounds().toFloat().reduced (1.0f);
-            g.setColour (tabby::palette::panel());
-            g.fillRoundedRectangle (r, 6.0f);
-            g.setColour (tabby::palette::violet().withAlpha (0.35f));
-            g.drawRoundedRectangle (r, 6.0f, 1.0f);
+            static const std::unique_ptr<juce::Drawable> cat =
+                juce::Drawable::createFromImageData (BinaryData::logodarwinscat_svg,
+                                                     (size_t) BinaryData::logodarwinscat_svgSize);
+            if (cat != nullptr)
+                cat->drawWithin (g, juce::Rectangle<float> (cx - d * 0.5f, cy - d * 0.5f, d, d),
+                                 juce::RectanglePlacement::centred, 0.92f);
+        };
 
-            const juce::Font mono (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.5f, juce::Font::plain));
-            g.setFont (mono);
+        // TabbyEQ's palette, not the badge's inherited OrbitCab pixels.
+        cfg.accent      = tabby::palette::violet();
+        cfg.accentHover = tabby::palette::violetLo();
+        cfg.accentB     = tabby::palette::orange();
+        cfg.text        = tabby::palette::text();
+        cfg.ground      = tabby::palette::panel();   // the About window's own ground
 
-            auto block = blockBounds();
-            juce::StringArray lines;
-            lines.addLines (text);
-            auto row = block;
-            for (int i = 0; i < lines.size(); ++i)
-            {
-                // First line (name + describe) reads as the title colour; the rest are dimmed meta.
-                g.setColour (i == 0 ? tabby::palette::text() : tabby::palette::textDim());
-                g.drawText (lines[i], row.removeFromTop (kLineH), juce::Justification::centredLeft, true);
-            }
-
-            // Faint divider between the (copyable) stamp block and the update row.
-            const int dy = block.getBottom() + 6;
-            g.setColour (tabby::palette::textDim().withAlpha (0.18f));
-            g.drawHorizontalLine (dy, (float) kPad, (float) (getWidth() - kPad));
-
-            // Footer copy hint (right-aligned under the update row).
-            g.setFont (mono.withHeight (10.5f));
-            g.setColour (copied ? tabby::palette::orange() : tabby::palette::textDim().withAlpha (0.7f));
-            g.drawText (copied ? "copied \xe2\x9c\x93" : "click the block to copy",
-                        getLocalBounds().reduced (kPad, kPad).removeFromBottom (14),
-                        juce::Justification::centredRight, false);
-        }
-
-        void resized() override
-        {
-            auto r = getLocalBounds().reduced (kPad, kPad);
-            r.removeFromTop (kNumLines * kLineH + 6 + 1 + 6);   // stamp block + gap + divider + gap
-            check.setBounds (r.removeFromTop (24));
-            r.removeFromTop (4);
-            result.setBounds     (r.removeFromTop (18));
-            releaseLink.setBounds (result.getBounds());          // the link replaces the status line when outdated
-        }
-
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            // Copy only when the click lands on the stamp block (the buttons/link handle their own).
-            if (! blockBounds().contains (e.getPosition())) return;
-            juce::SystemClipboard::copyTextToClipboard (text);
-            copied = true;
-            repaint();
-            startTimer (1100);   // brief "copied" flash, then revert
-        }
-
-        static constexpr int kWidth = 300, kPad = 12, kLineH = 16, kNumLines = 4;
-        static constexpr int kHeight = kPad * 2 + kNumLines * kLineH + 6 + 1 + 6 + 24 + 4 + 18 + 14;
-
-    private:
-        // The copyable stamp region (top block of monospaced lines), in local coords.
-        juce::Rectangle<int> blockBounds() const
-        {
-            return getLocalBounds().reduced (kPad, kPad).removeFromTop (kNumLines * kLineH);
-        }
-
-        void runCheck()
-        {
-            check.setEnabled (false);
-            releaseLink.setVisible (false);
-            result.setColour (juce::Label::textColourId, tabby::palette::textDim());
-            result.setText (juce::String::fromUTF8 ("Checking\xe2\x80\xa6"), juce::dontSendNotification);
-
-            juce::Component::SafePointer<InfoContent> safe (this);
-            checker.checkNow ([safe] (UpdateChecker::Result res)
-            {
-                if (auto* self = safe.getComponent())
-                    self->onResult (res);
-            });
-        }
-
-        void onResult (const UpdateChecker::Result& res)
-        {
-            check.setEnabled (true);
-            if (auto* b = owner.getComponent()) b->repaint();   // the badge dot may have appeared/cleared
-
-            if (! res.ok)
-            {
-                result.setColour (juce::Label::textColourId, tabby::palette::textDim());
-                result.setText (juce::String::fromUTF8 ("Couldn\xe2\x80\x99t check (offline?)"), juce::dontSendNotification);
-                return;
-            }
-            if (res.outdated)
-                showUpdate (res.latest, res.url);
-            else
-            {
-                releaseLink.setVisible (false);
-                result.setColour (juce::Label::textColourId, juce::Colour (0xff7be29a));   // green
-                result.setText (juce::String::fromUTF8 ("\xe2\x9c\x93 Up to date"), juce::dontSendNotification);
-            }
-        }
-
-        // Show the actionable "vX.Y.Z available →" link (opens the release page). `url` may be empty
-        // (a badge restored from a previous session) → fall back to the canonical releases page.
-        void showUpdate (const juce::String& latest, const juce::String& url = {})
-        {
-            result.setText ({}, juce::dontSendNotification);
-            releaseLink.setButtonText (juce::String::fromUTF8 ("v") + latest
-                                       + juce::String::fromUTF8 (" available \xe2\x86\x92"));   // "→"
-            releaseLink.setURL (juce::URL (url.isNotEmpty() ? url : UpdateChecker::releasesPageUrl()));
-            releaseLink.setVisible (true);
-        }
-
-        void timerCallback() override { copied = false; repaint(); stopTimer(); }
-
-        UpdateChecker& checker;
-        juce::Component::SafePointer<InfoButton> owner;   // to repaint the badge dot after a check
-        juce::String text;
-        juce::TextButton      check;
-        juce::Label           result;
-        juce::HyperlinkButton releaseLink;
-        bool copied = false;
-
-        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoContent)
-    };
+        // The tip jar. The badge signs the URL itself (?from=tabbyeq); the platform rides in the base
+        // so both affordances — this popover and the toolbar paw — report the same thing.
+        cfg.feedPrompt = format == "Standalone" ? "Like the app?" : "Like the plugin?";
+        cfg.feedLabel  = "Feed the Cat";
+        cfg.feedUrl    = juce::String (felitronics::appkit::brand::feedTheCatUrl) + "?os=" + platformToken();
+        return cfg;
+    }
 
     //==========================================================================
-    InfoButton::InfoButton (UpdateChecker& checker) : juce::Button ("info"), updateChecker (checker)
+    InfoButton::InfoButton (UpdateChecker& checker, felitronics::appkit::VersionBadge& versionBadge)
+        : juce::Button ("info"), updateChecker (checker), badge (versionBadge)
     {
         setTooltip ("Build / version info \xe2\x80\x94 click to check for updates");
-        onClick = [this] { showInfoCallout(); };
+        // The window is the FAMILY one (appkit VersionBadge's), and it is presented as an ABOUT dialog:
+        // centred on the editor, on a dimmed ground, with a close cross — it long outgrew what a
+        // call-out under a toolbar button can carry. This button is just its door, so the badge stays
+        // invisible and only holds the config + the checker wiring.
+        onClick = [this] { badge.showAbout(); };
     }
 
     void InfoButton::paintButton (juce::Graphics& g, bool over, bool down)
@@ -240,17 +158,4 @@ namespace tabby
         }
     }
 
-    void InfoButton::showInfoCallout()
-    {
-        auto content = std::make_unique<InfoContent> (updateChecker, this);
-
-        // Parent the call-out to the editor, NOT the desktop: a desktop call-out outlives the editor,
-        // so closing the plugin window with it open (or an async check landing after) would orphan it.
-        // As a child of the top-level editor it dies with the window; `areaToPointTo` is in parent coords.
-        if (auto* top = getTopLevelComponent())
-            juce::CallOutBox::launchAsynchronously (std::move (content),
-                                                    top->getLocalArea (this, getLocalBounds()), top);
-        else
-            juce::CallOutBox::launchAsynchronously (std::move (content), getScreenBounds(), nullptr);
-    }
 }

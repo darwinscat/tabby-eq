@@ -4,14 +4,18 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_processors/juce_audio_processors.h>   // AudioProcessor::WrapperType (the running format)
+#include <felitronics/appkit/VersionBadge.h>   // the family's shared version badge + its popover
+
 #include "../UpdateChecker.h"
 
 //==============================================================================
-// The toolbar "(i)" button: a small icon button that pops a compact, panel-styled callout with the
-// baked build/version stamp (describe · build number · hash+builder · core). Click the stamp block to
-// copy it; the callout also carries an opt-in "Check for updates" affordance (the ONLY thing that hits
-// the network — never on launch, never silent). When a newer release is known, a warm orange dot lights
-// on the (i) button and persists across sessions (see tabby::UpdateChecker).
+// The toolbar "(i)" button: a small icon button that casts the FAMILY version popover — felitronics-
+// appkit's VersionBadge window (brand mark, GitHub-linked build stamp, click-the-stamp-to-copy, the
+// opt-in "Check for updates" — the ONLY thing that hits the network, never on launch, never silent —
+// and the Feed the Cat block). TabbyEQ used to carry its own copy of that window; it is gone, and the
+// badge lives on invisibly beside this button as the config + checker holder (see makeVersionBadgeConfig).
+// When a newer release is known, a warm orange dot lights on the (i) and persists across sessions.
 //
 // The generated TabbyVersion.h is included ONLY by VersionInfo.cpp — since that header is rewritten
 // on every build (a fresh build number), keeping its inclusion out of this widely-included header
@@ -22,15 +26,28 @@ namespace tabby
     // callers (the processor wiring the UpdateChecker) need not include the per-build generated header.
     const char* currentDescribe();
 
+    // The running format, spelled the way the window shows it (CLAP reports wrapperType_Undefined —
+    // among the formats TabbyEQ ships that is unambiguously CLAP; mirrors OrbitCab's mapping).
+    juce::String pluginFormatName (juce::AudioProcessor::WrapperType);
+
+    // TabbyEQ's product config for the shared felitronics::appkit::VersionBadge — the family About
+    // window (marks + GitHub-linked table + opt-in update check + the Feed the Cat block). Assembled
+    // HERE so the per-build generated TabbyVersion.h stays included by VersionInfo.cpp alone.
+    // `format` = pluginFormatName (proc.wrapperType): it decides one word of wording — running as
+    // Standalone the thing in your hands is an app, everywhere else it is a plugin.
+    felitronics::appkit::VersionBadge::Config makeVersionBadgeConfig (const juce::String& format);
+
     class InfoButton : public juce::Button
     {
     public:
-        explicit InfoButton (UpdateChecker& checker);
+        // `versionBadge` supplies the window; both it and the checker must outlive this button (the
+        // editor declares them first).
+        InfoButton (UpdateChecker& checker, felitronics::appkit::VersionBadge& versionBadge);
         void paintButton (juce::Graphics&, bool shouldDrawHighlighted, bool shouldDrawDown) override;
 
     private:
-        void showInfoCallout();
-        UpdateChecker& updateChecker;
+        UpdateChecker& updateChecker;                        // the orange "update available" dot
+        felitronics::appkit::VersionBadge& badge;            // the window this button casts
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoButton)
     };
 }
