@@ -7,7 +7,7 @@
 
 #include "PluginProcessor.h"
 #include "ui/Palette.h"
-#include "ui/FilterShapes.h"
+#include "ui/EqviewNames.h"
 #include "ui/LaneGlyphs.h"
 
 #include <functional>

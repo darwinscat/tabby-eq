@@ -7,7 +7,6 @@
 
 #include <cmath>
 #include "ui/Palette.h"
-#include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
 #include "ui/EqviewNames.h"   // shared filter-type classifiers (single home with the curve view)
 

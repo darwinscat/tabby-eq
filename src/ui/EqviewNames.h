@@ -7,6 +7,7 @@
 #include <felitronics/eqview/HandleMath.h>
 #include <felitronics/eqview/PlotGrid.h>
 #include <felitronics/eqview/PlotSurface.h>
+#include <felitronics/eqview/FilterShapes.h>
 #include <felitronics/analysis/PlotMap.h>
 
 //==============================================================================
@@ -31,3 +32,7 @@ namespace eqview
 
     using felitronics::analysis::PlotMap;
 }
+
+// The filter glyphs went the same way, and they were never TabbyEQ's alone: the family's menus all
+// draw the same little response curves. The product keeps saying tabby::shapes.
+namespace tabby { namespace shapes = felitronics::eqview::shapes; }
