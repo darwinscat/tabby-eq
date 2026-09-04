@@ -9,7 +9,7 @@
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
-#include "eqview/HandleMath.h"   // shared filter-type classifiers (single home with the curve view)
+#include "ui/EqviewNames.h"   // shared filter-type classifiers (single home with the curve view)
 
 namespace
 {

@@ -106,6 +106,27 @@ else()
 endif()
 FetchContent_MakeAvailable(felitronics_appkit)
 
+# ----------------------------------------------------------------------------
+# felitronics-eqview — the family's EQ-view pieces, and the home of what used to live in this repo's
+# src/eqview/ incubator: the log ruler's tick + label rules, the handle geometry, the response-curve
+# calculator. Same hybrid consumption as core and appkit. It depends on felitronics-core alone and
+# NEVER fetches it — which is why it is declared AFTER core above: the product resolves the graph, so
+# one version of core is chosen here rather than twice, deeper down.
+# ----------------------------------------------------------------------------
+set(TABBYEQ_EQVIEW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-eqview" CACHE PATH "Local felitronics-eqview checkout (used if present); else the pinned release is fetched")
+set(TABBYEQ_EQVIEW_TAG "v0.1.0" CACHE STRING "felitronics-eqview git tag to fetch when no local checkout is present")
+if(TABBYEQ_EQVIEW_DIR AND EXISTS "${TABBYEQ_EQVIEW_DIR}/CMakeLists.txt")
+    message(STATUS "felitronics-eqview: local checkout — ${TABBYEQ_EQVIEW_DIR}")
+    FetchContent_Declare(felitronics_eqview SOURCE_DIR "${TABBYEQ_EQVIEW_DIR}")
+else()
+    message(STATUS "felitronics-eqview: fetching ${TABBYEQ_EQVIEW_TAG} from GitHub")
+    FetchContent_Declare(felitronics_eqview
+        GIT_REPOSITORY https://github.com/darwinscat/felitronics-eqview.git
+        GIT_TAG        ${TABBYEQ_EQVIEW_TAG}
+        GIT_SHALLOW    TRUE)
+endif()
+FetchContent_MakeAvailable(felitronics_eqview)
+
 # JUCE is fetched when EITHER the plugin OR the headless adapter test is built (both link it); a pure
 # core build (-DTABBYEQ_BUILD_PLUGIN=OFF with tests off) never pulls it. Pinned like orbitcab.
 if(TABBYEQ_BUILD_PLUGIN OR TABBYEQ_BUILD_TESTS)
@@ -263,6 +284,7 @@ target_compile_definitions(TabbyEQ PUBLIC
 target_link_libraries(TabbyEQ PRIVATE
     teq::core                           # the framework-agnostic EQ engine
     felitronics::lineareq               # JUCE-free linear-phase EQ (pulls core + eq + convolution)
+    felitronics::eqview                 # the EQ view's pure seams: ruler + label ladders, handles, traces
     felitronics::dynamiceq              # JUCE-free per-point dynamics (LaneDynamics; pulls dynamics)
     felitronics::appkit                 # shared UpdateChecker/UpdateCompare (header-only; JUCE comes from us)
     TabbyEQData                         # embedded assets (Michroma wordmark font)
@@ -319,6 +341,7 @@ target_compile_definitions(TabbyEQ_LifecycleTest PRIVATE
 
 target_link_libraries(TabbyEQ_LifecycleTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
@@ -371,6 +394,7 @@ target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
 
 target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
@@ -425,6 +449,7 @@ target_compile_definitions(TabbyEQ_HistoryTest PRIVATE
 
 target_link_libraries(TabbyEQ_HistoryTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
@@ -510,37 +535,8 @@ target_include_directories(TabbyEQ_EqviewRefuteTest PRIVATE src)
 target_link_libraries(TabbyEQ_EqviewRefuteTest PRIVATE teq::core)
 add_test(NAME tabbyeq_eqview_refute COMMAND TabbyEQ_EqviewRefuteTest)
 
-# ----------------------------------------------------------------------------
-# JUCE-free theory unit for the eqview TraceSet (src/eqview/TraceSet.h) — the response-curve
-# calculator. Pins the matched-design centre contract, cascade log-multiplicativity, the teq
-# lane/axis folding axioms, the analytic-Butterworth anti-flatten rule and the display clamps.
-# ----------------------------------------------------------------------------
-add_executable(TabbyEQ_TraceSetTest tests/trace_set.cpp)
-target_include_directories(TabbyEQ_TraceSetTest PRIVATE src)
-target_link_libraries(TabbyEQ_TraceSetTest PRIVATE teq::core)
-add_test(NAME tabbyeq_trace_set COMMAND TabbyEQ_TraceSetTest)
 
-# ----------------------------------------------------------------------------
-# JUCE-free theory unit for the eqview HandleMath (src/eqview/HandleMath.h) — node/whisker
-# geometry + filter-type editing classification. Pins the type axioms, the log-linear Q<->bandwidth
-# calibration (endpoints, monotonicity, roundtrips), the slope-table maps and the symmetric-in-log
-# whisker geometry. Header-only over PlotMap + teq types; same core-tests ctest tier.
-# ----------------------------------------------------------------------------
-add_executable(TabbyEQ_HandleMathTest tests/handle_math.cpp)
-target_include_directories(TabbyEQ_HandleMathTest PRIVATE src)
-target_link_libraries(TabbyEQ_HandleMathTest PRIVATE teq::core)
-add_test(NAME tabbyeq_handle_math COMMAND TabbyEQ_HandleMathTest)
 
-# ----------------------------------------------------------------------------
-# JUCE-free theory unit for the eqview PlotGrid (src/eqview/PlotGrid.h) — where a log frequency
-# axis puts its ticks, which of them carry a number, and how a linear (dB) scale thins its numbers.
-# The ladders' promise (a minimum pixel gap between neighbouring numbers) is MEASURED through
-# PlotMap rather than asserted from the header's constants; same core-tests ctest tier.
-# ----------------------------------------------------------------------------
-add_executable(TabbyEQ_PlotGridTest tests/plot_grid.cpp)
-target_include_directories(TabbyEQ_PlotGridTest PRIVATE src)
-target_link_libraries(TabbyEQ_PlotGridTest PRIVATE teq::core)
-add_test(NAME tabbyeq_plot_grid COMMAND TabbyEQ_PlotGridTest)
 
 # ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with

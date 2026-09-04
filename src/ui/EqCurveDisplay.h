@@ -10,15 +10,18 @@
 #include <felitronics/analysis/PlotMap.h>
 #include <felitronics/analysis/SpectrumPane.h>
 #include <felitronics/analysis/MultiResSpectrumPane.h>
+#include "ui/EqviewNames.h"      // the library's names under this product's own
 #include <functional>
 #include <memory>
 
 // PlotMap and SpectrumPane graduated from the eqview incubator to felitronics-core once OrbitAmp
 // became their second consumer; the eqview names keep reading as before. MultiResSpectrumPane was
 // born in core (docs/ANALYZER-MULTIRES.md there) — the constant-Q sibling of the classic pane.
+// This product's OWN additions to the eqview vocabulary (the library's names arrive through
+// ui/EqviewNames.h above): the analyzer pane seam and its factories, which are TabbyEQ's premium
+// analyzer and not the family's business — see docs/ANALYZER-MULTIRES.md in core.
 namespace eqview
 {
-using felitronics::analysis::PlotMap;
 using felitronics::analysis::SpectrumPane;             // the classic pane on the core's scalar reference FFT
 using felitronics::analysis::MultiResSpectrumPane;     // the constant-Q pane on the same
 
@@ -45,8 +48,6 @@ std::unique_ptr<PaneBox> makeClassicPane (bool pffft);   // EqCurveDisplay.cpp; 
 std::unique_ptr<PaneBox> makeMultiPane   (bool pffft);
 bool pffftAvailable() noexcept;                          // TABBYEQ_WITH_PFFFT at build time
 }
-#include "eqview/TraceSet.h"
-#include "eqview/HandleMath.h"
 #include "PluginProcessor.h"
 #include "ui/Palette.h"
 

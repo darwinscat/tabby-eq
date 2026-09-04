@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/EqCurveDisplay.h"
-#include "eqview/PlotGrid.h"      // the log ruler's tick rule (JUCE-free; this TU only paints it)
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
