@@ -28,10 +28,74 @@ namespace eqview::grid
 // 50/200/500 as heavily made the axis read as an evenly-stepped one; Pro-Q draws the decades alone.)
 constexpr bool isDecade (int step) noexcept { return step == 1; }
 
-// The steps that carry a caption: 1, 2 and 5 per decade — 20 · 50 · 100 · 200 · 500 · 1k · 2k · 5k…
-// (the 1-2-5 series every audio plot in the family labels). A captioned step always gets its line,
-// however narrow the plot: a number with no line under it is not a scale. The rest is fine ruler.
-constexpr bool isCaptioned (int step) noexcept { return step == 1 || step == 2 || step == 5; }
+// How many numbers the axis can carry. A scale is read by its numbers, and how many fit is a
+// question about PIXELS, not about taste: the same ladder that reads generously across a wide
+// window crowds into an unreadable row when the plot narrows. So the axis picks the densest rung
+// its own width can hold — and picks it from a fixed ladder, so the numbers a reader learned to
+// expect never move, they only appear and disappear.
+enum class LabelSet
+{
+    Decades,      // 100 · 1k · 10k — the joints alone: the rung for a THUMBNAIL plot (a corner-EQ in
+                  //                  a strip, a cab slot), where three numbers are all that fit
+    HalfDecades,  // 1-3: 100 · 300 · 1k · 3k · 10k — evenly spaced in log (log10 3 ≈ half a decade)
+    Sparse,       // 1-2-5: 20 · 50 · 100 · 200 · 500 · 1k…  — the family's default row
+    Dense         // 1-2-3-5-7: + 30 · 70 · 300 · 700 · 3k · 7k — only where there is real room
+};
+
+constexpr bool isLabelled (int step, LabelSet set) noexcept
+{
+    switch (set)
+    {
+        case LabelSet::Dense:       return step == 1 || step == 2 || step == 3 || step == 5 || step == 7;
+        case LabelSet::Sparse:      return step == 1 || step == 2 || step == 5;
+        case LabelSet::HalfDecades: return step == 1 || step == 3;
+        case LabelSet::Decades:     return step == 1;
+    }
+    return step == 1;
+}
+
+// The steps that carry a caption at the family's default density (1-2-5). A step in this set always
+// gets its LINE, however narrow the plot: a number with no line under it is not a scale.
+constexpr bool isCaptioned (int step) noexcept { return isLabelled (step, LabelSet::Sparse); }
+
+// The tightest neighbouring gap inside one decade, in decades — the pair that decides whether a
+// rung fits: dense is decided by 5→7, sparse by 1→2, half-decades by 1→3.
+inline double tightestGap (LabelSet set) noexcept
+{
+    switch (set)
+    {
+        case LabelSet::Dense:       return 0.1461280356782382;   // log10(7/5)
+        case LabelSet::Sparse:      return 0.3010299956639812;   // log10(2)
+        case LabelSet::HalfDecades: return 0.4771212547196624;   // log10(3)
+        case LabelSet::Decades:     return 1.0;
+    }
+    return 1.0;
+}
+
+// The densest rung whose closest pair of numbers still keeps `minGapPx` between them. `decadePx`
+// comes from decadeWidth(); `minGapPx` is the caller's own type size plus the air it wants.
+inline LabelSet labelSet (float decadePx, double minGapPx) noexcept
+{
+    for (auto set : { LabelSet::Dense, LabelSet::Sparse, LabelSet::HalfDecades })
+        if ((double) decadePx * tightestGap (set) >= minGapPx)
+            return set;
+    return LabelSet::Decades;
+}
+
+// The same question for a LINEAR scale (dB up the side, and any other evenly-stepped axis). Three
+// rungs — the scale's own step, doubled, tripled — and then one last rung at ×6 for the same
+// thumbnail case the Decades rung serves horizontally. Every rung is a WHOLE multiple of `base`, so
+// a caption never lands between the grid lines it is meant to name.
+inline double labelStep (double base, double pxPerUnit, double minGapPx) noexcept
+{
+    if (! (base > 0.0) || ! (pxPerUnit > 0.0))
+        return base;
+
+    for (const double m : { 1.0, 2.0, 3.0 })
+        if (base * m * pxPerUnit >= minGapPx)
+            return base * m;
+    return base * 6.0;
+}
 
 // One decade in pixels. The X map is logarithmic, so every decade is the same width — one number
 // that tells the caller whether the ruler between the captions would still be readable.
@@ -42,7 +106,7 @@ inline float decadeWidth (const PlotMap& pm) noexcept
 }
 
 // Walks the ruler inside the map's own range, low to high: fn (frequency, step), where step is the
-// 1…9 position inside its decade — the caller weights it through isDecade / isCaptioned rather than
+// 1…9 position inside its decade — the caller weights it through isDecade / isLabelled rather than
 // being handed a verdict, because a consumer with its own scale (a cab curve, a waveform) weighs
 // them differently.
 template <typename Fn>

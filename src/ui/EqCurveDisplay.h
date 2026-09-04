@@ -332,9 +332,20 @@ private:
     // (orange, under the range picker) OVERLAYS the plot's right end, inside that rule; only the
     // ANALYZER LEVEL scale (dim violet, every 10 dBFS) lives outside it, so the gutter only has to
     // be as wide as one column.
-    static constexpr int kScaleGutterW = 30;
-    static constexpr int kGainColW = 24, kGainColPad = 5;   // orange column: right-aligned INSIDE the plot's edge
-    static constexpr int kSpecColX = 3,  kSpecColW = 24;    // dim-violet column: offsets from the plot's edge
+    static constexpr int kScaleGutterW = 32;
+    // The two number columns straddle the plot's edge, and nothing is drawn between them any more —
+    // so the AIR between them is what separates them: the gain numbers end ON the edge, the level
+    // numbers start 4 px outside it. Their own alignment does the rest — the level column is
+    // right-aligned in a box just wide enough for "-100" (24 px cut it to "-1…" on a deep range),
+    // so every label shorter than that leaves far more room than the boxes suggest.
+    static constexpr int kGainColW = 24, kGainColPad = 0;   // gain column: right-aligned ON the plot's edge
+    static constexpr int kSpecColX = 4,  kSpecColW = 28;    // level column: offsets from the plot's edge
+                                                            // (4 + 28 = the whole gutter — the level
+                                                            //  numbers end ON the component's edge)
+    // The Range pill leans PAST the plot's edge into the gutter — it belongs to the gain scale it
+    // heads, so it sits a touch further right than the numbers under it, and still clears the level
+    // column's topmost number ("0", right-aligned at the far end of its box).
+    static constexpr int kRangePillOverhang = 6;
     static constexpr int kLaneH       = 84;           // Fixed-lane reserve = strip + freq axis (kToolbarH + kBottomAxisH + gap)
 
     // Toolbar placement strategy (see setToolbarPlacement). Classic = the original centered-above behaviour.
@@ -362,6 +373,12 @@ private:
     bool  placeGainFromDrag = false;                  // press-drag add: take gain from drag Y (not default)
 
     static constexpr double kFreqMin   = 20.0, kFreqMax = 28000.0;   // AXIS range: top runs ~½-oct past 20k so the >20k rolloff is visible
+    // How much clear room a printed number wants before the scale drops to a sparser rung — the two
+    // dials of every scale on this plot, tuned BY EYE and kept round on purpose. 50 px along the
+    // bottom (numbers sit side by side there, and "20k" is wide); 25 px down a column, where a row
+    // needs only its own height plus air.
+    static constexpr double kLabelGapPx = 50.0;   // frequency captions, horizontally
+    static constexpr double kRowGapPx   = 25.0;   // dB captions (gain + analyzer), vertically
     static constexpr double kFreqPlaceMax = 20000.0;                 // bands can only be PLACED up to here (= the freq param max); 20k–28k is display-only
     static constexpr double kGainMax   = 24.0;          // ± dB — the real gain-param clamp (drag / keyboard)
     static constexpr double kGainSteps[4] = { 3.0, 6.0, 12.0, 30.0 };   // selectable vertical-scale steps (visible ± dB)

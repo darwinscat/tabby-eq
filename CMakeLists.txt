@@ -532,6 +532,17 @@ target_link_libraries(TabbyEQ_HandleMathTest PRIVATE teq::core)
 add_test(NAME tabbyeq_handle_math COMMAND TabbyEQ_HandleMathTest)
 
 # ----------------------------------------------------------------------------
+# JUCE-free theory unit for the eqview PlotGrid (src/eqview/PlotGrid.h) — where a log frequency
+# axis puts its ticks, which of them carry a number, and how a linear (dB) scale thins its numbers.
+# The ladders' promise (a minimum pixel gap between neighbouring numbers) is MEASURED through
+# PlotMap rather than asserted from the header's constants; same core-tests ctest tier.
+# ----------------------------------------------------------------------------
+add_executable(TabbyEQ_PlotGridTest tests/plot_grid.cpp)
+target_include_directories(TabbyEQ_PlotGridTest PRIVATE src)
+target_link_libraries(TabbyEQ_PlotGridTest PRIVATE teq::core)
+add_test(NAME tabbyeq_plot_grid COMMAND TabbyEQ_PlotGridTest)
+
+# ----------------------------------------------------------------------------
 # CMake-script unit for the version generator's C++ string-literal escaping: runs the generator with
 # a hostile TABBYEQ_BUILDER (quote + backslash + tab) into a scratch header and asserts the escaped
 # literal — a weird-but-legal git tag or builder name must never break the emitted header's compile.
