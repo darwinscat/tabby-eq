@@ -341,6 +341,7 @@ target_compile_definitions(TabbyEQ_LifecycleTest PRIVATE
 
 target_link_libraries(TabbyEQ_LifecycleTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
@@ -393,6 +394,7 @@ target_compile_definitions(TabbyEQ_AdapterTest PRIVATE
 
 target_link_libraries(TabbyEQ_AdapterTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
@@ -447,6 +449,7 @@ target_compile_definitions(TabbyEQ_HistoryTest PRIVATE
 
 target_link_libraries(TabbyEQ_HistoryTest PRIVATE
     teq::core
+    felitronics::eqview                  # same seams the editor sources include
     felitronics::lineareq
     felitronics::dynamiceq
     felitronics::appkit
