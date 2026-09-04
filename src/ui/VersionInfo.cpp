@@ -18,24 +18,6 @@ namespace tabby
     const char* currentDescribe() { return version::kDescribe; }
 
     //==========================================================================
-    // The platform, for the tip jar's URL: appkit signs the canonical hop with ?from=<slug>, and the
-    // platform rides along as &os=<token> so the hop's access log can tell a macOS click from a
-    // Windows one. Compile-time — a shipped binary is one platform. Neither parameter reaches the
-    // payment page: /feed-the-cat logs them and 302s clean.
-    static constexpr const char* platformToken()
-    {
-       #if JUCE_MAC
-        return "macos";
-       #elif JUCE_WINDOWS
-        return "windows";
-       #elif JUCE_LINUX || JUCE_BSD
-        return "linux";
-       #else
-        return "other";
-       #endif
-    }
-
-    //==========================================================================
     juce::String pluginFormatName (juce::AudioProcessor::WrapperType w)
     {
         using AP = juce::AudioProcessor;
@@ -111,9 +93,10 @@ namespace tabby
 
         // The tip jar. The badge signs the URL itself (?from=tabbyeq); the platform rides in the base
         // so both affordances — this popover and the toolbar paw — report the same thing.
+        // The URL itself is appkit's default hop, which brand::feedTheCatLink signs on its own with
+        // from=<product>, platform=<os> and format=<wrapper> — we only choose the words.
         cfg.feedPrompt = format == "Standalone" ? "Like the app?" : "Like the plugin?";
         cfg.feedLabel  = "Feed the Cat";
-        cfg.feedUrl    = juce::String (felitronics::appkit::brand::feedTheCatUrl) + "?os=" + platformToken();
         return cfg;
     }
 
