@@ -7,6 +7,8 @@
 #include <felitronics/appkit/UpdateChecker.h>   // the running version + the "a newer release is known" flag
 #include <felitronics/appkit/UpdateCompare.h>   // update::isCleanRelease — is this build an exact release?
 
+#include <felitronics/appkit/chrome/ChromeMetrics.h>   // chrome::drawTracked — one tracked line, the family's way
+
 #include "Palette.h"
 
 //==============================================================================
@@ -55,6 +57,17 @@ public:
 
     std::function<void()> onClick;
 
+    // The strip's own type. Given a face, the stamp is set in it — the bottom bar is chrome, and the
+    // family's chrome wears the family's letters; given none, it stays on the system font.
+    void setDisplayFont (juce::Typeface::Ptr face, float trackingEm = 0.0f)
+    {
+        typeface = std::move (face);
+        tracking = trackingEm;
+        if (auto* p = getParentComponent())
+            p->resized();                     // the line's width just changed under the strip
+        repaint();
+    }
+
     // The width the full line wants, and the width it can still be read at (the version alone) —
     // the strip hands over what it has between the analyzer item and the correlation meter. The
     // alert dot rides in front of the text, so a lit dot asks for its own room.
@@ -82,8 +95,8 @@ public:
 
         g.setColour (isMouseOver() ? tabby::palette::text()
                                    : tabby::palette::text().withAlpha (0.42f));
-        g.setFont (font());
-        g.drawText (text, r, juce::Justification::centredRight, false);
+        felitronics::appkit::chrome::drawTracked (g, text, r.toFloat(), font(), tracking,
+                                                  juce::Justification::right);
     }
 
     void mouseUp (const juce::MouseEvent& e) override
@@ -120,14 +133,24 @@ private:
 
     int dotRoom() const { return updateDot ? 13 : 0; }   // 6 px dot + the air around it
 
-    static juce::Font font() { return juce::Font (juce::FontOptions (11.0f)); }
+    juce::Font font() const
+    {
+        return typeface != nullptr
+                 ? juce::Font (juce::FontOptions().withHeight (kTextH).withTypeface (typeface))
+                 : juce::Font (juce::FontOptions (kTextH));
+    }
 
-    static float textWidth (const juce::String& s)
+    float textWidth (const juce::String& s) const
     {
         juce::GlyphArrangement ga;
         ga.addLineOfText (font(), s, 0.0f, 0.0f);
-        return ga.getBoundingBox (0, -1, true).getWidth();
+        return ga.getBoundingBox (0, -1, true).getWidth()
+                 + kTextH * tracking * (float) juce::jmax (0, ga.getNumGlyphs() - 1);
     }
+
+    static constexpr float kTextH = 11.0f;
+    juce::Typeface::Ptr typeface;
+    float tracking = 0.0f;
 
     felitronics::appkit::UpdateChecker& checker;
     juce::String versionText, fullText;

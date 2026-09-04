@@ -100,45 +100,4 @@ namespace tabby
         return cfg;
     }
 
-    //==========================================================================
-    InfoButton::InfoButton (UpdateChecker& checker, felitronics::appkit::VersionBadge& versionBadge)
-        : juce::Button ("info"), updateChecker (checker), badge (versionBadge)
-    {
-        setTooltip ("Build / version info \xe2\x80\x94 click to check for updates");
-        // The window is the FAMILY one (appkit VersionBadge's), and it is presented as an ABOUT dialog:
-        // centred on the editor, on a dimmed ground, with a close cross — it long outgrew what a
-        // call-out under a toolbar button can carry. This button is just its door, so the badge stays
-        // invisible and only holds the config + the checker wiring.
-        onClick = [this] { badge.showAbout(); };
-    }
-
-    void InfoButton::paintButton (juce::Graphics& g, bool over, bool down)
-    {
-        // FLAT, like the rest of the top-bar chrome (gear / fullscreen / A-D): no tile, no frame —
-        // just the drawn lower-case "i" (dot + rounded stem), dim at rest, lifting on hover.
-        auto b = getLocalBounds().toFloat().reduced (0.5f);
-
-        const auto ink = (over || down) ? tabby::palette::violetLo() : tabby::palette::textDim();
-        g.setColour (ink);
-
-        const float cx  = b.getCentreX();
-        const float top = b.getY() + b.getHeight() * 0.28f;
-        const float dot = 2.0f;
-        g.fillEllipse (cx - dot * 0.5f, top - dot, dot, dot);                       // the "i" dot
-        const float stemT = top + dot * 1.4f;
-        const float stemB = b.getBottom() - b.getHeight() * 0.26f;
-        g.fillRoundedRectangle (cx - 1.0f, stemT, 2.0f, stemB - stemT, 1.0f);        // the "i" stem
-
-        // Update-available badge: a warm orange dot at the top-right corner (palette-consistent),
-        // persisted across sessions by the UpdateChecker until the running build catches up.
-        if (updateChecker.updateAvailable())
-        {
-            const float rr = 3.0f;
-            const float ox = b.getRight() - rr - 0.5f;
-            const float oy = b.getY()     + rr + 0.5f;
-            g.setColour (tabby::palette::orange());
-            g.fillEllipse (ox - rr, oy - rr, rr * 2.0f, rr * 2.0f);
-        }
-    }
-
 }
