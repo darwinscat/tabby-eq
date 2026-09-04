@@ -114,7 +114,7 @@ FetchContent_MakeAvailable(felitronics_appkit)
 # one version of core is chosen here rather than twice, deeper down.
 # ----------------------------------------------------------------------------
 set(TABBYEQ_EQVIEW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-eqview" CACHE PATH "Local felitronics-eqview checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_EQVIEW_TAG "v0.1.0" CACHE STRING "felitronics-eqview git tag to fetch when no local checkout is present")
+set(TABBYEQ_EQVIEW_TAG "v0.2.0" CACHE STRING "felitronics-eqview git tag to fetch when no local checkout is present")
 if(TABBYEQ_EQVIEW_DIR AND EXISTS "${TABBYEQ_EQVIEW_DIR}/CMakeLists.txt")
     message(STATUS "felitronics-eqview: local checkout — ${TABBYEQ_EQVIEW_DIR}")
     FetchContent_Declare(felitronics_eqview SOURCE_DIR "${TABBYEQ_EQVIEW_DIR}")

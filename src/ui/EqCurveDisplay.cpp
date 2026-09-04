@@ -157,6 +157,23 @@ EqCurveDisplay::~EqCurveDisplay()
 //==============================================================================
 // The freq↔px / dB↔px math lives in eqview::PlotMap (felitronics/analysis/PlotMap.h) — these
 // wrappers only feed it the component's live geometry, so every caller keeps its old signature.
+// The family's plot surface, dressed in THIS product's palette and type. Built per paint pass from
+// the same geometry snapshot everything else uses, so the ground, the numbers and the curves can
+// never disagree about where a frequency is.
+eqview::PlotSurface EqCurveDisplay::plotSurface (const eqview::PlotMap& pm) const
+{
+    eqview::PlotSurface s;
+    s.map                = pm;
+    s.theme.grid         = tabby::palette::grid();
+    s.theme.gridZero     = tabby::palette::gridZero();
+    s.theme.zeroGlow     = tabby::palette::violetLo().withAlpha (0.05f);
+    s.theme.axisText     = tabby::palette::axisText();
+    s.theme.labelFont    = juce::Font (juce::FontOptions (11.0f));
+    s.metrics.labelGapPx = kLabelGapPx;
+    s.metrics.rowGapPx   = kRowGapPx;
+    return s;
+}
+
 eqview::PlotMap EqCurveDisplay::plotMap() const noexcept
 {
     // width = the PLOT's width, i.e. the component minus the right dB-scale gutter (kScaleGutterW):
@@ -940,44 +957,17 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     g.setGradientFill (vignette);
     g.fillRect (bb);
 
-    // --- grid (LINES only — every axis CAPTION is painted at the very end, over the fog) ---------
-    // The FULL logarithmic ruler (eqview::grid): every 1…9 step of every decade. Only the DECADES
-    // (100/1k/10k) carry the grid's own weight — they are the scale's joints; everything between
-    // them, captioned or not, is fine ruler at half of it. Ten lonely lines made a log axis look
-    // like a linear one with odd labels, and weighting 50/200/500 with the decades kept that
-    // reading. A captioned step always gets its line; the rest steps aside under ~62 px of decade,
-    // where it would read as a hatch rather than as a scale.
-    g.setFont (11.0f);
-    {
-        const bool fine = eqview::grid::decadeWidth (pm) >= 62.0f;
-        const auto majorInk = tabby::palette::grid();
-        const auto minorInk = majorInk.withMultipliedAlpha (0.5f);
-        eqview::grid::forEachTick (pm, [&] (double f, int step)
-        {
-            if (! fine && ! eqview::grid::isCaptioned (step))
-                return;
-            g.setColour (eqview::grid::isDecade (step) ? majorInk : minorInk);
-            g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
-        });
-    }
-    // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
+    // --- the ground: ruler and level lines (every axis CAPTION is painted at the very end, over the
+    //     fog). Both come from eqview::PlotSurface now — the log ruler with its decade weights and
+    //     its narrow-plot fallback, the level lines with the 0 dB line and its bloom. What stays
+    //     HERE is the LOOK: the surface takes every colour and the type as parameters, so the family
+    //     brick never carries this product's palette into somebody else's window.
+    const auto surface = plotSurface (pm);
+    surface.paintFrequencyRuler (g, 0.0f, h);
+
+    // The dB grid's step follows the selected range (±3/6/12/30).
     const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
-    for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
-    {
-        if (std::abs (std::abs (db) - gainRange) < 0.01) continue;   // skip the outermost ticks — they sit ON the top/bottom
-                                                                     // edge and read as a frame the curves "bump into"
-        const float y = pm.dbToY (db);
-        const bool zero = std::abs (db) < 0.01;
-        if (zero)
-        {
-            g.setColour (tabby::palette::violetLo().withAlpha (0.05f));   // soft glow on the 0 dB line
-            g.fillRect (0.0f, y - 2.5f, wx, 5.0f);
-            g.setColour (tabby::palette::gridZero());
-        }
-        else
-            g.setColour (tabby::palette::grid());
-        g.drawHorizontalLine ((int) y, 0.0f, wx);
-    }
+    surface.paintLevelGrid (g, 0.0f, wx, tickStep, gainRange);
 
     // (The beyond-Nyquist fog is drawn LAST — over the curve so it dissolves into it, see the end of paint.)
 
@@ -1389,59 +1379,36 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     };
     // (No fs/2 mark of any kind: neither hairline nor notch. The only thing that would show it —
     // the old in-plot fog — is gone by design, the dissolve now belongs to the axis instead.)
-    // How many numbers the axis carries is a question about width, not about taste: the densest rung
-    // (1-2-3-5-7 · 1-2-5 · decades) whose closest pair still keeps 50 px between them. Widen the
-    // window and 30/70/300/700/3k/7k appear; narrow it and they leave before they can collide.
-    {
-        const auto set = eqview::grid::labelSet (eqview::grid::decadeWidth (pm), kLabelGapPx);
-        eqview::grid::forEachTick (pm, [&] (double f, int step)
-        {
-            if (! eqview::grid::isLabelled (step, set))
-                return;
-            caption (f >= 1000.0 ? juce::String (f / 1000.0, 0) + "k" : juce::String ((int) f),
-                     { (int) pm.freqToX (f) + 2, (int) h - 14, 34, 12 }, juce::Justification::left,
-                     tabby::palette::axisText());
-        });
-    }
+    // How many numbers the axis carries is a question about width, not about taste — the surface
+    // picks the densest rung (1-2-3-5-7 · 1-2-5 · 1-3 · decades) whose closest pair still keeps
+    // kLabelGapPx between them. Widen the window and 30/70/300/700/3k/7k appear; narrow it and they
+    // leave before they can collide.
+    surface.paintFrequencyLabels (g, h - 14.0f);
 
     // (No rule down the plot's right edge: the two number columns are far enough apart to read as
     // two, and the fog already says where real signal ends — a line between them only fenced the
     // gain numbers off from the curve they measure.)
 
     // The EQ GAIN scale — OVERLAY, right-aligned just inside the plot's edge, in the hue of the
-    // curve it measures. The grid keeps the Range's own step; the NUMBERS climb the ×1 · ×2 · ×3
-    // ladder until they clear kRowGapPx, so a short window loses numbers instead of stacking them
-    // into a column of digits. Counted OUTWARD FROM 0 (not up from -range) so the row stays
-    // symmetric about the 0 dB line at every rung, and every caption lands on a grid line.
-    const double gainLabelStep = eqview::grid::labelStep (
-        tickStep, std::abs (pm.dbToY (0.0) - pm.dbToY (1.0)), kRowGapPx);
-    for (double mag = gainLabelStep; mag <= gainRange - 0.01; mag += gainLabelStep)
-        for (const double db : { mag, -mag })
-        {
-            const float y = pm.dbToY (db);
-            if (y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // below the range picker, above the toolbar
-                caption ((db > 0.0 ? "+" : "") + juce::String ((int) db),
-                         { (int) w - kGainColPad - kGainColW, (int) y - 6, kGainColW, 12 },
-                         juce::Justification::right, tabby::palette::orange().withAlpha (0.90f));
-        }
+    // curve it measures. The grid keeps the Range's own step; the NUMBERS climb the surface's
+    // ×1 · ×2 · ×3 ladder until they clear kRowGapPx, counted outward from 0 so the row stays
+    // symmetric about the 0 dB line at every rung and every caption lands on a grid line. The band
+    // it may write in is this product's own furniture: below the range picker, above the toolbar.
+    surface.paintGainColumn (g, gainRange, tickStep,
+                             { (int) w - kGainColPad - kGainColW, 0, kGainColW, 12 },
+                             { 30.0f, (float) plotBottomY() - 2.0f },
+                             tabby::palette::orange().withAlpha (0.90f));
 
     // Gutter column 2 — the ANALYZER LEVEL scale: down the spectrum's own scale (specDbToY, NOT the
     // gain scale), on the same ladder. It reads in the AXIS ink, exactly like the frequency row
-    // along the bottom, because that is what it is: a scale belonging to the grid. (It used to be
-    // violet, which tied it to the level rails on either side of the window — a different thing
-    // measuring a different signal.) The gain column keeps the curve's own hue: it measures the
-    // curve, not the plot.
-    const double anaLabelStep = eqview::grid::labelStep (
-        10.0, std::abs (pm.specDbToY (0.0) - pm.specDbToY (1.0)), kRowGapPx);
-    for (double db = 0.0; db >= -anaRange - 0.01; db -= anaLabelStep)
-    {
-        const float y = pm.specDbToY (db);
-        if (y >= 8.0f && y <= h - 16.0f)
-            caption (juce::String ((int) db),
-                     { (int) w + kSpecColX, (int) y - 6, kSpecColW, 12 }, juce::Justification::right,
-                     tabby::palette::axisText());
-    }
+    // along the bottom, because that is what it is: a scale belonging to the grid. The gain column
+    // keeps the curve's own hue instead: it measures the curve, not the plot.
+    surface.paintValueColumn (g, [&pm] (double db) { return pm.specDbToY (db); },
+                              0.0, -anaRange, 10.0,
+                              { (int) w + kSpecColX, 0, kSpecColW, 12 },
+                              { 8.0f, h - 16.0f }, tabby::palette::axisText());
 }
+
 
 //==============================================================================
 void EqCurveDisplay::addBandOfType (int typeIndex, juce::Point<float> at, int slopeIndex)

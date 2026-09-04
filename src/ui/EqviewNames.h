@@ -6,6 +6,7 @@
 #include <felitronics/eqview/TraceSet.h>
 #include <felitronics/eqview/HandleMath.h>
 #include <felitronics/eqview/PlotGrid.h>
+#include <felitronics/eqview/PlotSurface.h>
 #include <felitronics/analysis/PlotMap.h>
 
 //==============================================================================
@@ -24,6 +25,7 @@
 namespace eqview
 {
     using felitronics::eqview::TraceSet;
+    using felitronics::eqview::PlotSurface;
     namespace grid    = felitronics::eqview::grid;
     namespace handles = felitronics::eqview::handles;
 
