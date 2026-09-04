@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/EqCurveDisplay.h"
+#include "eqview/PlotGrid.h"      // the log ruler's tick rule (JUCE-free; this TU only paints it)
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
@@ -940,11 +941,24 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     }
 
     // --- grid (LINES only — every axis CAPTION is painted at the very end, over the fog) ---------
+    // The FULL logarithmic ruler (eqview::grid): every 1…9 step of every decade. Only the DECADES
+    // (100/1k/10k) carry the grid's own weight — they are the scale's joints; everything between
+    // them, captioned or not, is fine ruler at half of it. Ten lonely lines made a log axis look
+    // like a linear one with odd labels, and weighting 50/200/500 with the decades kept that
+    // reading. A captioned step always gets its line; the rest steps aside under ~62 px of decade,
+    // where it would read as a hatch rather than as a scale.
     g.setFont (11.0f);
-    for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
     {
-        g.setColour (tabby::palette::grid());
-        g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
+        const bool fine = eqview::grid::decadeWidth (pm) >= 62.0f;
+        const auto majorInk = tabby::palette::grid();
+        const auto minorInk = majorInk.withMultipliedAlpha (0.5f);
+        eqview::grid::forEachTick (pm, [&] (double f, int step)
+        {
+            if (! fine && ! eqview::grid::isCaptioned (step))
+                return;
+            g.setColour (eqview::grid::isDecade (step) ? majorInk : minorInk);
+            g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
+        });
     }
     // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
     const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
