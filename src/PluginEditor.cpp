@@ -107,6 +107,12 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (modeItem);
     addAndMakeVisible (anaItem);
 
+    // The build stamp at the far end of the strip. It opens the SAME window as the (i): appkit's
+    // About dialog, centred on the editor — one panel, two ways in (OrbitAmp's footer stamp does
+    // exactly this). The badge stays the window's owner; this is only a door.
+    versionStamp.onClick = [this] { versionBadge.showAbout(); };
+    addAndMakeVisible (versionStamp);
+
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
     latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (latencyLabel);
@@ -812,9 +818,25 @@ void TabbyEqEditor::resized()
     const auto middleStrip = bottom;                                 // full middle width (for centring)
     modeItem.setBounds (bottom.removeFromLeft (150).reduced (2, 1));
     latencyLabel.setBounds (bottom.removeFromLeft (58).reduced (0, 1));
-    corrMeter.setBounds (bottom.removeFromRight (76).reduced (0, 5));   // right end == the spectrum's right edge
     anaItem.setBounds (juce::Rectangle<int> (middleStrip.getCentreX() - 70, middleStrip.getY() + 1, 140,
                                              middleStrip.getHeight() - 2));
+
+    // The right end of the strip, laid out outward-in: the build stamp ends ON the spectrum's right
+    // edge (the strip's own right end), the correlation meter sits inboard of it. The stamp gives
+    // way rather than collide with the centred Analyzer item — below its full width it drops the
+    // wrapper word, and below the version alone it steps off and the meter takes the end back.
+    {
+        constexpr int kStampGap = 12;                                     // between stamp and meter
+        const int room  = bottom.getRight() - (anaItem.getRight() + 10) - 76 - kStampGap;
+        const int width = juce::jmin (room, versionStamp.preferredWidth());
+        versionStamp.setVisible (width >= versionStamp.minimumWidth());
+        if (versionStamp.isVisible())
+        {
+            versionStamp.setBounds (bottom.removeFromRight (width));
+            bottom.removeFromRight (kStampGap);
+        }
+        corrMeter.setBounds (bottom.removeFromRight (76).reduced (0, 5));
+    }
 
     // The graph starts RIGHT under the toolbar line — no black inset strip below it (the toolbar
     // must end AT the line). Keep the side/bottom insets, drop the top one.
