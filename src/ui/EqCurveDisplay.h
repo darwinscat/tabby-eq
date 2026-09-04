@@ -174,6 +174,7 @@ private:
     // coordinate maps — thin wrappers over eqview::PlotMap (the single, unit-tested home of the
     // mapping math); plotMap() snapshots the component's live geometry into one.
     eqview::PlotMap plotMap() const noexcept;
+    eqview::PlotSurface plotSurface (const eqview::PlotMap&) const;   // the family ground, in this palette
     float  freqToX (double f) const noexcept;
     double xToFreq (float x)  const noexcept;
     float  dbToY   (double db) const noexcept;     // curve gain scale (± kGainRange around centre)
