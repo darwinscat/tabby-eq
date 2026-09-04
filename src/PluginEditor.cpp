@@ -840,7 +840,12 @@ void TabbyEqEditor::resized()
 
     // The graph starts RIGHT under the toolbar line — no black inset strip below it (the toolbar
     // must end AT the line). Keep the side/bottom insets, drop the top one.
-    display.setBounds (r.reduced (8, 0).withTrimmedBottom (4));
+    // The graph's insets are NOT symmetric: 8 px of air on the left, none on the right. The right
+    // side is where both number columns live, and they were being pushed inboard twice — once by
+    // this inset and once by the scale gutter. Giving the plot those 8 px back moves the whole
+    // right-hand scale block out to the rail, where it reads as the window's edge rather than as a
+    // column floating in the middle of the graph.
+    display.setBounds (r.withTrimmedLeft (8).withTrimmedBottom (4));
 
     underline.setBounds (getLocalBounds());   // full-width overlay; draws only the toolbar-bottom hairline
     blister.toFront (false);                  // blister ALWAYS above content — its bulge overhangs the graph/meters

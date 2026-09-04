@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Darwin's Cat — Oleh Tsymaienko <oleh@darwinscat.com> & Alisa <alisa@darwinscat.com>. Part of TabbyEQ — see LICENSE.
 
 #include "ui/EqCurveDisplay.h"
+#include "eqview/PlotGrid.h"      // the log ruler's tick rule (JUCE-free; this TU only paints it)
 #include "ui/Palette.h"
 #include "ui/FilterShapes.h"
 #include "ui/LaneMenu.h"
@@ -620,7 +621,7 @@ void EqCurveDisplay::positionToolbar()
 void EqCurveDisplay::resized()
 {
     // The range picker heads the orange gain column: right-aligned to THAT column's right edge.
-    gainScaleBtn.setBounds (getWidth() - kScaleGutterW - kGainColPad - 54, 6, 54, 20);
+    gainScaleBtn.setBounds (getWidth() - kScaleGutterW + kRangePillOverhang - 54, 6, 54, 20);
     positionToolbar();
 }
 
@@ -930,21 +931,35 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     const auto wx = (float) getWidth();
     const int solo = proc.getSoloBand();   // >=0: spotlight that band's curve, dim the composite
 
-    // premium radial vignette: centre lifted a touch, corners deepened
-    {
-        const auto bb = getLocalBounds().toFloat();
-        juce::ColourGradient vg (tabby::palette::bg().brighter (0.18f), bb.getCentreX(), bb.getCentreY() - h * 0.06f,
-                                 tabby::palette::bg().darker (0.55f),   bb.getX(),       bb.getBottom(), true);
-        g.setGradientFill (vg);
-        g.fillRect (bb);
-    }
+    // premium radial vignette: centre lifted a touch, corners deepened. Built ONCE and kept — the
+    // gutter's dissolve (at the end of paint) re-lays this very gradient over the ink, so what the
+    // graph fades into is the ground it stands on rather than a separate ink of its own.
+    const auto bb = getLocalBounds().toFloat();
+    const juce::ColourGradient vignette (
+        tabby::palette::bg().brighter (0.18f), bb.getCentreX(), bb.getCentreY() - h * 0.06f,
+        tabby::palette::bg().darker (0.55f),   bb.getX(),       bb.getBottom(), true);
+    g.setGradientFill (vignette);
+    g.fillRect (bb);
 
     // --- grid (LINES only — every axis CAPTION is painted at the very end, over the fog) ---------
+    // The FULL logarithmic ruler (eqview::grid): every 1…9 step of every decade. Only the DECADES
+    // (100/1k/10k) carry the grid's own weight — they are the scale's joints; everything between
+    // them, captioned or not, is fine ruler at half of it. Ten lonely lines made a log axis look
+    // like a linear one with odd labels, and weighting 50/200/500 with the decades kept that
+    // reading. A captioned step always gets its line; the rest steps aside under ~62 px of decade,
+    // where it would read as a hatch rather than as a scale.
     g.setFont (11.0f);
-    for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
     {
-        g.setColour (tabby::palette::grid());
-        g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
+        const bool fine = eqview::grid::decadeWidth (pm) >= 62.0f;
+        const auto majorInk = tabby::palette::grid();
+        const auto minorInk = majorInk.withMultipliedAlpha (0.5f);
+        eqview::grid::forEachTick (pm, [&] (double f, int step)
+        {
+            if (! fine && ! eqview::grid::isCaptioned (step))
+                return;
+            g.setColour (eqview::grid::isDecade (step) ? majorInk : minorInk);
+            g.drawVerticalLine ((int) pm.freqToX (f), 0.0f, h);
+        });
     }
     // dB grid + right-edge vertical scale — ticks adapt to the selected range (±3/6/12/30).
     const double tickStep = gainRange <= 3.0 ? 1.0 : gainRange <= 6.0 ? 2.0 : gainRange <= 12.0 ? 3.0 : 6.0;
@@ -1338,11 +1353,26 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     // fog is a property of the EDGE, not of the sample rate — it no longer marks fs/2 (nothing does
     // now; see the axis note). The frequency scale still ends at the axis, so everything past it is
     // the last value held flat: a tail that reads as a fade-out, not as data.
+    // It fades into THE GROUND, not into an ink of its own: the same radial vignette the plot stands
+    // on is re-laid over the gutter through a left-to-right opacity ramp. (It used to be a flat
+    // bg.darker(0.35) wash, which ended the gutter several levels below both the plot beside it and
+    // the window behind it — a black stripe under the level numbers.) The ramp is stepped rather
+    // than a gradient because a fill can carry ONE gradient at a time, and the ground's is radial.
+    // The strip count is per PIXEL of gutter, not a fixed number: a coarser ramp printed its steps
+    // straight onto anything bright crossing the gutter (the 0 dB line showed them as dashes).
     {
-        const auto fog = tabby::palette::bg().darker (0.35f);
-        g.setGradientFill (juce::ColourGradient (fog.withAlpha (0.0f),  w,  0.0f,
-                                                 fog.withAlpha (0.97f), wx, 0.0f, false));
-        g.fillRect (w, 0.0f, wx - w, h);
+        const int kStrips = juce::jlimit (16, 128, (int) std::ceil (wx - w));
+        const float span = wx - w;
+        for (int i = 0; i < kStrips; ++i)
+        {
+            const float t0 = (float) i / (float) kStrips, t1 = (float) (i + 1) / (float) kStrips;
+            g.setGradientFill (vignette);
+            // Opaque a little before the edge, so the last of the ink is gone under the numbers and
+            // not still dying at the very last column.
+            g.setOpacity (juce::jmin (1.0f, t1 * 1.2f));
+            g.fillRect (w + span * t0, 0.0f, span * (t1 - t0) + 1.0f, h);
+        }
+        g.setOpacity (1.0f);
     }
 
     // --- axis, then every caption — painted LAST, over the fade ---------------------------------
@@ -1360,36 +1390,57 @@ void EqCurveDisplay::paint (juce::Graphics& g)
     };
     // (No fs/2 mark of any kind: neither hairline nor notch. The only thing that would show it —
     // the old in-plot fog — is gone by design, the dissolve now belongs to the axis instead.)
-    for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
-        caption (f >= 1000.0 ? juce::String (f / 1000.0, 0) + "k" : juce::String ((int) f),
-                 { (int) pm.freqToX (f) + 2, (int) h - 14, 34, 12 }, juce::Justification::left,
-                 tabby::palette::axisText());
-
-    // THE axis — the plot's right edge, and the only vertical rule on that side (it took over the
-    // hue the Nyquist hairline used to carry; that hairline is gone, the fog alone now shows where
-    // real signal ends). Gain numbers overlay the plot to its left, analyzer levels sit to its right.
-    g.setColour (tabby::palette::violetLo().withAlpha (0.5f));
-    g.drawVerticalLine ((int) w, 0.0f, h - 14.0f);
-
-    // The EQ GAIN scale — OVERLAY, right-aligned just inside the axis, in the hue of the curve it measures.
-    for (double db = -gainRange; db <= gainRange + 0.01; db += tickStep)
+    // How many numbers the axis carries is a question about width, not about taste: the densest rung
+    // (1-2-3-5-7 · 1-2-5 · decades) whose closest pair still keeps 50 px between them. Widen the
+    // window and 30/70/300/700/3k/7k appear; narrow it and they leave before they can collide.
     {
-        if (std::abs (std::abs (db) - gainRange) < 0.01 || std::abs (db) < 0.01) continue;
-        const float y = pm.dbToY (db);
-        if (y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // below the range picker, above the toolbar
-            caption ((db > 0.0 ? "+" : "") + juce::String ((int) db),
-                     { (int) w - kGainColPad - kGainColW, (int) y - 6, kGainColW, 12 },
-                     juce::Justification::right, tabby::palette::orange().withAlpha (0.90f));
+        const auto set = eqview::grid::labelSet (eqview::grid::decadeWidth (pm), kLabelGapPx);
+        eqview::grid::forEachTick (pm, [&] (double f, int step)
+        {
+            if (! eqview::grid::isLabelled (step, set))
+                return;
+            caption (f >= 1000.0 ? juce::String (f / 1000.0, 0) + "k" : juce::String ((int) f),
+                     { (int) pm.freqToX (f) + 2, (int) h - 14, 34, 12 }, juce::Justification::left,
+                     tabby::palette::axisText());
+        });
     }
-    // Gutter column 2 — the ANALYZER LEVEL scale: every 10 dBFS down the spectrum's own scale
-    // (specDbToY, NOT the gain scale), dim violet so it never competes with the gain numbers.
-    for (double db = 0.0; db >= -anaRange - 0.01; db -= 10.0)
+
+    // (No rule down the plot's right edge: the two number columns are far enough apart to read as
+    // two, and the fog already says where real signal ends — a line between them only fenced the
+    // gain numbers off from the curve they measure.)
+
+    // The EQ GAIN scale — OVERLAY, right-aligned just inside the plot's edge, in the hue of the
+    // curve it measures. The grid keeps the Range's own step; the NUMBERS climb the ×1 · ×2 · ×3
+    // ladder until they clear kRowGapPx, so a short window loses numbers instead of stacking them
+    // into a column of digits. Counted OUTWARD FROM 0 (not up from -range) so the row stays
+    // symmetric about the 0 dB line at every rung, and every caption lands on a grid line.
+    const double gainLabelStep = eqview::grid::labelStep (
+        tickStep, std::abs (pm.dbToY (0.0) - pm.dbToY (1.0)), kRowGapPx);
+    for (double mag = gainLabelStep; mag <= gainRange - 0.01; mag += gainLabelStep)
+        for (const double db : { mag, -mag })
+        {
+            const float y = pm.dbToY (db);
+            if (y >= 30.0f && y <= (float) plotBottomY() - 2.0f)   // below the range picker, above the toolbar
+                caption ((db > 0.0 ? "+" : "") + juce::String ((int) db),
+                         { (int) w - kGainColPad - kGainColW, (int) y - 6, kGainColW, 12 },
+                         juce::Justification::right, tabby::palette::orange().withAlpha (0.90f));
+        }
+
+    // Gutter column 2 — the ANALYZER LEVEL scale: down the spectrum's own scale (specDbToY, NOT the
+    // gain scale), on the same ladder. It reads in the AXIS ink, exactly like the frequency row
+    // along the bottom, because that is what it is: a scale belonging to the grid. (It used to be
+    // violet, which tied it to the level rails on either side of the window — a different thing
+    // measuring a different signal.) The gain column keeps the curve's own hue: it measures the
+    // curve, not the plot.
+    const double anaLabelStep = eqview::grid::labelStep (
+        10.0, std::abs (pm.specDbToY (0.0) - pm.specDbToY (1.0)), kRowGapPx);
+    for (double db = 0.0; db >= -anaRange - 0.01; db -= anaLabelStep)
     {
         const float y = pm.specDbToY (db);
         if (y >= 8.0f && y <= h - 16.0f)
             caption (juce::String ((int) db),
                      { (int) w + kSpecColX, (int) y - 6, kSpecColW, 12 }, juce::Justification::right,
-                     tabby::palette::violet().withAlpha (0.55f));
+                     tabby::palette::axisText());
     }
 }
 
