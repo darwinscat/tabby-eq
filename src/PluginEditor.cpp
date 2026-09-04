@@ -85,7 +85,6 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     addAndMakeVisible (compareCell);
     pushCompareModel();               // active register + edited dots + undo/redo enable + peek labels
 
-    addAndMakeVisible (infoButton);   // (i) build/version popover — top-bar right
     versionBadge.setBrandTypeface (mark.wordmarkTypeface);   // the popover's wordmark = the header's
     // INVISIBLE on purpose: the (i) is the door, the badge is only the window's owner. It stays a CHILD
     // (its popover parents itself to the top-level through it) and takes the (i)'s bounds in resized(),
@@ -113,8 +112,24 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
     versionStamp.onClick = [this] { versionBadge.showAbout(); };
     addAndMakeVisible (versionStamp);
 
+    // The bottom bar is CHROME, so it wears the family's letters: the same Michroma the wordmark is
+    // set in, a size smaller than the system font would be (a display face reads larger at the same
+    // height) and tracked apart the way a display face on a toolbar wants. The top bar's cells keep
+    // the system font for now — this is the footer's switch, not the window's.
+    {
+        auto footerTheme = chromeTheme;
+        footerTheme.display  = mark.wordmarkTypeface;
+        footerTheme.tracking = 0.06f;
+        for (auto* item : { &modeItem, &anaItem })
+        {
+            item->theme      = footerTheme;
+            item->textHeight = 11.0f;
+        }
+    }
+    versionStamp.setDisplayFont (mark.wordmarkTypeface, 0.06f);
+
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
-    latencyLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    latencyLabel.setFont (tabby::brand::wordmarkFont (mark.wordmarkTypeface, 11.0f));
     addAndMakeVisible (latencyLabel);
     updatePhaseUi();        // initial mode label + latency text
     refreshAnalyzerItem();  // initial "Analyzer: …" label
@@ -791,7 +806,6 @@ void TabbyEqEditor::resized()
     bar.add ({ &compareCell, Cell::Region::RigidCenter, compareCell.fixedWidth(),            0,  false });
     bar.add ({ &presetCell,  Cell::Region::RigidCenter, presetCell.fixedWidth(),            14,  false });   // gGap before preset
     bar.add ({ &gearBtn,     Cell::Region::RightPinned, 26, 4, false, 0, 2, 4 });   // gear (4px leading gap → free band)
-    bar.add ({ &infoButton,  Cell::Region::RightPinned, 24, 0, false, 0, 3, 5 });   // (i)
     bar.add ({ &fullBtn,     Cell::Region::RightPinned, 26, 0, true,  0, 2, 4 });   // fullscreen (collapses when hidden — standalone only)
 
     // Clamp the RigidCenter run so the CAT's left edge only just reaches a small margin; past that
@@ -799,7 +813,6 @@ void TabbyEqEditor::resized()
     constexpr int kCatMargin = 4;
     const int minStartX = kCatMargin - (int) felitronics::appkit::chrome::BrandBlister::contentLeftOffset();
     bar.layout (topBar, kBarH, minStartX);
-    versionBadge.setBounds (infoButton.getBounds());   // the invisible window-owner rides the (i)
 
     // ---- three vertical blocks: |IN meter| spectrum |OUT rail| ---------------------------------
     // The rails run the FULL height below the top bar and are the SAME width; the bottom toolbar
@@ -816,10 +829,15 @@ void TabbyEqEditor::resized()
     auto bottom = r.removeFromBottom (22);
     bottom.reduce (8, 0);                                            // align with the display's insets
     const auto middleStrip = bottom;                                 // full middle width (for centring)
-    modeItem.setBounds (bottom.removeFromLeft (150).reduced (2, 1));
-    latencyLabel.setBounds (bottom.removeFromLeft (58).reduced (0, 1));
-    anaItem.setBounds (juce::Rectangle<int> (middleStrip.getCentreX() - 70, middleStrip.getY() + 1, 140,
-                                             middleStrip.getHeight() - 2));
+    // Widths measured from the LABEL, not guessed: a display face is half again as wide as the system
+    // one at the same height, and "Linear Phase – High" would have been clipped by a fixed 150 px.
+    modeItem.setBounds (bottom.removeFromLeft (juce::jmax (150, modeItem.preferredWidth (18))).reduced (2, 1));
+    latencyLabel.setBounds (bottom.removeFromLeft (62).reduced (0, 1));
+    {
+        const int anaW = juce::jmax (140, anaItem.preferredWidth (18));
+        anaItem.setBounds (juce::Rectangle<int> (middleStrip.getCentreX() - anaW / 2, middleStrip.getY() + 1,
+                                                 anaW, middleStrip.getHeight() - 2));
+    }
 
     // The right end of the strip, laid out outward-in: the build stamp ends ON the spectrum's right
     // edge (the strip's own right end), the correlation meter sits inboard of it. The stamp gives
@@ -836,6 +854,11 @@ void TabbyEqEditor::resized()
             bottom.removeFromRight (kStampGap);
         }
         corrMeter.setBounds (bottom.removeFromRight (76).reduced (0, 5));
+
+        // The invisible window-owner rides the STAMP — the About dialog centres itself on the
+        // editor, but a fallback call-out (a host with no top level to centre on) should point at
+        // the thing that was clicked.
+        versionBadge.setBounds (versionStamp.getBounds());
     }
 
     // The graph starts RIGHT under the toolbar line — no black inset strip below it (the toolbar

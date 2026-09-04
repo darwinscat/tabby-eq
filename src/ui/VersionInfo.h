@@ -7,15 +7,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>   // AudioProcessor::WrapperType (the running format)
 #include <felitronics/appkit/VersionBadge.h>   // the family's shared version badge + its popover
 
-#include "../UpdateChecker.h"
-
 //==============================================================================
-// The toolbar "(i)" button: a small icon button that casts the FAMILY version popover — felitronics-
-// appkit's VersionBadge window (brand mark, GitHub-linked build stamp, click-the-stamp-to-copy, the
-// opt-in "Check for updates" — the ONLY thing that hits the network, never on launch, never silent —
-// and the Feed the Cat block). TabbyEQ used to carry its own copy of that window; it is gone, and the
-// badge lives on invisibly beside this button as the config + checker holder (see makeVersionBadgeConfig).
-// When a newer release is known, a warm orange dot lights on the (i) and persists across sessions.
+// The product half of the FAMILY version window — felitronics-appkit's VersionBadge (brand marks,
+// GitHub-linked build stamp, the opt-in "Check for updates" — the ONLY thing that hits the network,
+// never on launch, never silent — and the Feed the Cat block). This file assembles the config; the
+// door that opens the window is the build stamp at the end of the bottom bar (ui/VersionStamp.h),
+// which also carries the "a newer release is known" dot.
 //
 // The generated TabbyVersion.h is included ONLY by VersionInfo.cpp — since that header is rewritten
 // on every build (a fresh build number), keeping its inclusion out of this widely-included header
@@ -37,17 +34,5 @@ namespace tabby
     // Standalone the thing in your hands is an app, everywhere else it is a plugin.
     felitronics::appkit::VersionBadge::Config makeVersionBadgeConfig (const juce::String& format);
 
-    class InfoButton : public juce::Button
-    {
-    public:
-        // `versionBadge` supplies the window; both it and the checker must outlive this button (the
-        // editor declares them first).
-        InfoButton (UpdateChecker& checker, felitronics::appkit::VersionBadge& versionBadge);
-        void paintButton (juce::Graphics&, bool shouldDrawHighlighted, bool shouldDrawDown) override;
 
-    private:
-        UpdateChecker& updateChecker;                        // the orange "update available" dot
-        felitronics::appkit::VersionBadge& badge;            // the window this button casts
-        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoButton)
-    };
 }

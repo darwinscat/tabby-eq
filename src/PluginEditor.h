@@ -170,14 +170,15 @@ private:
     // ---- top-right pinned glyphs ----
     tabby::ui::GlyphButton gearBtn { tabby::ui::GlyphButton::Glyph::Gear };         // View options menu (flat, top-right)
     tabby::ui::GlyphButton fullBtn { tabby::ui::GlyphButton::Glyph::Fullscreen };   // kiosk fullscreen — standalone only
-    // The FAMILY badge (felitronics-appkit): "v0.6.0 / <format>" + the shared popover — brand mark,
-    // GitHub-linked build stamp, opt-in update check and the Feed the Cat block. It sits BESIDE our
-    // own (i), which keeps its compact, copyable stamp popover.
+    // The FAMILY badge (felitronics-appkit): the About window — brand marks, GitHub-linked build
+    // stamp, opt-in update check and the Feed the Cat block. It has no face of its own here: the
+    // build stamp at the end of the bottom bar is the door, and the badge is only the window's
+    // owner. (The toolbar (i) that used to cast it is gone — one product, one door, and the door
+    // that also SAYS what is running wins.)
     felitronics::appkit::VersionBadge versionBadge {
         proc.updateChecker(),
         tabby::makeVersionBadgeConfig (tabby::pluginFormatName (proc.wrapperType)),
         tabby::pluginFormatName (proc.wrapperType) };
-    tabby::InfoButton infoButton { proc.updateChecker(), versionBadge };   // (i) — casts the family popover, top-bar right
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TabbyEqEditor)
