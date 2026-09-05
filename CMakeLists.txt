@@ -313,11 +313,38 @@ if(TABBYEQ_WITH_PFFFT)
     target_link_libraries(TabbyEQ PRIVATE felitronics::fftpffft)   # explicit, though convolution already carries it
 endif()
 
-# Re-sign the Standalone ad-hoc with the correct bundle id so macOS TCC (mic access) persists
-# across rebuilds — JUCE's linker-sign otherwise uses the exe name ("TabbyEQ") as the identifier.
+# Re-sign the Standalone so macOS stops asking for the microphone after every rebuild.
+#
+# The standalone opens the system audio INPUT (that is the live spectrum), so TCC asks once and
+# remembers the answer — against the app's IDENTITY. An ad-hoc signature has no stable identity to
+# remember: every rebuild re-signs, macOS sees a new app, and the dialog comes back. Signing with the
+# real Developer ID, when this machine has one in its keychain, gives TCC something durable to key on
+# and the question is asked once for good. (JUCE's own linker-sign also uses the executable name as
+# the identifier, hence --identifier either way.)
+#
+# A machine without the certificate — CI, another developer's laptop — falls back to ad-hoc and
+# builds exactly as before; nothing here is allowed to make a build fail for want of a certificate.
+# The release workflow re-signs and timestamps properly afterwards, so this is about the daily loop.
 if(APPLE)
+    execute_process(COMMAND security find-identity -v -p codesigning
+                    OUTPUT_VARIABLE _tabby_identities ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    string(REGEX MATCH "Developer ID Application: [^\"]+" _tabby_devid "${_tabby_identities}")
+
+    if(_tabby_devid)
+        # Hardened runtime + the audio-input entitlement, the same pair the shipped build carries:
+        # under the hardened runtime macOS denies input WITHOUT that entitlement, and a local build
+        # that behaves differently from the shipped one is worth nothing as a test of the shipped one.
+        # No --timestamp: that needs Apple's server, and a build should not wait on the network.
+        set(_tabby_sign_args --sign "${_tabby_devid}" --options runtime --timestamp=none
+                             --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/installer/standalone.entitlements")
+        message(STATUS "Standalone signing: ${_tabby_devid} — TCC keeps the microphone answer across rebuilds")
+    else()
+        set(_tabby_sign_args --sign -)
+        message(STATUS "Standalone signing: ad-hoc (no Developer ID in this keychain) — macOS will ask for the microphone again after each rebuild")
+    endif()
+
     add_custom_command(TARGET TabbyEQ_Standalone POST_BUILD
-        COMMAND codesign --force --sign - --identifier "com.darwinscat.tabbyeq" "$<TARGET_BUNDLE_DIR:TabbyEQ_Standalone>"
+        COMMAND codesign --force ${_tabby_sign_args} --identifier "com.darwinscat.tabbyeq" "$<TARGET_BUNDLE_DIR:TabbyEQ_Standalone>"
         VERBATIM)
 endif()
 
