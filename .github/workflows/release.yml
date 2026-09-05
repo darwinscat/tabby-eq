@@ -46,8 +46,13 @@ jobs:
       - name: Wipe the previous run's build tree (self-hosted workspaces persist)
         run: rm -rf build dist
 
-      - name: Configure (Release; all four formats; JUCE fetched)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      # pffft ON: the analyzer's spectrum panes run on felitronics-core's SIMD FFT instead of its
+      # scalar reference — ~3x cheaper per tick (classic 16384: 267 -> 73 us; multi: 381 -> 126 us),
+      # numerically nulled against the scalar in core's own suite, and switchable at runtime
+      # (Analyzer -> FFT). Nothing in the AUDIO path touches it; only the display does. Without this
+      # flag the shipped build has no such switch at all — the row hides itself.
+      - name: Configure (Release; all four formats; JUCE fetched; pffft analyzer)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTABBYEQ_WITH_PFFFT=ON
 
       - name: Build
         run: cmake --build build -j
