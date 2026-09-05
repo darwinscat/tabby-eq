@@ -126,6 +126,10 @@ TabbyEqEditor::TabbyEqEditor (TabbyEqAudioProcessor& p)
             item->textHeight = 11.0f;
         }
     }
+    // The stamp is appkit's now; its ink is still ours — the line at rest, its lift under the cursor,
+    // and the family orange for "a newer release is known".
+    versionStamp.setColours (tabby::palette::text().withAlpha (0.42f), tabby::palette::text(),
+                             tabby::palette::orange());
     versionStamp.setDisplayFont (mark.wordmarkTypeface, 0.06f);
 
     latencyLabel.setJustificationType (juce::Justification::centredLeft);
