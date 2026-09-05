@@ -64,7 +64,7 @@ endfunction()
 # fetched from GitHub, so a fresh clone / CI is self-contained. Set TABBYEQ_FCORE_DIR="" to force the fetch.
 include(FetchContent)
 set(TABBYEQ_FCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../felitronics-core" CACHE PATH "Local felitronics-core checkout (used if present); else the pinned release is fetched")
-set(TABBYEQ_FCORE_TAG "v0.22.2" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
+set(TABBYEQ_FCORE_TAG "v0.25.0" CACHE STRING "felitronics-core git tag to fetch when no local checkout is present")
 if(TABBYEQ_WITH_PFFFT)
     # The core's optional compiled backend (pffft, BSD/FFTPACK — its notice is reproduced in this repo's
     # THIRD_PARTY_NOTICES.md, a condition of shipping it in a binary). The analyzer rides it, switchable at
@@ -170,6 +170,11 @@ if(TABBYEQ_APPKIT_DIR AND EXISTS "${TABBYEQ_APPKIT_DIR}/CMakeLists.txt")
 else()
     set(_tabby_appkit_local OFF)
 endif()
+if(TABBYEQ_EQVIEW_DIR AND EXISTS "${TABBYEQ_EQVIEW_DIR}/CMakeLists.txt")
+    set(_tabby_eqview_local ON)
+else()
+    set(_tabby_eqview_local OFF)
+endif()
 
 add_custom_target(TabbyVersionGen ALL
     BYPRODUCTS "${TABBY_VERSION_HEADER}"
@@ -183,9 +188,13 @@ add_custom_target(TabbyVersionGen ALL
         -DAPPKIT_LOCAL=${_tabby_appkit_local}
         -DAPPKIT_DIR=${TABBYEQ_APPKIT_DIR}
         -DAPPKIT_TAG=${TABBYEQ_APPKIT_TAG}
+        -DEQVIEW_LOCAL=${_tabby_eqview_local}
+        -DEQVIEW_DIR=${TABBYEQ_EQVIEW_DIR}
+        -DEQVIEW_TAG=${TABBYEQ_EQVIEW_TAG}
         -DJUCE_TAG=${TABBYEQ_JUCE_TAG}
         -DFCORE_SRC=${felitronics_core_SOURCE_DIR}
         -DAPPKIT_SRC=${felitronics_appkit_SOURCE_DIR}
+        -DEQVIEW_SRC=${felitronics_eqview_SOURCE_DIR}
         -DJUCE_SRC=${juce_SOURCE_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateTabbyVersion.cmake"
     COMMENT "Baking TabbyVersion.h build stamp"
@@ -202,9 +211,13 @@ execute_process(COMMAND ${CMAKE_COMMAND}
     -DAPPKIT_LOCAL=${_tabby_appkit_local}
     -DAPPKIT_DIR=${TABBYEQ_APPKIT_DIR}
     -DAPPKIT_TAG=${TABBYEQ_APPKIT_TAG}
+    -DEQVIEW_LOCAL=${_tabby_eqview_local}
+    -DEQVIEW_DIR=${TABBYEQ_EQVIEW_DIR}
+    -DEQVIEW_TAG=${TABBYEQ_EQVIEW_TAG}
     -DJUCE_TAG=${TABBYEQ_JUCE_TAG}
     -DFCORE_SRC=${felitronics_core_SOURCE_DIR}
     -DAPPKIT_SRC=${felitronics_appkit_SOURCE_DIR}
+    -DEQVIEW_SRC=${felitronics_eqview_SOURCE_DIR}
     -DJUCE_SRC=${juce_SOURCE_DIR}
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateTabbyVersion.cmake")
 
