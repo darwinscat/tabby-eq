@@ -21,7 +21,13 @@ env:
 
 jobs:
   release:
-    runs-on: [self-hosted, macOS]
+    # The `signing` label is not decoration: the org has two self-hosted macOS runners, and only
+    # ONE of them holds the Developer ID identity and the keychain the steps below unlock.
+    # Without it GitHub hands the job to whichever is free, and a release that lands on the other
+    # machine dies at `security unlock-keychain` with "the passphrase you entered is not correct" —
+    # which reads like a wrong secret and is actually the wrong host. v0.7.0 and v0.7.1 both lost
+    # that coin toss.
+    runs-on: [self-hosted, macOS, signing]
     timeout-minutes: 300     # notarization is the long pole — Apple's queue, not our build
     steps:
       # Gate: only CLEAN vX.Y.Z tags may publish. The in-plugin update check treats every published
