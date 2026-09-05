@@ -12,7 +12,7 @@
 #include "ui/OutputRail.h"          // the OUT rail — meter + trim fader in ONE 30 px column
 #include "ui/CorrelationMeter.h"
 #include "ui/VersionInfo.h"
-#include "ui/VersionStamp.h"       // the bottom-bar build stamp — the second door to the About window
+#include <felitronics/appkit/VersionStamp.h>   // the family's bottom-bar build stamp
 #include "ui/ChromeButtons.h"        // GlyphButton — the product's top-right gear/fullscreen glyphs
 #include "ui/TabbyMark.h"            // the product brand mark, drawn inside the blister frame
 #include <felitronics/appkit/chrome/ChromeMetrics.h>    // ChromeMetrics (barHeight) + ChromeTheme
@@ -160,8 +160,8 @@ private:
     // "v0.6.0 · Standalone" at the far end of the strip, left of the correlation meter: the same
     // kind of fact as the rest of this line (what the RUN is), and a second door to the About
     // window the (i) opens. Declared after `proc` — it reads the wrapper type at construction.
-    tabby::ui::VersionStamp versionStamp { proc.updateChecker(),
-                                           tabby::pluginFormatName (proc.wrapperType) };
+    felitronics::appkit::VersionStamp versionStamp { proc.updateChecker(),
+                                                     tabby::pluginFormatName (proc.wrapperType) };
     juce::String currentPresetName { "Default" };
     std::unique_ptr<juce::FileChooser> chooser;                         // async save/import/export
     int   lastPhaseMode = -1, lastPhaseQuality = -1;                    // timer poll caches (labels follow
