@@ -62,6 +62,7 @@ namespace tabby
         cfg.dependencies = {
             { "felitronics-core",   version::kCoreVersion,   "darwinscat/felitronics-core",   version::kCoreHash,   {} },
             { "felitronics-appkit", version::kAppkitVersion, "darwinscat/felitronics-appkit", version::kAppkitHash, {} },
+            { "felitronics-eqview", version::kEqviewVersion, "darwinscat/felitronics-eqview", version::kEqviewHash, {} },
             { "JUCE",               version::kJuceVersion,   "juce-framework/JUCE",           version::kJuceHash,   {} } };
 
         // The popover's title mark = the window header's mark, so the two read as one product.
