@@ -17,6 +17,18 @@ on:
     branches: [ main ]
   pull_request:
 
+# The job token gets only what this workflow needs: it checks out and builds, it never
+# writes to the repository. CodeQL's one finding in this family, ever, was a workflow
+# without this block.
+permissions:
+  contents: read
+
+# One live run per branch or pull request: a push on top of a push cancels the run it
+# replaced instead of finishing it against code nobody will merge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # Stamp every CI build as a "ci" builder (TabbyVersion.h kBuilder), replacing the local username.
 env:
   TABBYEQ_BUILDER: ci
@@ -24,6 +36,7 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5   # v5 runs on Node 24 (v4 pins the deprecated Node 20)
         with:
@@ -45,6 +58,7 @@ jobs:
   sanitizers:
     name: ubuntu-clang-asan-ubsan (adapter)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
