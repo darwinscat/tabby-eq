@@ -625,6 +625,30 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      dropped, or the next block resumes on a duck earned seconds ago (deltas are computed *after*
      each chunk, so nothing corrects it before the first sample). One shared `releaseDynamics()`,
      called on every such exit.
+   - **Release on disengage** (core v0.53.0, opted in 2026-09-26). A point switched off *while it
+     ducks* — `dyn_on` off, or the View → Dynamics preview off — used to have its delta zeroed on the
+     edge: a step in the band's gain (measured through the adapter, 220 Hz at −6 dBFS under a −15.9 dB
+     duck: max|Δ²y| −8.8 dBFS). `LaneDynamics::setReleaseOnDisengage(true)` lets it release through
+     the lane's own release ballistics instead (−45.5 dBFS; what remains is the 16-sample control
+     grid's zipper, the same the engaged release has), then hands the band back — bit-identical to a
+     static one where the ducked lane is the only one the band runs (a lane downstream of it keeps a
+     recursive filter's memory of the duck until that decays; see the core's `LaneDynamics` note).
+     The adapter owes the release the dynamic path: the gate is no longer `anyDyn` alone
+     but *any point dynamic, or any seam still carrying a delta* once the path has run, so the block
+     that switched the last ducking point off does not fall to `releaseDynamics()` + `engine.process()`
+     and cut the release to a snap. Audition, solo and the FIR modes stay hard edges (they take the
+     signal off the IIR bands). `prepareToPlay()` resets the producers *before* the engine, so a
+     band a release holds open is handed back inside the old stream and the new one snaps to the
+     host's current settings (the other order made the hand-back the band's first write and let an
+     edit made while stopped ramp in — found in review).
+     Range to 0 is a disengage edge only where the float unit makes it one: JUCE snaps the centred 0
+     of `dyn_range` (−24…24, step 0.01) as `start + interval·floor(…)`, which clang fuses into one FMA
+     where the ISA has it — on Apple Silicon that lands on −5.36e-7 dB (the point stays engaged at
+     that cap and its follower releases toward it; it never stepped, it never goes static either), on
+     x86-64 on exactly 0 (the point disengages and now releases). The `output` trim's centred 0 dB
+     snaps the same way (×0.99999994 on Apple Silicon). Pinned in `tests/lifecycle_misuse.cpp` § 14
+     (f) the release per edge, (g) static-from-the-first-sample against the bare engine, (i) the
+     re-prepare order; (f) asks range 0 for the landing only where it is 0.
    - Measured, not assumed: with `dyn.on` **false** a point is **bit-identical** to a pre-dynamics
      build; with `dyn.on` true and range 0 it is within **one float ULP** (1.19e-07) — the band still
      runs its unity delta section. Bit-identity is a promise about the OFF switch, not about range 0.

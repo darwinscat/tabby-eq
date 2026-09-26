@@ -133,8 +133,9 @@ public:
     int   getSpectrumDomain() const noexcept { return spectrumDomain.load (std::memory_order_relaxed); }
 
     // Point dynamics: an OPT-IN preview feature, OFF by default (View menu; rides the state tree as
-    // "dynamicsOn"). Off, the audio thread takes the same fast path as "no point is dynamic" — the
-    // seams are released and engine.process() runs — and the UI shows no dynamic affordance at all.
+    // "dynamicsOn"). Off, the audio thread takes the same fast path as "no point is dynamic" — a duck
+    // in flight releases through its own ballistics, then engine.process() runs — and the UI shows no
+    // dynamic affordance at all.
     // The dyn_* parameters stay registered either way: they are part of state v5, and hiding a
     // feature must never change the parameter list a host has already learned.
     void  setDynamicsEnabled (bool v) noexcept { dynamicsOn.store (v, std::memory_order_relaxed); }
@@ -390,7 +391,8 @@ private:
     using LaneDynamics = felitronics::dynamiceq::LaneDynamics;
     const std::unique_ptr<std::array<LaneDynamics, tabby::kNumBands>> dyn
         { std::make_unique<std::array<LaneDynamics, tabby::kNumBands>>() };
-    bool dynRunning = false;   // audio thread only: did the dynamic path run last block? (release edge — see processBlock)
+    bool dynRunning = false;   // audio thread only: did the dynamic path run last block? (release edge, and the
+                               // gate that keeps it running while a switched-off point releases — see processBlock)
 
     // Published GR: one atom per band per lane (24 × 5), the size DYNAMICS.md § 5 budgeted. Written by
     // the audio thread inside the dynamic loop — so a session with no dynamic point pays nothing, not

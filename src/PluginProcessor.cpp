@@ -294,6 +294,13 @@ TabbyEqAudioProcessor::~TabbyEqAudioProcessor()
 
 void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
+    // A release in flight holds its band's seam open, and LaneDynamics hands that band back from reset() —
+    // through EqBand::setParams(). That has to happen BEFORE the engine restarts its bands: after it, the
+    // hand-back would be the band's first write of the new stream and take its snap with the OLD parameters,
+    // so whatever the host changed while stopped would ramp in instead of landing (review, codex astra: a
+    // 0 -> 12 dB gain edit made while released arrived as a ramp, 1.44 full scale off a fresh instance on the
+    // first block). The prepare() below resets them again; by then nothing is held.
+    for (auto& d : *dyn) d.reset();
     engine.prepare (sampleRate, maximumExpectedSamplesPerBlock, getTotalNumOutputChannels());   // engine clamps to teq::kMaxChannels
     preTap->reset(); postTap->reset();                                        // rolling analyzer histories start empty (warm after one window)
     analyzerHopBase.store (juce::jmax (1, juce::roundToInt (sampleRate / 30.0)), std::memory_order_relaxed);   // ~30 fps analyzer publish cadence, independent of window size
@@ -304,6 +311,12 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     // Per-point dynamics: same rate + channel count as the engine (LaneDynamics clamps to teq::kMaxChannels
     // itself). prepare() resets every probe/follower, so a stream restart never replays the old block's
     // gain reduction — and the release edge starts disarmed to match.
+    // RELEASE ON DISENGAGE (core v0.53.0, opt-in): a point whose dynamics are switched off while it is
+    // ducking — dyn_on off, range to 0, or the preview switch off — lets its delta go through its own
+    // release ballistics instead of snapping it to 0, which was a click. What processBlock owes the
+    // release (the dynamic path keeps running until it lands) is written there. A plain flag: prepare()
+    // and reset() leave it as it is.
+    for (auto& d : *dyn) d.setReleaseOnDisengage (true);
     for (auto& d : *dyn) d.prepare (sampleRate, getTotalNumOutputChannels());
     dynRunning = false;
     for (auto& m : deltaMeter) m.store (0.0f, std::memory_order_relaxed);   // a stream restart shows no leftover GR
@@ -408,8 +421,11 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // phase mode, or simply no dynamic point — the last earned delta must not stay frozen in the band
     // seams: LaneDynamics computes the delta AFTER processing a chunk (causality, no hidden look-ahead),
     // so the first block on resume would open on the pre-pause duck, seconds stale after a long solo.
-    // Zero the seams and drop the detector state once, on the edge — the same semantics as toggling
-    // dynamics off (LaneDynamics::processBand's own disengage path).
+    // Zero the seams and drop the detector state once, on the edge (LaneDynamics::reset() also hands back
+    // a band a release was holding open). Audition, solo and the FIR modes take the whole signal off the
+    // IIR bands, so their edge stays a hard one — a release there would ride a path nobody hears. The
+    // "no dynamic point" edge reaches this only once any release in flight has landed (the gate in the
+    // Zero-Latency branch) — or on a block too big to capture, which drops dynamics hard as it always did.
     auto releaseDynamics = [this]() noexcept
     {
         if (! dynRunning) return;
@@ -485,8 +501,9 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         // Zero Latency (matched IIR) — the only mode dynamics rides on.
         // The feature switch is read ONCE per block and folded into the same `anyDyn` question the
         // per-point test answers, so "dynamics disabled" and "no point is dynamic" are literally the
-        // same path: sc stays null, the seams get released on the edge below, and engine.process()
-        // runs. A disabled preview therefore costs exactly nothing and cannot leave a duck behind.
+        // same path: a duck in flight releases (below), then sc stays null, the release edge resets the
+        // producers, and engine.process() runs. A disabled preview therefore costs nothing once its last
+        // release has landed, and cannot leave a duck behind.
         const bool dynEnabled = dynamicsOn.load (std::memory_order_relaxed);
         bool anyDyn = false;
         for (int b = 0; b < tabby::kNumBands; ++b)
@@ -497,10 +514,38 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             // at unity, and "disabled" would cost a float ULP against a build from before dynamics
             // existed. The switch has to be indistinguishable from that build, so clear the flag here.
             if (! dynEnabled) bp.dyn.on = false;
-            engine.setBand (b, bp);
-            (*dyn)[(size_t) b].setParams (bp);   // unconditional: it is how a point that just turned dynamics OFF disengages
+            auto& d = (*dyn)[(size_t) b];
+            // A point that is RELEASING has its band's delta seam held open by LaneDynamics: the band's own
+            // dyn.on stays true (EqBand ignores deltas otherwise) until the release lands, and the producer
+            // hands the caller's value back then. Write the band the flag it is running with, so this
+            // every-block write does not shut the seam for processBand() to re-open it a moment later. The
+            // producer still gets the caller's value — that is what it releases on. Hygiene, not a fix, and
+            // measured as such: without it the render is bit-identical, because no sample runs between the
+            // two writes and EqBand::setParams does not count dyn.on as a material change (no redesign). It
+            // keeps the adapter from leaning on that second fact.
+            auto toBand = bp;
+            if (d.isReleasing()) toBand.dyn.on = true;
+            engine.setBand (b, toBand);
+            d.setParams (bp);   // unconditional: it is how a point that just turned dynamics OFF disengages
             anyDyn = anyDyn || (dynEnabled && bp.on && ! bp.bypass && bp.dyn.on && bp.dyn.rangeDb != 0.0);
         }
+
+        // A RELEASE RUNS INSIDE processBand(), so it needs the dynamic path after the last dynamic point
+        // is gone. Were `anyDyn` alone the gate, the block that switched the last ducking point off would
+        // take the static path: releaseDynamics() would zero its seam on the spot — the very click the
+        // release exists to remove — and nothing would ever run the release. So once the path has run,
+        // it keeps running for as long as any seam still carries a delta: that covers the edge block (the
+        // point still holds the duck it earned; processBand() starts the release) and every block of the
+        // release after it. A release lands on exactly 0 dB, so the first block that finds every delta at
+        // 0 takes the static path, and its release edge resets the producers exactly as it always did.
+        // Edges the core deliberately does NOT release (the point itself switched off or bypassed, which
+        // is a hard step of the whole band anyway; a threshold-mode switch) drop their deltas on their own,
+        // so they add at most one block of the loop.
+        bool holding = false;
+        if (dynRunning && ! anyDyn)
+            for (int b = 0; b < tabby::kNumBands && ! holding; ++b)
+                for (int L = 0; L < teq::kNumLanes && ! holding; ++L)
+                    holding = (*dyn)[(size_t) b].deltaDb ((teq::Lane) L) != 0.0;
 
         float* const* chans = buffer.getArrayOfWritePointers();
 
@@ -508,8 +553,9 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         // chain a band's own input is the previous bands' OUTPUT, so their moving deltas would modulate
         // later detectors at overlapping frequencies and the chain would pump. A null capture (a block
         // bigger than the one promised at prepare) means we cannot detect honestly — take the static path
-        // rather than detect on the wrong signal.
-        const float* const* sc = anyDyn ? engine.captureSectionInput (chans, nc, n) : nullptr;
+        // rather than detect on the wrong signal. (A release keeps listening on the same capture, so a
+        // point switched back on mid-release finds a detector that heard the programme.)
+        const float* const* sc = (anyDyn || holding) ? engine.captureSectionInput (chans, nc, n) : nullptr;
 
         if (sc == nullptr)
         {

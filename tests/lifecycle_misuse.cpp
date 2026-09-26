@@ -23,7 +23,9 @@
 #include <juce_events/juce_events.h>
 
 #include <cmath>
+#include <cstdio>
 #include <iostream>
+#include <vector>
 
 namespace
 {
@@ -572,6 +574,289 @@ int main()
             check (peak (chained) < peak (flatRef) * 0.04,
                    "dyn: two chained points each earn their full range (detector sees the section input)");
             check (peak (chained) > 0.0, "dyn: ...and the chain still passes signal");
+        }
+
+        // (f) RELEASE ON DISENGAGE (core v0.53.0; the adapter opts in). A point switched off while it ducks
+        // used to have its delta zeroed on the spot — a step in the band's gain, a click. It now releases
+        // through its own ballistics. Driven through both edges that disengage a point without removing it —
+        // dyn_on off, and the preview switch off — each on the ONLY dynamic point, which is the case where the
+        // static-path gate (no point is dynamic -> engine.process()) would have cut the release off. The
+        // instrument is max|Δ²y| of the output around the edge, on a low tone whose own Δ² is small, held
+        // against the SAME duck dropped at once: bypassing the point, a hard step of the whole band by design
+        // (the core does not release it) — which is also the precondition that the instrument sees a snap at
+        // all. A static twin fed the same tone gives the hand-back: once the published delta has landed on 0
+        // the output is the static point's, bit for bit.
+        //
+        // Range to 0 rides along, and what it IS depends on the float unit. JUCE snaps the parameter's centred 0
+        // as start + interval·floor(...) (NormalisableRange -24..24, step 0.01), and clang contracts that into
+        // one FMA where the ISA has one: on Apple Silicon the product is not rounded and the snap lands on
+        // -5.36e-7 dB, on x86-64 it is exactly 0. At exactly 0 the point disengages and releases like the other
+        // two edges; at -5.36e-7 it stays engaged at a sub-micro-dB cap and its follower releases toward that,
+        // which never stepped — but it never lands on exactly 0 either. So the no-step checks are asked of
+        // range 0 everywhere, and the landing and the hand-back only where the snap reached 0.
+        {
+            constexpr int    blk   = 256;
+            constexpr double fTone = 220.0;
+            constexpr int    kLead = 200;    // blocks of ducking before the edge (~1.07 s)
+            constexpr int    kTail = 600;    // blocks after it (~3.2 s) — the release and the hand-back
+
+            // A 0 dB bell ON the tone: the static curve is flat, so the output is the tone times the duck.
+            auto setUp = [&] (TabbyEqAudioProcessor& p, bool dynamic)
+            {
+                makeBand (p, 0, 0.0f);
+                setFloat (p.apvts, tabby::laneParamId (0, 0, "freq"), (float) fTone);
+                if (dynamic) armDynamics (p, -18.0f, 0);
+                p.setPlayConfigDetails (2, 2, fs, blk);
+                p.prepareToPlay (fs, blk);
+            };
+            struct Run { std::vector<float> y; std::vector<float> delta; };   // ch0 output, published delta per block
+            auto render = [&] (std::vector<TabbyEqAudioProcessor*> ps, std::vector<Run>& runs, int blocks, double& ph)
+            {
+                juce::AudioBuffer<float> buf (2, blk);
+                juce::MidiBuffer midi;
+                for (int k = 0; k < blocks; ++k)
+                {
+                    float in[blk];
+                    for (int i = 0; i < blk; ++i)
+                    {
+                        in[i] = 0.5f * (float) std::sin (ph);
+                        ph += juce::MathConstants<double>::twoPi * fTone / fs;
+                    }
+                    for (size_t j = 0; j < ps.size(); ++j)
+                    {
+                        for (int c = 0; c < 2; ++c) std::copy (in, in + blk, buf.getWritePointer (c));
+                        ps[j]->processBlock (buf, midi);
+                        runs[j].y.insert (runs[j].y.end(), buf.getReadPointer (0), buf.getReadPointer (0) + blk);
+                        runs[j].delta.push_back (ps[j]->dynamicDeltaDb (0, 0));
+                    }
+                }
+            };
+            auto maxD2 = [] (const std::vector<float>& y, size_t a, size_t b)
+            {
+                double m = 0.0;
+                for (size_t i = juce::jmax (a, (size_t) 2); i < b && i < y.size(); ++i)
+                    m = juce::jmax (m, std::abs ((double) y[i] - 2.0 * (double) y[i - 1] + (double) y[i - 2]));
+                return m;
+            };
+            auto dBFS = [] (double v) { return 20.0 * std::log10 (juce::jmax (v, 1.0e-12)); };
+
+            const char* edgeName[] = { "dyn_on off", "the preview switch off", "range to 0" };
+            for (int edge = 0; edge < 3; ++edge)
+            {
+                auto rel   = std::make_unique<TabbyEqAudioProcessor>();   // the edge under test
+                auto hard  = std::make_unique<TabbyEqAudioProcessor>();   // the same duck dropped at once (bypass)
+                auto still = std::make_unique<TabbyEqAudioProcessor>();   // never dynamic
+                setUp (*rel, true); setUp (*hard, true); setUp (*still, false);
+                std::vector<Run> runs (3);
+                double ph = 0.0;
+                render ({ rel.get(), hard.get(), still.get() }, runs, kLead, ph);
+
+                const float ducked = runs[0].delta.back();
+                const juce::String tag = juce::String ("dyn release (") + edgeName[edge] + "): ";
+                check (ducked < -6.0f, (tag + "PRECONDITION: the point is ducking before the edge").toRawUTF8());
+
+                if      (edge == 0) setBool  (rel->apvts, tabby::bandId (0, "dyn_on"), false);
+                else if (edge == 1) rel->setDynamicsEnabled (false);
+                else                setFloat (rel->apvts, tabby::bandId (0, "dyn_range"), 0.0f);
+                setBool (hard->apvts, tabby::bandId (0, "bypass"), true);
+                const double rangeNow = rel->readBand (0).dyn.rangeDb;
+                const bool disengages = edge < 2 || juce::exactlyEqual (rangeNow, 0.0);
+                check (edge < 2 || std::abs (rangeNow) < 1.0e-6,
+                       (tag + "PRECONDITION: range 0 reads 0 or the FMA snap's -5.36e-7 dB").toRawUTF8());
+                render ({ rel.get(), hard.get(), still.get() }, runs, kTail, ph);
+
+                // The gain trajectory: still ducked a block after the edge and rising monotonically — where the
+                // hard step it replaces reads 0 on the very first block.
+                const auto& d = runs[0].delta;
+                check (juce::exactlyEqual (runs[1].delta[(size_t) kLead], 0.0f),
+                       (tag + "PRECONDITION: the bypassed twin drops its duck at once").toRawUTF8());
+                check (d[(size_t) kLead] < 0.5f * ducked,
+                       (tag + "a block after the edge the point still holds most of its duck: it releases, it does not snap").toRawUTF8());
+                bool monotone = true;
+                int  landed   = -1;
+                for (size_t k = (size_t) kLead; k < d.size(); ++k)
+                {
+                    monotone = monotone && d[k] >= d[k - 1] && d[k] <= 0.0f;
+                    if (landed < 0 && juce::exactlyEqual (d[k], 0.0f)) landed = (int) k;
+                }
+                check (monotone, (tag + "the published delta rises monotonically toward 0 dB").toRawUTF8());
+
+                // The step. The window is the edge block plus the next 15 (~85 ms): where a snap happens. What
+                // the release leaves is the band's 16-sample control grid — the zipper its own attack and
+                // release have while engaged — tens of dB under the step, not the tone's own Δ².
+                const size_t e0 = (size_t) kLead * blk, e1 = e0 + 16 * blk;
+                const double s = maxD2 (runs[1].y, e0, e1), r = maxD2 (runs[0].y, e0, e1);
+                const double toneD2 = maxD2 (runs[2].y, e0, e1);   // the undimmed tone's own Δ²
+                check (s > 30.0 * toneD2, (tag + "PRECONDITION: the hard step is loud on this instrument").toRawUTF8());
+                check (r < 0.05 * s,    (tag + "the release's worst second difference is under 5% of the hard step's").toRawUTF8());
+
+                double landDev = -1.0;   // the landing's second difference against the static twin (disengaging edges)
+                if (disengages)
+                {
+                    check (landed > kLead + 1, (tag + "the release takes time: more than one block").toRawUTF8());
+                    check (landed > 0 && landed < kLead + kTail - 100,
+                           (tag + "the release lands on exactly 0 dB, with room to spare in the render").toRawUTF8());
+                    bool stays = landed > 0;
+                    for (size_t k = (size_t) juce::jmax (landed, 0); k < d.size(); ++k) stays = stays && juce::exactlyEqual (d[k], 0.0f);
+                    check (stays, (tag + "...and stays there").toRawUTF8());
+
+                    // The landing itself. The step window above closes ~85 ms after the edge and the bit identity
+                    // below opens a block after the landing, so the moment the producer disengages and hands the
+                    // seam back is watched here: across the blocks around it the output's second difference is
+                    // the never-dynamic twin's to within a hair — the delta is under 1e-6 dB by then, and the
+                    // hand-back adds nothing on top.
+                    landDev = 0.0;
+                    if (landed > kLead + 2)
+                        for (size_t i = (size_t) (landed - 2) * blk; i < (size_t) (landed + 3) * blk && i < runs[0].y.size(); ++i)
+                        {
+                            const auto d2 = [] (const std::vector<float>& y, size_t j) { return (double) y[j] - 2.0 * (double) y[j - 1] + (double) y[j - 2]; };
+                            landDev = juce::jmax (landDev, std::abs (d2 (runs[0].y, i) - d2 (runs[2].y, i)));
+                        }
+                    check (landed > kLead + 2 && landDev < 1.0e-6,
+                           (tag + "the landing and the hand-back add no step (second difference within 1e-6 of the static twin's)").toRawUTF8());
+
+                    // The hand-back: from the block after the one it landed in, the point IS the static point.
+                    bool same = landed > 0;
+                    for (size_t i = (size_t) (landed + 1) * blk; same && i < runs[0].y.size(); ++i)
+                        same = juce::exactlyEqual (runs[0].y[i], runs[2].y[i]);
+                    check (same, (tag + "once landed, the output is the never-dynamic twin's, bit for bit").toRawUTF8());
+                }
+
+                const juce::String at = landed > 0 ? "at 0 dB within " + juce::String (juce::roundToInt (1000.0 * (landed - kLead + 1) * blk / fs)) + " ms"
+                                                   : "never at exactly 0 dB (range " + juce::String (rangeNow, 9) + ")";
+                std::printf ("  release on disengage, %-22s ducked %6.2f dB, %-40s max|d2y| hard step %6.1f dBFS, release %6.1f, tone %6.1f%s\n",
+                             edgeName[edge], (double) ducked, (at + ";").toRawUTF8(), dBFS (s), dBFS (r), dBFS (toneD2),
+                             landDev >= 0.0 ? (juce::String ("; landing vs static ") + juce::String (dBFS (landDev), 1) + " dBFS").toRawUTF8() : "");
+            }
+        }
+
+        // (g) A STATIC SETTING CONFIGURED BEFORE THE FIRST SAMPLE RENDERS EXACTLY AS BEFORE. The release is an
+        // EDGE: it can only begin where a point was ducking. A point that is static from its first sample —
+        // plainly static, armed with dyn_on off, or fully armed with the preview off — must still render what
+        // the adapter always rendered for it, which is the bare engine's static answer. So hold each one
+        // against a bare teq::EqEngine fed readBand() (with dyn.on cleared, as the adapter hands a point the
+        // preview switch has off) every block, then the output trim at the value the processor holds (its
+        // centred 0 dB snaps to -5.36e-7 dB through NormalisableRange, a factor of 0.99999994 — the adapter has
+        // always applied it): bit for bit, no tolerance. The reference compiles the same header-only engine in
+        // this TU that the processor compiles in its own, under the same flags: with clang a contraction is
+        // decided per source expression, so the two agree on every row it builds (checked on arm64 with FMA
+        // and x86-64 without, sanitized and not). GCC's -ffp-contract=fast contracts after inlining, so on an
+        // FMA target it could part the two TUs — the reason to look here first if this ever reads unequal there.
+        {
+            constexpr int blk = 256, blocks = 400;
+            for (int kind = 0; kind < 3; ++kind)
+            {
+                auto p = std::make_unique<TabbyEqAudioProcessor>();
+                makeBand (*p, 0, 6.0f);
+                makeBand (*p, 1, -9.0f);
+                setFloat (p->apvts, tabby::laneParamId (1, 0, "freq"), 220.0f);
+                if (kind >= 1)
+                {
+                    setBool  (p->apvts, tabby::bandId (0, "dyn_auto"), false);
+                    setFloat (p->apvts, tabby::bandId (0, "dyn_thr"), -30.0f);
+                    setFloat (p->apvts, tabby::bandId (0, "dyn_range"), -18.0f);
+                    setBool  (p->apvts, tabby::bandId (0, "dyn_on"), kind == 2);   // kind 1: armed, dyn_on OFF
+                }                                                                  // kind 2: dyn_on ON, preview OFF
+                p->setPlayConfigDetails (2, 2, fs, blk);
+                p->prepareToPlay (fs, blk);
+
+                auto bare = std::make_unique<teq::EqEngine>();
+                check (bare->prepare (fs, blk, 2), "static-as-before: PRECONDITION: the bare engine prepares");
+
+                juce::AudioBuffer<float> a (2, blk), b (2, blk);
+                juce::MidiBuffer midi;
+                double ph = 0.0;
+                bool same = true;
+                for (int k = 0; k < blocks; ++k)
+                {
+                    for (int i = 0; i < blk; ++i)
+                    {
+                        const float x = 0.5f * (float) std::sin (ph) + 0.25f * (float) std::sin (0.23 * ph);
+                        ph += juce::MathConstants<double>::twoPi * f0 / fs;
+                        a.setSample (0, i, x); a.setSample (1, i, 0.8f * x);
+                    }
+                    b.makeCopyOf (a);
+                    p->processBlock (a, midi);
+                    {
+                        juce::ScopedNoDenormals noDenormals;   // what the processor's audio thread runs under
+                        for (int band = 0; band < tabby::kNumBands; ++band)
+                        {
+                            auto bp = p->readBand (band);
+                            bp.dyn.on = false;
+                            bare->setBand (band, bp);
+                        }
+                        check (bare->process (b.getArrayOfWritePointers(), 2, blk), "static-as-before: PRECONDITION: the bare engine runs");
+                        const float trim = juce::Decibels::decibelsToGain (p->apvts.getRawParameterValue ("output")->load());
+                        for (int c = 0; c < 2; ++c)
+                            for (int i = 0; i < blk; ++i) b.getWritePointer (c)[i] *= trim;
+                    }
+                    same = same && identical (a, b);
+                }
+                const char* what[] = { "static-as-before: a static point renders the bare engine's answer, bit for bit",
+                                       "static-as-before: ...and so does one armed with dyn_on off",
+                                       "static-as-before: ...and one fully armed with the preview off" };
+                check (same, what[kind]);
+                check (juce::exactlyEqual (p->dynamicDeltaDb (0, 0), 0.0f), "static-as-before: ...publishing no gain reduction");
+            }
+        }
+
+        // (i) RE-PREPARING MID-RELEASE STARTS THE NEW STREAM AT ITS OWN SETTINGS. prepareToPlay() hands a held band
+        // back before the engine restarts its bands; the other order made the hand-back the band's first write of
+        // the new stream, which snapped it to the OLD parameters and let the host's edit made while stopped ramp
+        // in. So: a point released mid-release, its static gain moved 0 -> 12 dB, re-prepared — renders what a
+        // fresh instance with the final settings renders, bit for bit, from the first sample.
+        {
+            constexpr int blk = 256;
+            auto finalSettings = [&] (TabbyEqAudioProcessor& p)
+            {
+                makeBand (p, 0, 0.0f);
+                setFloat (p.apvts, tabby::laneParamId (0, 0, "freq"), 220.0f);
+                armDynamics (p, -18.0f, 0);
+                setBool (p.apvts, tabby::bandId (0, "dyn_on"), false);
+            };
+            auto a = std::make_unique<TabbyEqAudioProcessor>();
+            makeBand (*a, 0, 0.0f);
+            setFloat (a->apvts, tabby::laneParamId (0, 0, "freq"), 220.0f);
+            armDynamics (*a, -18.0f, 0);
+            a->setPlayConfigDetails (2, 2, fs, blk);
+            a->prepareToPlay (fs, blk);
+            juce::AudioBuffer<float> x (2, blk), y (2, blk);
+            juce::MidiBuffer midi;
+            double ph = 0.0;
+            auto fill = [&] (juce::AudioBuffer<float>& buf)
+            {
+                for (int i = 0; i < blk; ++i)
+                {
+                    const float s = 0.5f * (float) std::sin (ph);
+                    ph += juce::MathConstants<double>::twoPi * 220.0 / fs;
+                    buf.setSample (0, i, s); buf.setSample (1, i, s);
+                }
+            };
+            for (int k = 0; k < 200; ++k) { fill (x); a->processBlock (x, midi); }
+            setBool (a->apvts, tabby::bandId (0, "dyn_on"), false);
+            for (int k = 0; k < 10; ++k) { fill (x); a->processBlock (x, midi); }
+            check (a->dynamicDeltaDb (0, 0) < -1.0f, "re-prepare: PRECONDITION: the point is mid-release when the stream stops");
+            a->releaseResources();
+            finalSettings (*a);
+            setFloat (a->apvts, tabby::laneParamId (0, 0, "gain"), 12.0f);
+            a->prepareToPlay (fs, blk);
+
+            auto b = std::make_unique<TabbyEqAudioProcessor>();
+            finalSettings (*b);
+            setFloat (b->apvts, tabby::laneParamId (0, 0, "gain"), 12.0f);
+            b->setPlayConfigDetails (2, 2, fs, blk);
+            b->prepareToPlay (fs, blk);
+
+            bool same = true;
+            for (int k = 0; k < 40; ++k)
+            {
+                fill (x); y.makeCopyOf (x);
+                a->processBlock (x, midi);
+                b->processBlock (y, midi);
+                same = same && identical (x, y);
+            }
+            check (same, "re-prepare: a stream re-prepared mid-release renders a fresh instance's answer, bit for bit");
+            check (juce::exactlyEqual (a->dynamicDeltaDb (0, 0), 0.0f), "re-prepare: ...and publishes no leftover gain reduction");
         }
     }
 
