@@ -641,14 +641,22 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      band a release holds open is handed back inside the old stream and the new one snaps to the
      host's current settings (the other order made the hand-back the band's first write and let an
      edit made while stopped ramp in — found in review).
-     Range to 0 is a disengage edge only where the float unit makes it one: JUCE snaps the centred 0
-     of `dyn_range` (−24…24, step 0.01) as `start + interval·floor(…)`, which clang fuses into one FMA
-     where the ISA has it — on Apple Silicon that lands on −5.36e-7 dB (the point stays engaged at
-     that cap and its follower releases toward it; it never stepped, it never goes static either), on
-     x86-64 on exactly 0 (the point disengages and now releases). The `output` trim's centred 0 dB
-     snaps the same way (×0.99999994 on Apple Silicon). Pinned in `tests/lifecycle_misuse.cpp` § 14
-     (f) the release per edge, (g) static-from-the-first-sample against the bare engine, (i) the
-     re-prepare order; (f) asks range 0 for the landing only where it is 0.
+     Range to 0 is the third disengage edge, on every platform (next bullet). Pinned in
+     `tests/lifecycle_misuse.cpp` § 14 (f) the release per edge, (g) static-from-the-first-sample
+     against the bare engine, (i) the re-prepare order.
+   - **A centred 0 dB is 0** (2026-09-26). JUCE snaps a parameter as `start + interval·floor(…)`, and
+     clang fuses that into one FMA where the ISA has it: on the −24…24 dB ranges with a 0.01 step the
+     host's "0" read back as **−5.36e-7 dB on Apple Silicon** and as exactly 0 on x86-64. So a "0"
+     `dyn_range` stayed a live range there (the point never disengaged, never went static), and the
+     "0 dB" `output` trim multiplied by 0.99999994. The adapter now reads anything within half a step
+     of 0 (|x| < 0.005 dB) as exactly 0 — `centredZeroDb()` in `readBand()` for the range and in
+     `trimGain()` for all four trim writes. Range 0 is therefore a true disengage everywhere
+     (bit-identical to a static point; mid-duck it releases, lands and hands back), and a 0 dB trim is
+     a wire. The "one float ULP" that § 14 (a) used to allow at range 0 was this snap — a duck of
+     −5.36e-7 dB — not the delta section, which at 0 dB is exact (its mix term k·(A²−1) is 0 at
+     A = 1). The tests force the FMA value into the parameter on every platform, so a build without
+     the snap fails on x86-64 too (§ 14 (a), (f), (g), (j)). Lane gains (−24…24, step 0.01) snap the
+     same way and are not folded: a "0 dB" lane on Apple Silicon is a −5.36e-7 dB filter.
    - **A zero-length block moves nothing** (law 11). JUCE's VST3 wrapper hands one on when a host
      flushes parameters with its buses attached; `captureSectionInput()` refuses `n == 0`, so it read
      as a block the dynamic path skipped and `releaseDynamics()` dropped every duck and every release
@@ -656,8 +664,9 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      Pinned in § 14 (h): a render with zero-length calls spliced in mid-duck and mid-release is the
      render without them, bit for bit.
    - Measured, not assumed: with `dyn.on` **false** a point is **bit-identical** to a pre-dynamics
-     build; with `dyn.on` true and range 0 it is within **one float ULP** (1.19e-07) — the band still
-     runs its unity delta section. Bit-identity is a promise about the OFF switch, not about range 0.
+     build. (This note used to add that `dyn.on` true with range 0 is one float ULP off, "the band
+     still runs its unity delta section". Superseded 2026-09-26: the ULP was the FMA snap of the range
+     above; at an exact 0 the point is bit-identical too.)
 4. **tabby UI** — dynamic handle + range band + live GR + the expandable dynamics row + resolved-ms
    readouts + the type/phase-mode gating.
 5. **De-esser preset** — parameter defaults cribbed from `deesser::DeEsserParams`, which already

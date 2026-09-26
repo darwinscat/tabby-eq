@@ -31,6 +31,20 @@ namespace
 
     static constexpr int kSlopeDb[] = { 6, 12, 24, 36, 48, 72, 96 };   // slope choice index -> dB/oct
 
+    // A CENTRED 0 dB IS 0. JUCE snaps a parameter to its step as start + interval * floor ((v - start) / interval
+    // + 0.5), and clang fuses that into one FMA wherever the ISA has one: the product is not rounded before the
+    // sum. On the symmetric -24..24 dB ranges with a 0.01 step that moves the centre — measured 2026-09-26: on
+    // Apple Silicon a host's or a preset's "0" reads back as -5.36e-7 dB, on x86-64 (no FMA by default) as
+    // exactly 0. So the same session behaved two ways: the "0 dB" output trim multiplied by 0.99999994 instead
+    // of 1, and a "0" dynamics range stayed a live range — the point never disengaged, its detectors kept
+    // running and its band kept a delta section at unity. A value closer to 0 than half the parameter's own
+    // step IS the 0 the user set, so it is read as exactly that, on every platform.
+    constexpr double kCentredZeroDb = 0.005;   // half the 0.01 dB step of `output` and `dyn_range`
+    inline double centredZeroDb (double db) noexcept { return std::abs (db) < kCentredZeroDb ? 0.0 : db; }
+
+    // The output trim as a gain: a 0 dB trim is EXACTLY unity (decibelsToGain (0) == pow (10, 0) == 1.0f).
+    inline float trimGain (float db) noexcept { return juce::Decibels::decibelsToGain ((float) centredZeroDb ((double) db)); }
+
     // ---- v2 -> v3 state migration (see docs/LANES.md "State migration") ----------------------------------
     // v2 was a flat "Mid/main" band + an M/S "Side" lane, gated by `ms`; v3 is a shared point (type/swept)
     // split across five placement lanes. Translate BY VALUE. Two documented lossy corners: sType fission
@@ -305,7 +319,7 @@ void TabbyEqAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     preTap->reset(); postTap->reset();                                        // rolling analyzer histories start empty (warm after one window)
     analyzerHopBase.store (juce::jmax (1, juce::roundToInt (sampleRate / 30.0)), std::memory_order_relaxed);   // ~30 fps analyzer publish cadence, independent of window size
     outputGainSmoothed.reset (sampleRate, 0.02);
-    outputGainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));   // start at the saved trim — no ramp on load
+    outputGainSmoothed.setCurrentAndTargetValue (trimGain (outputGain->load()));   // start at the saved trim — no ramp on load
     soloFilter.prepare (sampleRate, getTotalNumOutputChannels());
 
     // Per-point dynamics: same rate + channel count as the engine (LaneDynamics clamps to teq::kMaxChannels
@@ -459,7 +473,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             for (int s = 0; s < n; ++s) d[s] = soloFilter.processSample (c, d[s]);
         }
         soloFilter.flushDenormals();
-        outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+        outputGainSmoothed.setTargetValue (trimGain (outputGain->load()));
         applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
         return;
@@ -485,7 +499,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             for (int s = 0; s < n; ++s) d[s] = soloFilter.processSample (c, d[s]);
         }
         soloFilter.flushDenormals();
-        outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+        outputGainSmoothed.setTargetValue (trimGain (outputGain->load()));
         applyGainRamp (outputGainSmoothed, buffer, n);
         meterOutput();
         return;
@@ -587,7 +601,7 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         }
     }
 
-    outputGainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+    outputGainSmoothed.setTargetValue (trimGain (outputGain->load()));
     applyGainRamp (outputGainSmoothed, buffer, n);   // de-zippered output trim
     meterOutput();
 }
@@ -928,7 +942,7 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
     // are 0..1 DEVIATIONS, not milliseconds: BandBallistics derives the actual times from the lane's own
     // freq/Q, so the pair means the same thing on a 60 Hz band and a 7 kHz one.
     bp.dyn.on      = p.dyn.on->load()      > 0.5f;
-    bp.dyn.rangeDb = (double) p.dyn.range->load();
+    bp.dyn.rangeDb = centredZeroDb ((double) p.dyn.range->load());   // "0" is exactly 0 on every platform (see centredZeroDb)
     bp.dyn.thrDb   = (double) p.dyn.thr->load();
     bp.dyn.thrAuto = p.dyn.thrAuto->load() > 0.5f;
     bp.dyn.atk     = (double) p.dyn.atk->load();

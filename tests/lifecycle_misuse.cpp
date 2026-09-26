@@ -86,6 +86,18 @@ namespace
         if (auto* b = dynamic_cast<juce::AudioParameterBool*> (s.getParameter (id))) *b = v;
     }
 
+    // A centred 0 dB as Apple Silicon reads it back. JUCE snaps a parameter as start + interval * floor (...), and
+    // clang fuses that into one FMA where the ISA has one, so on -24..24 dB with a 0.01 step the host's "0" lands
+    // on -5.36e-7 dB there and on exactly 0 on x86-64 (see centredZeroDb in PluginProcessor.cpp). The tests that
+    // pin "0 means 0" write the host's 0 and then put THIS value in the parameter's raw store, so every platform
+    // runs the case the FMA row produces — and a build without the snap fails on every platform, not just one.
+    constexpr float kFmaCentredZeroDb = -5.36441803e-07f;
+    void setCentredZero (juce::AudioProcessorValueTreeState& s, const juce::String& id)
+    {
+        setFloat (s, id, 0.0f);                                    // the host's "0"...
+        s.getRawParameterValue (id)->store (kFmaCentredZeroDb);    // ...as the FMA snap leaves it
+    }
+
     // Let the message thread run briefly so the processor's 30 Hz LpUpdater timer actually FIRES — before
     // prepare it must early-return on !prepared (the gate), after prepare it feeds the FIR builders.
     void pumpTimers (int ms)
@@ -395,23 +407,24 @@ int main()
             check (identical (got, ref), "dyn: range with dyn_on false is bit-identical to a static point");
         }
         {
-            // Range 0 is a documented disengage, so it must not DUCK — but it is not bit-identical:
-            // with dyn.on the band still runs its (unity) delta section, which costs one float ULP.
-            // The bit-identity promise is scoped to dyn.on == false, asserted above; here we pin the
-            // real contract, tightly enough that any actual gain movement fails the check.
+            // Range 0 is a documented disengage, and it is a TRUE one: the adapter reads a range within half a
+            // step of 0 as exactly 0 (the FMA snap left -5.36e-7 dB on Apple Silicon, forced here on every
+            // platform), so the point never engages, and the band's delta section runs at 0 dB — which is
+            // exact: the bell's mix term k·(A²−1) is 0 at A = 1, the output is the input. This check used to
+            // allow "one ULP" and blame that section; the ULP was the snap's -5.36e-7 dB range, a live duck of
+            // that size. Bit-identical to a static point now, on every platform.
             auto p = std::make_unique<TabbyEqAudioProcessor>();
             makeBand (*p);
             armDynamics (*p, 0.0f);                                        // ON but zero range
+            setCentredZero (p->apvts, tabby::bandId (0, "dyn_range"));
+            check (juce::exactlyEqual (p->readBand (0).dyn.rangeDb, 0.0), "dyn: a centred-0 range reads as exactly 0");
             p->setPlayConfigDetails (2, 2, fs, n);
             p->prepareToPlay (fs, n);
             phase = 0.0;
             juce::AudioBuffer<float> got;
             runTone (*p, 8, n, got);
-            double maxDiff = 0.0;
-            for (int c = 0; c < 2; ++c)
-                for (int i = 0; i < n; ++i)
-                    maxDiff = juce::jmax (maxDiff, (double) std::abs (got.getReadPointer (c)[i] - ref.getReadPointer (c)[i]));
-            check (maxDiff <= 2.0e-7, "dyn: dyn_on with range 0 moves the signal by at most one ULP");
+            check (identical (got, ref), "dyn: dyn_on with range 0 is bit-identical to a static point, on every platform");
+            check (juce::exactlyEqual (p->dynamicDeltaDb (0, 0), 0.0f), "dyn: ...and publishes no gain reduction");
         }
 
         // (a2) The FEATURE SWITCH. Dynamics ships OFF (View menu opt-in), and off has to mean the same
@@ -587,13 +600,10 @@ int main()
         // all. A static twin fed the same tone gives the hand-back: once the published delta has landed on 0
         // the output is the static point's, bit for bit.
         //
-        // Range to 0 rides along, and what it IS depends on the float unit. JUCE snaps the parameter's centred 0
-        // as start + interval·floor(...) (NormalisableRange -24..24, step 0.01), and clang contracts that into
-        // one FMA where the ISA has one: on Apple Silicon the product is not rounded and the snap lands on
-        // -5.36e-7 dB, on x86-64 it is exactly 0. At exactly 0 the point disengages and releases like the other
-        // two edges; at -5.36e-7 it stays engaged at a sub-micro-dB cap and its follower releases toward that,
-        // which never stepped — but it never lands on exactly 0 either. So the no-step checks are asked of
-        // range 0 everywhere, and the landing and the hand-back only where the snap reached 0.
+        // Range to 0 is the third disengage edge, on every platform: the adapter reads a range within half a step
+        // of 0 as exactly 0, so the FMA snap's -5.36e-7 dB (Apple Silicon; forced here everywhere) disengages
+        // exactly as x86-64's clean 0 does — it releases, lands and hands back like the other two. (Before the
+        // snap, on Apple Silicon it stayed engaged at a sub-micro-dB cap and never went static.)
         {
             constexpr int    blk   = 256;
             constexpr double fTone = 220.0;
@@ -657,12 +667,10 @@ int main()
 
                 if      (edge == 0) setBool  (rel->apvts, tabby::bandId (0, "dyn_on"), false);
                 else if (edge == 1) rel->setDynamicsEnabled (false);
-                else                setFloat (rel->apvts, tabby::bandId (0, "dyn_range"), 0.0f);
+                else                setCentredZero (rel->apvts, tabby::bandId (0, "dyn_range"));
                 setBool (hard->apvts, tabby::bandId (0, "bypass"), true);
-                const double rangeNow = rel->readBand (0).dyn.rangeDb;
-                const bool disengages = edge < 2 || juce::exactlyEqual (rangeNow, 0.0);
-                check (edge < 2 || std::abs (rangeNow) < 1.0e-6,
-                       (tag + "PRECONDITION: range 0 reads 0 or the FMA snap's -5.36e-7 dB").toRawUTF8());
+                check (edge < 2 || juce::exactlyEqual (rel->readBand (0).dyn.rangeDb, 0.0),
+                       (tag + "the FMA snap's -5.36e-7 dB reads as exactly 0").toRawUTF8());
                 render ({ rel.get(), hard.get(), still.get() }, runs, kTail, ph);
 
                 // The gain trajectory: still ducked a block after the edge and rising monotonically — where the
@@ -690,8 +698,7 @@ int main()
                 check (s > 30.0 * toneD2, (tag + "PRECONDITION: the hard step is loud on this instrument").toRawUTF8());
                 check (r < 0.05 * s,    (tag + "the release's worst second difference is under 5% of the hard step's").toRawUTF8());
 
-                double landDev = -1.0;   // the landing's second difference against the static twin (disengaging edges)
-                if (disengages)
+                double landDev = -1.0;   // the landing's second difference against the static twin
                 {
                     check (landed > kLead + 1, (tag + "the release takes time: more than one block").toRawUTF8());
                     check (landed > 0 && landed < kLead + kTail - 100,
@@ -723,7 +730,7 @@ int main()
                 }
 
                 const juce::String at = landed > 0 ? "at 0 dB within " + juce::String (juce::roundToInt (1000.0 * (landed - kLead + 1) * blk / fs)) + " ms"
-                                                   : "never at exactly 0 dB (range " + juce::String (rangeNow, 9) + ")";
+                                                   : juce::String ("never at exactly 0 dB");
                 std::printf ("  release on disengage, %-22s ducked %6.2f dB, %-40s max|d2y| hard step %6.1f dBFS, release %6.1f, tone %6.1f%s\n",
                              edgeName[edge], (double) ducked, (at + ";").toRawUTF8(), dBFS (s), dBFS (r), dBFS (toneD2),
                              landDev >= 0.0 ? (juce::String ("; landing vs static ") + juce::String (dBFS (landDev), 1) + " dBFS").toRawUTF8() : "");
@@ -735,9 +742,9 @@ int main()
         // plainly static, armed with dyn_on off, or fully armed with the preview off — must still render what
         // the adapter always rendered for it, which is the bare engine's static answer. So hold each one
         // against a bare teq::EqEngine fed readBand() (with dyn.on cleared, as the adapter hands a point the
-        // preview switch has off) every block, then the output trim at the value the processor holds (its
-        // centred 0 dB snaps to -5.36e-7 dB through NormalisableRange, a factor of 0.99999994 — the adapter has
-        // always applied it): bit for bit, no tolerance. The reference compiles the same header-only engine in
+        // preview switch has off) every block, and NO trim: the output trim sits at the host's 0 dB as the FMA
+        // snap leaves it (-5.36e-7 dB, forced here on every platform), which the adapter reads as exactly 0 —
+        // a gain of exactly 1. Bit for bit, no tolerance. The reference compiles the same header-only engine in
         // this TU that the processor compiles in its own, under the same flags: with clang a contraction is
         // decided per source expression, so the two agree on every row it builds (checked on arm64 with FMA
         // and x86-64 without, sanitized and not). GCC's -ffp-contract=fast contracts after inlining, so on an
@@ -757,6 +764,7 @@ int main()
                     setFloat (p->apvts, tabby::bandId (0, "dyn_range"), -18.0f);
                     setBool  (p->apvts, tabby::bandId (0, "dyn_on"), kind == 2);   // kind 1: armed, dyn_on OFF
                 }                                                                  // kind 2: dyn_on ON, preview OFF
+                setCentredZero (p->apvts, "output");
                 p->setPlayConfigDetails (2, 2, fs, blk);
                 p->prepareToPlay (fs, blk);
 
@@ -786,9 +794,6 @@ int main()
                             bare->setBand (band, bp);
                         }
                         check (bare->process (b.getArrayOfWritePointers(), 2, blk), "static-as-before: PRECONDITION: the bare engine runs");
-                        const float trim = juce::Decibels::decibelsToGain (p->apvts.getRawParameterValue ("output")->load());
-                        for (int c = 0; c < 2; ++c)
-                            for (int i = 0; i < blk; ++i) b.getWritePointer (c)[i] *= trim;
                     }
                     same = same && identical (a, b);
                 }
@@ -798,6 +803,33 @@ int main()
                 check (same, what[kind]);
                 check (juce::exactlyEqual (p->dynamicDeltaDb (0, 0), 0.0f), "static-as-before: ...publishing no gain reduction");
             }
+        }
+
+        // (j) A 0 dB TRIM IS A WIRE. With no point on, the only thing between input and output is the trim, so a
+        // trim at the host's 0 dB — as the FMA snap leaves it, -5.36e-7 dB, forced here on every platform — must
+        // hand the input back bit for bit, from the first sample (prepare) and after a live write (the smoother's
+        // target) alike. Before the snap it multiplied by 0.99999994 on Apple Silicon.
+        {
+            constexpr int blk = 256;
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            setCentredZero (p->apvts, "output");
+            p->setPlayConfigDetails (2, 2, fs, blk);
+            p->prepareToPlay (fs, blk);
+            juce::AudioBuffer<float> x (2, blk), in (2, blk);
+            juce::MidiBuffer midi;
+            juce::Random r (4242);
+            bool wire = true;
+            for (int k = 0; k < 40; ++k)
+            {
+                if (k == 20) { setFloat (p->apvts, "output", -6.0f); }        // a live move away...
+                if (k == 21) { setCentredZero (p->apvts, "output"); }         // ...and back to the host's 0
+                for (int c = 0; c < 2; ++c)
+                    for (int i = 0; i < blk; ++i) x.setSample (c, i, r.nextFloat() * 2.0f - 1.0f);
+                in.makeCopyOf (x);
+                p->processBlock (x, midi);
+                if (k < 20 || k >= 30) wire = wire && identical (x, in);     // after the 20 ms ramp back has landed
+            }
+            check (wire, "trim: a 0 dB output trim is bit-identical to no trim, at prepare and after a live move back");
         }
 
         // (h) A ZERO-LENGTH BLOCK MOVES NOTHING (law 11: no samples, no time). JUCE's VST3 wrapper passes one on
