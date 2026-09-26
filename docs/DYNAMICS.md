@@ -649,6 +649,12 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      snaps the same way (×0.99999994 on Apple Silicon). Pinned in `tests/lifecycle_misuse.cpp` § 14
      (f) the release per edge, (g) static-from-the-first-sample against the bare engine, (i) the
      re-prepare order; (f) asks range 0 for the landing only where it is 0.
+   - **A zero-length block moves nothing** (law 11). JUCE's VST3 wrapper hands one on when a host
+     flushes parameters with its buses attached; `captureSectionInput()` refuses `n == 0`, so it read
+     as a block the dynamic path skipped and `releaseDynamics()` dropped every duck and every release
+     in flight — a snap on the next real block. `processBlock()` now returns before anything moves.
+     Pinned in § 14 (h): a render with zero-length calls spliced in mid-duck and mid-release is the
+     render without them, bit for bit.
    - Measured, not assumed: with `dyn.on` **false** a point is **bit-identical** to a pre-dynamics
      build; with `dyn.on` true and range 0 it is within **one float ULP** (1.19e-07) — the band still
      runs its unity delta section. Bit-identity is a promise about the OFF switch, not about range 0.

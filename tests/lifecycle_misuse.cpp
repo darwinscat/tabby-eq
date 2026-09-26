@@ -800,6 +800,49 @@ int main()
             }
         }
 
+        // (h) A ZERO-LENGTH BLOCK MOVES NOTHING (law 11: no samples, no time). JUCE's VST3 wrapper passes one on
+        // when a host flushes parameters with its buses attached (juce_audio_plugin_client_VST3.cpp, process():
+        // numSamples 0 with numInputs/numOutputs set still reaches processBlock). The adapter used to read it as
+        // a block the dynamic path skipped — captureSectionInput() refuses n == 0, so releaseDynamics() ran — and
+        // dropped every duck and every release in flight on the spot. So: a render with a zero-length call
+        // spliced in mid-duck and again mid-release is the render without it, bit for bit.
+        {
+            constexpr int blk = 256;
+            auto a = std::make_unique<TabbyEqAudioProcessor>();
+            auto b = std::make_unique<TabbyEqAudioProcessor>();
+            for (auto* p : { a.get(), b.get() })
+            {
+                makeBand (*p, 0, 0.0f);
+                setFloat (p->apvts, tabby::laneParamId (0, 0, "freq"), 220.0f);
+                armDynamics (*p, -18.0f, 0);
+                p->setPlayConfigDetails (2, 2, fs, blk);
+                p->prepareToPlay (fs, blk);
+            }
+            juce::AudioBuffer<float> x (2, blk), y (2, blk), empty (2, 0);
+            juce::MidiBuffer midi;
+            double ph = 0.0;
+            bool same = true;
+            float duckBeforeSplice = 0.0f;
+            for (int k = 0; k < 400; ++k)
+            {
+                if (k == 150) duckBeforeSplice = a->dynamicDeltaDb (0, 0);
+                if (k == 150 || k == 210) a->processBlock (empty, midi);          // mid-duck, then mid-release
+                if (k == 200) for (auto* p : { a.get(), b.get() }) setBool (p->apvts, tabby::bandId (0, "dyn_on"), false);
+                for (int i = 0; i < blk; ++i)
+                {
+                    const float s = 0.5f * (float) std::sin (ph);
+                    ph += juce::MathConstants<double>::twoPi * 220.0 / fs;
+                    x.setSample (0, i, s); x.setSample (1, i, s);
+                }
+                y.makeCopyOf (x);
+                a->processBlock (x, midi);
+                b->processBlock (y, midi);
+                same = same && identical (x, y);
+            }
+            check (duckBeforeSplice < -6.0f, "zero-length: PRECONDITION: the point is ducking where the first call is spliced in");
+            check (same, "zero-length: a zero-length block mid-duck and mid-release changes nothing, bit for bit");
+        }
+
         // (i) RE-PREPARING MID-RELEASE STARTS THE NEW STREAM AT ITS OWN SETTINGS. prepareToPlay() hands a held band
         // back before the engine restarts its bands; the other order made the hand-back the band's first write of
         // the new stream, which snapped it to the OLD parameters and let the host's edit made while stopped ramp

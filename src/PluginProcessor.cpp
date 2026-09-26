@@ -360,6 +360,11 @@ void TabbyEqAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // H2 — never index past the REAL buffer.
     const int nc     = juce::jmin (numOut, teq::EqEngine::kMaxChannels, buffer.getNumChannels());   // channels we EQ
     if (nc <= 0) return;
+    // LAW 11 — no samples, no time: a zero-length call moves nothing. JUCE's VST3 wrapper passes one on when a
+    // host flushes parameters with its buses attached, and it used to read here as a block the dynamic path
+    // skipped — captureSectionInput() refuses n == 0, so releaseDynamics() ran — dropping every duck and
+    // every release in flight on the spot: the snap the release exists to remove.
+    if (n <= 0) return;
 
     // Up-mix a mono input into stereo (the only non-matched layout we accept) => identical L/R.
     for (int c = juce::jmax (1, numIn); c < nc; ++c) buffer.copyFrom (c, 0, buffer, 0, 0, n);
