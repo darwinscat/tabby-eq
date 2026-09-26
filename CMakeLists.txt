@@ -26,6 +26,7 @@ endif()
 # here). TABBYEQ_ENABLE_SANITIZERS instruments ONLY TabbyEQ's own sources with ASan+UBSan.
 # ----------------------------------------------------------------------------
 option(TABBYEQ_BUILD_PLUGIN     "Build the JUCE plugin (VST3/AU/Standalone/CLAP)"                 ON)
+option(JUCE_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundles to the user's plugin folders after building" ON)
 option(TABBYEQ_BUILD_TESTS      "Build the headless adapter lifecycle/misuse test (ctest)"        OFF)
 option(TABBYEQ_BUILD_CORE_TESTS "Build + ctest felitronics-core's JUCE-free self-tests"           ON)
 option(TABBYEQ_ENABLE_SANITIZERS "Instrument TabbyEQ's own sources with ASan+UBSan (Clang/GCC)"   OFF)
@@ -255,7 +256,7 @@ juce_add_plugin(TabbyEQ
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT  "TabbyEQ analyses live audio input to draw the spectrum."
     ICON_BIG                    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/TabbyEQ-1024.png"
-    COPY_PLUGIN_AFTER_BUILD     TRUE)
+    COPY_PLUGIN_AFTER_BUILD     ${JUCE_COPY_PLUGIN_AFTER_BUILD})
 
 clap_juce_extensions_plugin(TARGET TabbyEQ
     CLAP_ID       "com.darwinscat.tabbyeq"

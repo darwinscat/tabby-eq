@@ -19,6 +19,7 @@
 // ---------------------------------------------------------------------------
 
 #include "PluginProcessor.h"
+#include "ui/EqviewNames.h"
 
 #include <juce_events/juce_events.h>
 
@@ -830,6 +831,87 @@ int main()
                 if (k < 20 || k >= 30) wire = wire && identical (x, in);     // after the 20 ms ramp back has landed
             }
             check (wire, "trim: a 0 dB output trim is bit-identical to no trim, at prepare and after a live move back");
+        }
+
+        // (k) A CENTRED-0 LANE GAIN IS EXACTLY 0, for every band and all five placements. Force the FMA
+        // value even on x86-64, just like the range/trim checks above. The audio reference is a BARE engine
+        // whose gains are explicitly 0.0, not a second processor reading the same possibly-wrong parameter.
+        // This preserves the matched bell's arithmetic and M/S routing roundoff: a dry-input comparison
+        // would conflate those with the adapter's gain snap. The curve reference also gets explicit 0.0;
+        // its snapshot must contain exact zero, even if the designed response has numerical residue.
+        for (int activeLane = 0; activeLane < tabby::kNumLanes; ++activeLane)
+        {
+            constexpr int blk = 256;
+            auto p = std::make_unique<TabbyEqAudioProcessor>();
+            for (int b = 0; b < tabby::kNumBands; ++b)
+            {
+                setBool (p->apvts, tabby::bandId (b, "on"), true);   // default Bell, dynamics off
+                for (int L = 0; L < tabby::kNumLanes; ++L)
+                {
+                    setBool  (p->apvts, tabby::laneParamId (b, L, "on"), L == activeLane);
+                    setFloat (p->apvts, tabby::laneParamId (b, L, "freq"), (float) (700 + 83 * b + 37 * L));
+                    setCentredZero (p->apvts, tabby::laneParamId (b, L, "gain"));
+                }
+            }
+            setCentredZero (p->apvts, "output");
+            p->setPlayConfigDetails (2, 2, fs, blk);
+            p->prepareToPlay (fs, blk);
+
+            auto exactZeroBand = [&] (int b)
+            {
+                auto bp = p->readBand (b);
+                for (auto& lane : bp.lanes) lane.gainDb = 0.0;     // independent of the adapter's gain read
+                return bp;
+            };
+            auto bare = std::make_unique<teq::EqEngine>();
+            check (bare->prepare (fs, blk, 2), "lane-zero: PRECONDITION: the bare engine prepares");
+
+            // EqCurveDisplay::refreshDesigns uses exactly this reader/TraceSet path. No editor/window
+            // is needed to test its parameter snapshot and curve, so the lifecycle harness stays headless.
+            eqview::TraceSet curve, exactCurve;
+            curve.refresh (p->getSampleRate(), [&] (int b) { return p->readBand (b); });
+            exactCurve.refresh (p->getSampleRate(), exactZeroBand);
+            for (int b = 0; b < tabby::kNumBands; ++b)
+                for (int L = 0; L < tabby::kNumLanes; ++L)
+                {
+                    const auto id = tabby::laneParamId (b, L, "gain");
+                    check (juce::exactlyEqual (curve.param (b).lanes[(size_t) L].gainDb, 0.0),
+                           (id + ": EqCurveDisplay's snapshot reads the FMA centred gain as exactly 0").toRawUTF8());
+                    for (double f : { 80.0, 1000.0, 12000.0 })
+                        check (juce::exactlyEqual (curve.bandDb (b, f, L), exactCurve.bandDb (b, f, L)),
+                               (id + ": curve matches the explicit-0 dB design exactly").toRawUTF8());
+                }
+
+            juce::AudioBuffer<float> got (2, blk), expected (2, blk);
+            juce::MidiBuffer midi;
+            bool same = true;
+            for (int k = 0; k < 16; ++k)
+            {
+                fillNoise (got, 5100 + k);                          // independent L/R signal excites M and S
+                expected.makeCopyOf (got);
+                p->processBlock (got, midi);
+                {
+                    juce::ScopedNoDenormals noDenormals;
+                    for (int b = 0; b < tabby::kNumBands; ++b) bare->setBand (b, exactZeroBand (b));
+                    check (bare->process (expected.getArrayOfWritePointers(), 2, blk),
+                           "lane-zero: PRECONDITION: the bare engine runs");
+                }
+                same = identical (got, expected) && same;
+            }
+            check (same, (juce::String ("lane-zero: ") + tabby::laneWord (activeLane)
+                          + " gains on all bands match the explicit-0 dB bare engine, bit for bit").toRawUTF8());
+
+            // The neighbouring +/-0.01 dB ticks remain intentional gain edits, on idle lanes too.
+            for (float db : { -0.01f, 0.01f })
+                for (int b = 0; b < tabby::kNumBands; ++b)
+                    for (int L = 0; L < tabby::kNumLanes; ++L)
+                    {
+                        const auto id = tabby::laneParamId (b, L, "gain");
+                        setFloat (p->apvts, id, db);
+                        const double raw = (double) p->apvts.getRawParameterValue (id)->load();
+                        check (juce::exactlyEqual (p->readBand (b).lanes[(size_t) L].gainDb, raw),
+                               (id + ": neighbouring gain tick is unchanged").toRawUTF8());
+                    }
         }
 
         // (h) A ZERO-LENGTH BLOCK MOVES NOTHING (law 11: no samples, no time). JUCE's VST3 wrapper passes one on

@@ -649,14 +649,20 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      host's "0" read back as **−5.36e-7 dB on Apple Silicon** and as exactly 0 on x86-64. So a "0"
      `dyn_range` stayed a live range there (the point never disengaged, never went static), and the
      "0 dB" `output` trim multiplied by 0.99999994. The adapter now reads anything within half a step
-     of 0 (|x| < 0.005 dB) as exactly 0 — `centredZeroDb()` in `readBand()` for the range and in
-     `trimGain()` for all four trim writes. Range 0 is therefore a true disengage everywhere
-     (bit-identical to a static point; mid-duck it releases, lands and hands back), and a 0 dB trim is
-     a wire. The "one float ULP" that § 14 (a) used to allow at range 0 was this snap — a duck of
+     of 0 (|x| < 0.005 dB) as exactly 0 — `centredZeroDb()` in `readBand()` for the range and every
+     lane gain (ST/L/R/M/S, all 24 bands), and in `trimGain()` for all four trim writes. Range 0 is
+     therefore a true disengage everywhere (bit-identical to a static point; mid-duck it releases,
+     lands and hands back), and a 0 dB trim is a wire. The "one float ULP" that § 14 (a) used to
+     allow at range 0 was this snap — a duck of
      −5.36e-7 dB — not the delta section, which at 0 dB is exact (its mix term k·(A²−1) is 0 at
      A = 1). The tests force the FMA value into the parameter on every platform, so a build without
-     the snap fails on x86-64 too (§ 14 (a), (f), (g), (j)). Lane gains (−24…24, step 0.01) snap the
-     same way and are not folded: a "0 dB" lane on Apple Silicon is a −5.36e-7 dB filter.
+     the snap fails on x86-64 too (§ 14 (a), (f), (g), (j), (k)). **Lane gains are fixed too:** a
+     "0 dB" lane now matches a bare `teq::EqEngine` with explicit `gainDb = 0.0`, bit for bit;
+     `EqCurveDisplay`'s `TraceSet` receives exactly 0 through the same `readBand()` and matches the
+     explicit-0 curve. The reference keeps the matched filter's and M/S routing's own roundoff;
+     it does not assume a dry wire. Adjacent ±0.01 dB gain ticks are unchanged. These are all three
+     centred-0 dB parameter families in `Parameters.cpp`; `dyn_thr` (−120…24 dB) is not centred on 0
+     and is left alone, as are frequency, Q, attack/release deviations, and choice/bool parameters.
    - **A zero-length block moves nothing** (law 11). JUCE's VST3 wrapper hands one on when a host
      flushes parameters with its buses attached; `captureSectionInput()` refuses `n == 0`, so it read
      as a block the dynamic path skipped and `releaseDynamics()` dropped every duck and every release
