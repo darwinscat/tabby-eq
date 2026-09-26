@@ -625,9 +625,48 @@ formats, auval PASS), kept out of the dynamics diff on purpose.
      dropped, or the next block resumes on a duck earned seconds ago (deltas are computed *after*
      each chunk, so nothing corrects it before the first sample). One shared `releaseDynamics()`,
      called on every such exit.
+   - **Release on disengage** (core v0.53.0, opted in 2026-09-26). A point switched off *while it
+     ducks* — `dyn_on` off, or the View → Dynamics preview off — used to have its delta zeroed on the
+     edge: a step in the band's gain (measured through the adapter, 220 Hz at −6 dBFS under a −15.9 dB
+     duck: max|Δ²y| −8.8 dBFS). `LaneDynamics::setReleaseOnDisengage(true)` lets it release through
+     the lane's own release ballistics instead (−45.5 dBFS; what remains is the 16-sample control
+     grid's zipper, the same the engaged release has), then hands the band back — bit-identical to a
+     static one where the ducked lane is the only one the band runs (a lane downstream of it keeps a
+     recursive filter's memory of the duck until that decays; see the core's `LaneDynamics` note).
+     The adapter owes the release the dynamic path: the gate is no longer `anyDyn` alone
+     but *any point dynamic, or any seam still carrying a delta* once the path has run, so the block
+     that switched the last ducking point off does not fall to `releaseDynamics()` + `engine.process()`
+     and cut the release to a snap. Audition, solo and the FIR modes stay hard edges (they take the
+     signal off the IIR bands). `prepareToPlay()` resets the producers *before* the engine, so a
+     band a release holds open is handed back inside the old stream and the new one snaps to the
+     host's current settings (the other order made the hand-back the band's first write and let an
+     edit made while stopped ramp in — found in review).
+     Range to 0 is the third disengage edge, on every platform (next bullet). Pinned in
+     `tests/lifecycle_misuse.cpp` § 14 (f) the release per edge, (g) static-from-the-first-sample
+     against the bare engine, (i) the re-prepare order.
+   - **A centred 0 dB is 0** (2026-09-26). JUCE snaps a parameter as `start + interval·floor(…)`, and
+     clang fuses that into one FMA where the ISA has it: on the −24…24 dB ranges with a 0.01 step the
+     host's "0" read back as **−5.36e-7 dB on Apple Silicon** and as exactly 0 on x86-64. So a "0"
+     `dyn_range` stayed a live range there (the point never disengaged, never went static), and the
+     "0 dB" `output` trim multiplied by 0.99999994. The adapter now reads anything within half a step
+     of 0 (|x| < 0.005 dB) as exactly 0 — `centredZeroDb()` in `readBand()` for the range and in
+     `trimGain()` for all four trim writes. Range 0 is therefore a true disengage everywhere
+     (bit-identical to a static point; mid-duck it releases, lands and hands back), and a 0 dB trim is
+     a wire. The "one float ULP" that § 14 (a) used to allow at range 0 was this snap — a duck of
+     −5.36e-7 dB — not the delta section, which at 0 dB is exact (its mix term k·(A²−1) is 0 at
+     A = 1). The tests force the FMA value into the parameter on every platform, so a build without
+     the snap fails on x86-64 too (§ 14 (a), (f), (g), (j)). Lane gains (−24…24, step 0.01) snap the
+     same way and are not folded: a "0 dB" lane on Apple Silicon is a −5.36e-7 dB filter.
+   - **A zero-length block moves nothing** (law 11). JUCE's VST3 wrapper hands one on when a host
+     flushes parameters with its buses attached; `captureSectionInput()` refuses `n == 0`, so it read
+     as a block the dynamic path skipped and `releaseDynamics()` dropped every duck and every release
+     in flight — a snap on the next real block. `processBlock()` now returns before anything moves.
+     Pinned in § 14 (h): a render with zero-length calls spliced in mid-duck and mid-release is the
+     render without them, bit for bit.
    - Measured, not assumed: with `dyn.on` **false** a point is **bit-identical** to a pre-dynamics
-     build; with `dyn.on` true and range 0 it is within **one float ULP** (1.19e-07) — the band still
-     runs its unity delta section. Bit-identity is a promise about the OFF switch, not about range 0.
+     build. (This note used to add that `dyn.on` true with range 0 is one float ULP off, "the band
+     still runs its unity delta section". Superseded 2026-09-26: the ULP was the FMA snap of the range
+     above; at an exact 0 the point is bit-identical too.)
 4. **tabby UI** — dynamic handle + range band + live GR + the expandable dynamics row + resolved-ms
    readouts + the type/phase-mode gating.
 5. **De-esser preset** — parameter defaults cribbed from `deesser::DeEsserParams`, which already
