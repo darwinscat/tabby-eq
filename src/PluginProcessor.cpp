@@ -37,9 +37,10 @@ namespace
     // Apple Silicon a host's or a preset's "0" reads back as -5.36e-7 dB, on x86-64 (no FMA by default) as
     // exactly 0. So the same session behaved two ways: the "0 dB" output trim multiplied by 0.99999994 instead
     // of 1, and a "0" dynamics range stayed a live range — the point never disengaged, its detectors kept
-    // running and its band kept a delta section at unity. A value closer to 0 than half the parameter's own
-    // step IS the 0 the user set, so it is read as exactly that, on every platform.
-    constexpr double kCentredZeroDb = 0.005;   // half the 0.01 dB step of `output` and `dyn_range`
+    // running and its band kept a delta section at unity. Lane gains use the same range and step, so their
+    // "0 dB" also became a -5.36e-7 dB filter. A value closer to 0 than half the parameter's own step IS the
+    // 0 the user set, so it is read as exactly that, on every platform.
+    constexpr double kCentredZeroDb = 0.005;   // half the 0.01 dB step of lane `gain`, `output` and `dyn_range`
     inline double centredZeroDb (double db) noexcept { return std::abs (db) < kCentredZeroDb ? 0.0 : db; }
 
     // The output trim as a gain: a 0 dB trim is EXACTLY unity (decibelsToGain (0) == pow (10, 0) == 1.0f).
@@ -934,7 +935,7 @@ teq::BandParams TabbyEqAudioProcessor::readBand (int b) const noexcept
         lane.on     = src.on->load() > 0.5f;
         lane.freq   = (double) src.freq->load();
         lane.Q      = (double) src.q->load();
-        lane.gainDb = (double) src.gain->load();
+        lane.gainDb = centredZeroDb ((double) src.gain->load());   // same exact 0 for the engine and EqCurveDisplay
         lane.slope  = kSlopeDb[juce::jlimit (0, 6, (int) src.slope->load())];
         lane.bypass = src.byp->load() > 0.5f;
     }
